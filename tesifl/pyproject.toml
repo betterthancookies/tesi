@@ -53,6 +53,12 @@ idle-enabled = true       # consumo fra i round, modello ESCS Sez. 4.2
 # --- SAGE-smart: (E,B) dinamici lato server + bonus di anzianita'
 smart-stale-weight = 0.3   # peso del termine di anzianita' nel punteggio
 smart-stale-max = 25       # round dopo i quali l'anzianita' e' al massimo
+# --- SAGE-smart2: (E,B) decisi dal client dentro un envelope del server
+smart2-soc-min = 0.20        # riserva che il client protegge
+smart2-epochs-min = 2        # E_lo dell'envelope
+smart2-deadline-mult = 1.0   # deadline = mult * mediana dei tempi nominali
+smart2-probe-samples = 256   # campioni per stimare la loss locale
+smart2-heartbeat = true      # Fase 2: stato dinamico prima della selezione
 model-name = "resnet20"
 recharge-enabled = true
 recharge-available = true

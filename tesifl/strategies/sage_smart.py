@@ -167,7 +167,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
             self._last_seen[cid_of[n]] = server_round
         self._plan = {cid_of[n]: self._assign_work(cid_of[n]) for n in selected}
 
-        E = [e for e, _ in self._plan.values()]
+        E = self._plan_epochs()
         never = sum(1 for c in cid_of.values() if c not in self._last_seen)
         log(INFO, "sage-smart round %s: pool %s, %s selezionati (cap %s) | "
             "E %s-%s (medio %.1f) | mai visti %s",
@@ -184,6 +184,33 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         e = int(np.clip(round(self.epochs * v * h),
                         self.epochs_min, self.epochs_cap))
         return e, b
+
+    def _plan_epochs(self) -> list[int]:
+        """Epoche del piano del round, per il log. sage_smart2 lo sostituisce:
+        li' il piano e' un envelope e le epoche le sceglie il client."""
+        return [e for e, _ in self._plan.values()]
+
+    def _policy_stats(self) -> dict:
+        """Colonne della policy nel CSV per round."""
+        E = [e for e, _ in self._plan.values()]
+        B = [b for _, b in self._plan.values()]
+        return {
+            "mean_epochs": float(np.mean(E)),
+            "max_epochs": int(max(E)),
+            "mean_batch": float(np.mean(B)),
+            "n_charging_sel": int(sum(
+                1 for c in self._plan if self.world.is_charging(c))),
+        }
+
+    def _steps(self, cid: int, n: float, reply) -> float:
+        """tau_i di FedNova: passi di gradiente del client nel round.
+
+        Qui lo ricostruisce il server da (E, B) assegnati. sage_smart2 usa
+        invece i passi che il client dichiara di aver eseguito.
+        """
+        e = int(self._epochs_sent.get(cid, self.epochs))
+        b = int(self._batch_sent.get(cid, self.batch_size))
+        return float(e * max(1, int(n) // max(1, b)))
 
     # ------------------------------------------------------ config per client
     def _per_client_config(
@@ -245,15 +272,8 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         # super() ha gia' assegnato _round_stats[round], quindi qui si aggiunge
         # sopra con update() invece di sovrascrivere.
         if self._plan:
-            E = [e for e, _ in self._plan.values()]
-            B = [b for _, b in self._plan.values()]
-            self._round_stats.setdefault(int(server_round), {}).update({
-                "mean_epochs": float(np.mean(E)),
-                "max_epochs": int(max(E)),
-                "mean_batch": float(np.mean(B)),
-                "n_charging_sel": int(sum(
-                    1 for c in self._plan if self.world.is_charging(c))),
-            })
+            self._round_stats.setdefault(int(server_round), {}).update(
+                self._policy_stats())
 
         if arrays is None or self._global_arrays is None:
             return arrays, metrics
@@ -265,16 +285,16 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         keys = list(self._global_arrays.keys())
         glob = [self._global_arrays[k].numpy().astype(np.float64) for k in keys]
         rows = []
-        for r in replies:
+        # [B] stesse reply che super() ha mediato: per sage_smart sono tutte,
+        # sage_smart2 esclude opt-out e update fuori envelope
+        for r in self._aggregatable(replies):
             if not r.has_content():
                 continue
             cid = self._node_to_cid.get(int(r.metadata.src_node_id))
             if cid is None:
                 continue
             n = float(self._metric(r, "num-examples", "num_examples", default=0))
-            e = int(self._epochs_sent.get(cid, self.epochs))
-            b = int(self._batch_sent.get(cid, self.batch_size))
-            tau = float(e * max(1, int(n) // max(1, b)))
+            tau = self._steps(cid, n, r)
             if n <= 0 or tau <= 0:
                 continue
             key = sorted(r.content.array_records)[0]

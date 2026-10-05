@@ -16,6 +16,7 @@ algorithms = [
   "sage",
   "sage_soc",
   "sage_smart",
+  "sage_smart2",
   "escs_sd",
   "escs_sd_lin",
 ]
@@ -146,6 +147,14 @@ sage_ab  = { "0.1" = [0.4, 0.6], "0.5" = [0.6, 0.4], "1.0" = [0.9, 0.1] }
 # SAGE-smart
 smart_stale_weight = 0.3   # peso dell'anzianita' nel punteggio
 smart_stale_max    = 25    # round dopo i quali l'anzianita' e' al massimo
+
+# SAGE-smart2: selezione come SAGE-smart (stessi a, b e c = smart_stale_weight),
+# ma (E, B) li decide il CLIENT dentro un envelope proposto dal server.
+smart2_soc_min        = 0.20   # riserva che il client non intacca (vincolo 2e di SAGE)
+smart2_epochs_min     = 2      # E_lo: minimo di epoche dell'envelope
+smart2_deadline_mult  = 1.0    # deadline = mult * mediana dei tempi nominali (E, B di [algo])
+smart2_probe_samples  = 256    # campioni locali per stimare la loss prima di decidere
+smart2_heartbeat      = true   # false = server cieco: conosce solo il SoC riportato a fine round
 
 # ESCS
 escs_min_battery       = 0.20   # B_LVL_min, Table 4 del paper

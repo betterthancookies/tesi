@@ -48,6 +48,7 @@ for seed in $SEEDS; do
       sage)           algo="sage";      extra="sage-a=${SA} sage-b=${SB} sage-c=${SC}" ;;
       sage_soc)       algo="sage_soc";  extra="sage-a=${QA} sage-b=${QB}" ;;
       sage_smart)     algo="sage_smart";      extra="sage-a=${QA} sage-b=${QB}" ;;
+      sage_smart2)    algo="sage_smart2";     extra="sage-a=${QA} sage-b=${QB}" ;;
       escs_sd)        algo="escs-sd" ;;
       escs_sp)        algo="escs-sp" ;;
       escs_md)        algo="escs-md" ;;

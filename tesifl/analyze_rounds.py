@@ -35,7 +35,7 @@ from collections import defaultdict
 THRESHOLDS = (0.25, 0.30, 0.35, 0.40)
 TAIL = 20          # round di coda su cui mediare l'accuracy
 REF = "fedavg"
-ORDER = ["fedavg", "fedprox", "sage", "sage_soc",
+ORDER = ["fedavg", "fedprox", "sage", "sage_soc", "sage_smart", "sage_smart2",
          "escs_sd", "escs_sp", "escs_md", "escs_mp",
          "escs_sd_lin", "escs_sp_lin", "escs_md_lin", "escs_mp_lin"]
 

@@ -19,6 +19,7 @@ from strategies.fedprox import PhysicalFedProx
 from strategies.sage import PhysicalSAGE
 from strategies.sage_ablation import PhysicalSAGEAblation
 from strategies.sage_smart import PhysicalSAGESmart
+from strategies.sage_smart2 import PhysicalSAGESmart2
 from strategies.escs import PhysicalESCS
 from tesiFL.data.partition import load_centralized_dataset, partition_sizes
 from tesiFL.task import test
@@ -148,6 +149,38 @@ def main(grid: Grid, context: Context) -> None:
             **common,
         )
 
+    elif algorithm == "sage_smart2":
+        # [B] la taglia dei dataset e' un dato di ISCRIZIONE (Fase 0 della
+        # proposta): serve al server per la deadline e per l'envelope prima
+        # che il client abbia mai risposto. Stesso partitioner di ESCS.
+        sizes = partition_sizes(
+            num_partitions=n_clients,
+            beta=float(context.run_config["beta"]),
+            seed=seed,
+        )
+        strategy = PhysicalSAGESmart2(
+            sage_a=float(context.run_config["sage-a"]),
+            sage_b=float(context.run_config["sage-b"]),
+            stale_weight=float(context.run_config["smart-stale-weight"]),
+            stale_max=int(context.run_config["smart-stale-max"]),
+            partition_sizes=sizes,
+            soc_min=float(context.run_config["smart2-soc-min"]),
+            epochs_min=int(context.run_config["smart2-epochs-min"]),
+            deadline_mult=float(context.run_config["smart2-deadline-mult"]),
+            probe_samples=int(context.run_config["smart2-probe-samples"]),
+            heartbeat=bool(context.run_config["smart2-heartbeat"]),
+            **common,
+        )
+        print(
+            f"[strategy] PhysicalSAGESmart2 (a={context.run_config['sage-a']}, "
+            f"b={context.run_config['sage-b']}, "
+            f"c={context.run_config['smart-stale-weight']}) | "
+            f"(E,B) decisi dal client | soc_min={strategy.soc_min} "
+            f"E_lo={strategy.epochs_min} deadline x{strategy.deadline_mult} "
+            f"probe={strategy.probe_samples} "
+            f"heartbeat={'ON' if strategy.heartbeat else 'OFF'}"
+        )
+
     elif algorithm == "sage_soc":
         # variante della tesi: SoC Peukert al posto dell'energia lineare,
         # niente termine rinnovabile (a + b = 1), niente soglia di
@@ -170,7 +203,8 @@ def main(grid: Grid, context: Context) -> None:
     else:
         raise ValueError(
             f"algorithm='{algorithm}' non riconosciuto: "
-            f"usa 'fedavg', 'fedprox', 'sage', 'sage_soc' o 'escs-XY'"
+            f"usa 'fedavg', 'fedprox', 'sage', 'sage_soc', 'sage_smart', "
+            f"'sage_smart2' o 'escs-XY'"
         )
 
     # Start strategy, run FedAvg for `num_rounds`

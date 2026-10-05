@@ -95,6 +95,9 @@ class PhysicalFedAvg(FedAvg):
             rec = RecordDict(
                 {self.arrayrecord_key: arrays, self.configrecord_key: cfg}
             )
+            dev = self._device_record(cid)
+            if dev is not None:
+                rec["device"] = dev
             messages.extend(
                 self._construct_messages(rec, [int(nid)], MessageType.TRAIN)
             )
@@ -131,6 +134,39 @@ class PhysicalFedAvg(FedAvg):
         self, cid: int, cfg: ConfigRecord, server_round: int
     ) -> None:
         return None
+
+    def _device_record(self, cid: int) -> ConfigRecord | None:
+        """Sensori del device simulato da allegare al messaggio di training.
+
+        None per tutte le strategie server-side: il client non ne ha bisogno.
+        sage_smart2 lo usa per dare al client cio' che un telefono vero
+        leggerebbe dal sistema operativo (SoC, workload, carica).
+        """
+        return None
+
+    def _work_done(self, cid: int, n_ex: int, reply: Message) -> tuple[float, int]:
+        """(durata in s, batch) del lavoro che il client ha DAVVERO eseguito.
+
+        Default: quello assegnato dal server, che il client esegue per intero.
+        sage_smart2 lo sostituisce con quello che il client dichiara, perche'
+        li' (E, B) li decide il client.
+        """
+        b = self._batch_sent.get(cid, self.batch_size)
+        dt = self.world.round_duration_s(
+            cid,
+            epochs=self._epochs_sent.get(cid, self.epochs),
+            batch_size=b,
+            dataset_size_local=n_ex,
+        )
+        return dt, b
+
+    def _aggregatable(self, replies: list[Message]) -> list[Message]:
+        """Reply che entrano nella media. Default: tutte.
+
+        sage_smart2 esclude i client che si sono ritirati dal round (opt-out):
+        hanno pagato la comunicazione ma non hanno un update da mediare.
+        """
+        return replies
 
     def _on_round_result(
         self, cid: int, n_ex: int, dt_s: float, e_wh: float, e_lin_wh: float,
@@ -172,15 +208,9 @@ class PhysicalFedAvg(FedAvg):
                 continue
             cid = self._node_to_cid[reply.metadata.src_node_id]
             n_ex = int(self._metric(reply, "num-examples", "num_examples"))
-            dt = self.world.round_duration_s(
-                cid,
-                epochs=self._epochs_sent.get(cid, self.epochs),
-                batch_size=self._batch_sent.get(cid, self.batch_size),
-                dataset_size_local=n_ex,
-            )
+            dt, b = self._work_done(cid, n_ex, reply)
             durations[cid] = dt
-            e_tr, l_tr = self.world.apply_round(
-                cid, dt_s=dt, batch_size=self._batch_sent.get(cid, self.batch_size))
+            e_tr, l_tr = self.world.apply_round(cid, dt_s=dt, batch_size=b)
             e_cm, l_cm = self.world.apply_communication(cid)
             self._on_round_result(cid, n_ex, dt, float(e_tr + e_cm),
                                   float(l_tr + l_cm), reply, server_round)
@@ -199,4 +229,7 @@ class PhysicalFedAvg(FedAvg):
             server_round, s["total_energy_wh"], s["energy_train_wh"],
             s["energy_comm_wh"], s["mean_soc"], s["n_recharging"], s["n_failed"])
 
+        replies = self._aggregatable(replies)
+        if not replies:
+            return None, None
         return super().aggregate_train(server_round, replies)

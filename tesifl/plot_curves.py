@@ -109,6 +109,7 @@ GROUP = {
     "escs_sd_lin": "escs", "escs_sp_lin": "escs",
     "escs_md_lin": "escs", "escs_mp_lin": "escs",
     "sage": "sage", "sage_soc": "sage_peuk", "sage_smart" : "sage_smart",
+    "sage_smart2": "sage_smart2",
     "fedavg": "fedavg", "fedprox": "fedprox",
 }
 GROUPED = True          # spento da --no-group
@@ -121,13 +122,14 @@ def group_of(label):
     return GROUP.get(label, label)
 
 
-ORDER_GROUPED = ["fedavg", "fedprox", "sage", "sage_peuk", "sage_smart", "escs", "escs_peuk"]
-ORDER = ["fedavg", "fedprox", "sage", "sage_soc", "sage_smart", 
+ORDER_GROUPED = ["fedavg", "fedprox", "sage", "sage_peuk", "sage_smart", "sage_smart2", "escs", "escs_peuk"]
+ORDER = ["fedavg", "fedprox", "sage", "sage_soc", "sage_smart", "sage_smart2",
          "escs_sd", "escs_sp", "escs_md", "escs_mp",
          "escs_sd_lin", "escs_sp_lin", "escs_md_lin", "escs_mp_lin"]
 LABEL = {"fedavg": "FedAvg", "fedprox": "FedProx",
          "sage": "SAGE", "sage_soc": "SAGE (peuk)",
          "sage_peuk": "SAGE (peuk)", "sage_smart": "SAGE-smart",
+         "sage_smart2": "SAGE-smart2 (client-driven)",
          "escs": "ESCS", "escs_peuk": "ESCS (peuk)",
          "escs_sd": "ESCS-SD", "escs_sp": "ESCS-SP",
          "escs_md": "ESCS-MD", "escs_mp": "ESCS-MP",
@@ -135,6 +137,7 @@ LABEL = {"fedavg": "FedAvg", "fedprox": "FedProx",
          "escs_md_lin": "ESCS-MD (lin)", "escs_mp_lin": "ESCS-MP (lin)"}
 COLOR = {"fedavg": "#444444", "fedprox": "#1f77b4",
          "sage": "#d62728", "sage_soc": "#e377c2", "sage_smart": "#9467bd",
+         "sage_smart2": "#ff7f0e",
          "escs": "#c0392b", "escs_peuk": "#1a7f37",
          "escs_sd": "#2ca02c", "escs_sp": "#98df8a",
          "escs_md": "#17becf", "escs_mp": "#9edae5",

@@ -29,6 +29,17 @@ def training_time_s(
     return compute_s + overhead_s
 
 
+def probe_time_s(profile: DeviceProfile, n_samples: int) -> float:
+    """Solo forward su n_samples: la stima della loss locale prima del training.
+
+    [B] niente fattore 3 (non c'e' backward) e niente overhead per batch: e'
+    una singola passata in valutazione, trascurabile rispetto al resto.
+    """
+    if n_samples <= 0:
+        return 0.0
+    return MODEL_MACS_FWD_PER_SAMPLE * n_samples / profile.macs_per_s
+
+
 def optimal_batch_size(
     profile: DeviceProfile, peukert: bool = True, power_exponent: float = 0.3
 ) -> float:

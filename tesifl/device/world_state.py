@@ -10,7 +10,7 @@ from device.battery_model import (
     delta_soc, energy_wh_from_delta_soc, energy_wh_linear,
 )
 from device.communication_model import comm_power_w, comm_time_s
-from device.compute_model import training_time_s
+from device.compute_model import probe_time_s, training_time_s
 from device.constants import (
     DCDC_EFFICIENCY,
     BATCH_SIZE_REF,
@@ -28,6 +28,27 @@ from device.constants import (
 )
 from device.device_profile import DeviceProfile, generate_profiles
 from device.workload import WorkloadModel
+
+
+# [B] funzioni di modulo, non metodi: le usa anche il CLIENT di sage_smart2
+# (device/fuel_gauge.py) per prevedere il proprio consumo. Se client e mondo
+# avessero due copie della stessa formula, prima o poi divergerebbero.
+def effective_profile(p: DeviceProfile, w: float) -> DeviceProfile:
+    """Profilo col throughput ridotto dal workload w."""
+    if w <= 0.0:
+        return p
+    return DeviceProfile(
+        cid=p.cid, battery_capacity_mah=p.battery_capacity_mah,
+        macs_per_s=p.macs_per_s * max(1e-3, 1.0 - w),
+        peukert_n=p.peukert_n, tier=p.tier,
+    )
+
+
+def training_power_w(batch_size: int) -> float:
+    """P(B) = P0 * (B/B_ref)^gamma, limitata in [mult_min, mult_max] * P0."""
+    mult = (batch_size / BATCH_SIZE_REF) ** POWER_EXPONENT_BATCH
+    mult = min(max(mult, POWER_BATCH_MULT_MIN), POWER_BATCH_MULT_MAX)
+    return TRAIN_POWER_W * mult
 
 
 @dataclass(frozen=True)
@@ -215,15 +236,8 @@ class WorldState:
     # -------------------------------------------------------------- tempi
     def effective_profile(self, cid: int) -> DeviceProfile:
         """Profilo col throughput ridotto dal workload corrente."""
-        p = self._profiles[cid]
-        w = self.workload.utilization(cid)
-        if w <= 0.0:
-            return p
-        return DeviceProfile(
-            cid=p.cid, battery_capacity_mah=p.battery_capacity_mah,
-            macs_per_s=p.macs_per_s * max(1e-3, 1.0 - w),
-            peukert_n=p.peukert_n, tier=p.tier,
-        )
+        return effective_profile(self._profiles[cid],
+                                 self.workload.utilization(cid))
 
     def round_duration_s(
         self, cid: int, epochs: int, batch_size: int, dataset_size_local: int,
@@ -239,13 +253,19 @@ class WorldState:
         p = self.effective_profile(cid) if include_workload else self._profiles[cid]
         return training_time_s(p, epochs, dataset_size_local, batch_size)
 
+    def probe_duration_s(self, cid: int, n_samples: int) -> float:
+        """Forward di sola valutazione su n_samples, col workload corrente.
+
+        E' la stima della loss locale che il client di sage_smart2 fa prima
+        di decidere (E, B): costa poco, ma non e' gratis e va addebitata.
+        """
+        return probe_time_s(self.effective_profile(cid), n_samples)
+
     def communication_time_s(self, cid: int) -> float:
         return comm_time_s()
 
     def training_power_w(self, cid: int, batch_size: int) -> float:
-        mult = (batch_size / BATCH_SIZE_REF) ** POWER_EXPONENT_BATCH
-        mult = min(max(mult, POWER_BATCH_MULT_MIN), POWER_BATCH_MULT_MAX)
-        return TRAIN_POWER_W * mult
+        return training_power_w(batch_size)
 
     # ------------------------------------------------------------ consumo
     def _drain(self, cid: int, power_w: float, dt_s: float) -> tuple[float, float]:
