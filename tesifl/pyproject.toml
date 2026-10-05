@@ -1,0 +1,101 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tesiFL"
+version = "1.1.6"
+description = ""
+license = {file = "LICENSE"}
+dependencies = [
+    "flwr[simulation]>=1.31.0",
+    "flwr-datasets[vision]>=0.6.0",
+    "torch==2.10.0",
+    "torchvision==0.25.0",
+    "pulp>=2.8",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["tesiFL", "device", "strategies"]
+
+[tool.flwr.app]
+publisher = "flwrlabs"
+fab-format-version = 1
+flwr-version-target = "1.32.1"
+
+[tool.flwr.app.components]
+serverapp = "tesiFL.server_app:app"
+clientapp = "tesiFL.client_app:app"
+
+[tool.flwr.app.config]
+# =====================================================================
+# NON MODIFICARE QUI: questi sono solo i DEFAULT che Flower richiede di
+# dichiarare. I valori usati davvero vengono da experiment.toml, che
+# run.sh passa con --run-config a ogni run. Modificare qui non ha effetto
+# se lanci con run.sh.
+# =====================================================================
+num-server-rounds = 250
+clients-per-round = 6        # lo sweep lo sovrascrive con round(0.2 * N)
+battery-capacity-mah = 200.0 # usata SOLO con tiers-enabled = false
+
+# --- eterogeneita': tre tier hardware + workload concorrente.
+# Tutti e tre a false riproducono esattamente le campagne precedenti: e'
+# l'ablazione che separa l'effetto dell'eterogeneita' da quello della
+# politica di selezione.
+tiers-enabled = true      # 3 tier in parti uguali, 200/300/400 mAh, 1x/2x/4x
+workload-enabled = true   # 3 catene di Markov, assegnate indipendentemente
+idle-enabled = true       # consumo fra i round, modello ESCS Sez. 4.2
+
+# --- ricarica sporadica, probabilita' p = 0.05 * (1 - SoC) per round.
+# recharge-available sceglie la modalita':
+#   true  (a) in carica il device resta selezionabile e si allena a costo zero
+#   false (b) in carica il device e' fuori dalla federazione (N-1 client)
+# --- SAGE-smart: (E,B) dinamici lato server + bonus di anzianita'
+smart-stale-weight = 0.3   # peso del termine di anzianita' nel punteggio
+smart-stale-max = 25       # round dopo i quali l'anzianita' e' al massimo
+model-name = "resnet20"
+recharge-enabled = true
+recharge-available = true
+fraction-evaluate = 1.0
+local-epochs = 5          # era 1: con 1 le mezze epoche di SAGE non esistono
+learning-rate = 0.01      # paper SAGE
+batch-size = 128          # paper SAGE
+save-model = false
+beta = 0.5
+seed = 42
+algorithm = "fedavg"
+proximal-mu = 0.1
+sage-a = 0.5
+sage-b = 0.2
+sage-c = 0.3
+escs-utility = "s"
+escs-selection = "d"
+escs-min-battery = 0.20
+escs-min-nq = 0.20
+escs-cap-probabilistic = false
+escs-battery = "soc"          # "soc" (Peukert) | "energy" (orig: SoC_0 - P*dt/cap)
+escs-first-round-all = true   # Alg. 1 righe 5-6 del paper: round 1 = tutti
+results-dir = "results"       # dove l'app scrive il CSV per round; va cambiata
+                              # per ogni processo se si parallelizza su piu' GPU
+
+
+#######################################################################
+# CONFIGURATION MIGRATION NOTICE:
+#
+# What was previously called "federation config" for SuperLink
+# connections in pyproject.toml has been renamed and moved.
+#
+# These settings are now **SuperLink connection configuration**
+# and are defined in the Flower configuration file.
+#
+# The entries below are commented out intentionally and are kept
+# only as a migration reference.
+#
+# Docs: https://flower.ai/docs/framework/ref-flower-configuration.html
+#######################################################################
+
+# [tool.flwr.federations]
+# default = "local-sim"
+
+# [tool.flwr.federations.local-sim]
+# options.num-supernodes = 30

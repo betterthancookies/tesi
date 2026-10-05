@@ -1,0 +1,162 @@
+[campaign]
+name        = "rechargeONdeviceON_ResNet20_newBatt"          # -> risultati in results_<name>/
+rounds      = 250
+seeds       = [2026]         # [2026, 7, 13] per tre seed
+betas       = [0.1, 0.5, 1.0]
+clients     = 30             # numero di SuperNode
+k_fraction  = 0.2            # client per round = round(k_fraction * clients)
+gpus        = [1, 2, 3]      # un SuperLink per GPU; i beta girano in parallelo
+stagger_s   = 180            # ritardo fra l'avvio di uno shard e il successivo
+timeout_s   = 3600           # una run oltre questo tempo e' considerata persa
+
+# Algoritmi da eseguire. Commenta le righe che non ti servono.
+algorithms = [
+  "fedavg",
+  "fedprox",
+  "sage",
+  "sage_soc",
+  "sage_smart",
+  "escs_sd",
+  "escs_sd_lin",
+]
+
+
+# =====================================================================
+#  MONDO: cosa e' acceso
+# =====================================================================
+# [B] tutti e quattro a false riproducono esattamente le campagne fatte
+# prima dell'eterogeneita': e' l'ablazione che separa l'effetto del mondo
+# da quello della politica di selezione.
+[world]
+tiers      = true    # tre tier hardware
+workload   = true    # workload concorrente (catene di Markov)
+idle       = true    # consumo fra i round (modello ESCS Sez. 4.2)
+recharge   = true   # ricarica sporadica guidata dal SoC
+# true  (a) in carica il device resta selezionabile e si allena a costo zero
+# false (b) in carica il device esce dalla federazione (N-1 client)
+recharge_available = true
+
+
+# =====================================================================
+#  DEVICE
+# =====================================================================
+[device]
+# Tre tier in parti uguali. Velocita' 1x/2x/4x: rapporti standard fra fasce
+# di SoC. Ignatov et al. (AI Benchmark, ICCVW 2019) riportano fino a 20x fra
+# CPU e acceleratore dello stesso chip, quindi 4x e' conservativo.
+tiers = [
+  { name = "low",  capacity_mah = 3500.0, speed_mult = 1.0 },
+  { name = "mid",  capacity_mah = 4000.0, speed_mult = 2.0 },
+  { name = "high", capacity_mah = 4500.0, speed_mult = 4.0 },
+]
+# Usata SOLO con world.tiers = false (popolazione omogenea).
+capacity_mah_uniform = 200.0
+
+macs_per_s    = 4e9   # [ASSUNZIONE] throughput del tier base (1x)
+train_power_w = 3     # [ASSUNZIONE] derivata da EAFL (Arouj & Abdelmoniem 2022)
+idle_power_w  = 0.1   # [DERIVATO] 0.1 W di ESCS su 4000 mAh
+
+# SoC iniziale: normale troncata, spostata verso la carica piena.
+# [B] con l'uniforme il 29% dei client partiva sotto il 50%; qui il 5%.
+soc_init_mean  = 0.75   # [ASSUNZIONE]
+soc_init_std   = 0.15   # [ASSUNZIONE]
+soc_init_range = [0.30, 1.00]
+
+
+[battery]
+v_nominal        = 3.7    # Li-Ion, tensione costante
+rated_c_rate     = 0.2    # rate a cui la capacita' nominale e' dichiarata
+dcdc_efficiency  = 1.0
+# [ASSUNZIONE] 1.15 e' nell'intervallo del piombo-acido; per il litio la
+# letteratura da' 1.01-1.10. VERIFICATO: a n=1.05 l'errore del modello
+# lineare scende da 1.26x a 1.08x e gli esaurimenti passano da 10 a 0 nella
+# cella 100 mAh / N=30 / beta=0.1. Tenuto a 1.15 come scelta dichiarata; la
+# violazione della soglia (SoC minimo 0.102 contro riserva 0.20) resta anche
+# a 1.05, ed e' l'affermazione robusta.
+peukert_n        = 1.15
+
+
+[compute]
+train_macs_factor = 3.0    # [ASSUNZIONE] fwd + bwd ~ 3x fwd
+batch_overhead_s  = 0.115  # [MISURATO su stanis, riscalato al device simulato]
+batch_size_ref    = 128    # batch a cui la potenza e' esattamente train_power_w
+power_exponent_batch = 0.3 # [ASSUNZIONE] P(B) = P0 * (B/B_ref)^gamma
+power_batch_mult_min = 0.5
+power_batch_mult_max = 3.0
+
+
+[comm]
+bytes_per_param     = 4     # float32, nessuna compressione [ASSUNZIONE]
+energy_rx_j_per_mb  = 1.5   # [DAL RELATORE] 4G LTE; WiFi sarebbe ~0.1
+tx_rx_energy_ratio  = 1.5   # [ASSUNZIONE] TX piu' cara di RX
+bandwidth_mb_per_s  = 2.0   # [ASSUNZIONE]
+
+
+# =====================================================================
+#  WORKLOAD CONCORRENTE
+# =====================================================================
+# w = frazione di calcolo occupata da ALTRE app. Entra senza coefficienti
+# nuovi:  throughput = (1-w)*macs   e   P fra i round = P_idle + w*(P_train-P_idle)
+[workload]
+# [ASSUNZIONE] utilizzazione dei tre stati: schermo spento, background,
+# uso interattivo.
+states = { idle = 0.0, light = 0.10, heavy = 0.30 }
+# Tre catene, assegnate in parti uguali e INDIPENDENTEMENTE dal tier.
+# Righe e colonne nell'ordine idle, light, heavy. Diagonali alte di
+# proposito: con transizioni frequenti il workload diventa rumore bianco.
+# Utilizzazioni medie stazionarie risultanti: 0.030 / 0.119 / 0.206.
+chain_low    = [[0.90, 0.10, 0.00], [0.35, 0.60, 0.05], [0.00, 0.40, 0.60]]
+chain_medium = [[0.70, 0.28, 0.02], [0.20, 0.65, 0.15], [0.00, 0.30, 0.70]]
+chain_high   = [[0.50, 0.45, 0.05], [0.10, 0.60, 0.30], [0.00, 0.20, 0.80]]
+
+
+# =====================================================================
+#  RICARICA
+# =====================================================================
+[recharge]
+# p_i = prob_base * (1 - SoC_i) per round.
+# [B] TARATURA: con 0.05 il SoC medio sale a 0.82 e gli esaurimenti vanno a
+# zero -- la ricarica appiattisce tutto. Il "<5% di client in carica" indicato
+# dal relatore e' la frazione ISTANTANEA in carica e corrisponde a ~0.005 di
+# probabilita' per round. Sensitivity: 0.05 -> 16% in carica, 0 morti;
+# 0.01 -> 7%, 7 morti; 0.005 -> 5%, 7 morti.
+prob_base = 0.005
+# Velocita' come C-rate, non watt: 20 W su 200 mAh sarebbero 27C.
+# 1C = carica completa in un'ora a qualunque capacita'.
+c_rate = 1.0
+
+
+# =====================================================================
+#  ALGORITMI
+# =====================================================================
+[algo]
+local_epochs      = 5
+batch_size        = 128
+learning_rate     = 0.01   # paper SAGE
+fraction_evaluate = 1.0
+proximal_mu       = 0.1    # FedProx
+
+# SAGE: pesi (a,b,c) per beta, ottimi di Table 1 del paper.
+sage_abc = { "0.1" = [0.5, 0.0, 0.5], "0.5" = [0.2, 0.1, 0.7], "1.0" = [0.5, 0.2, 0.3] }
+# SAGE-peuk e SAGE-smart: pesi (a,b) per beta, dalla sweep in results_findbest.
+# [B] sage_smart usa gli stessi di sage_soc: il confronto fra i due isola
+# l'assegnazione dinamica di (E,B), non la taratura.
+sage_ab  = { "0.1" = [0.4, 0.6], "0.5" = [0.6, 0.4], "1.0" = [0.9, 0.1] }
+
+# SAGE-smart
+smart_stale_weight = 0.3   # peso dell'anzianita' nel punteggio
+smart_stale_max    = 25    # round dopo i quali l'anzianita' e' al massimo
+
+# ESCS
+escs_min_battery       = 0.20   # B_LVL_min, Table 4 del paper
+escs_min_nq            = 0.20   # NQ_min, Table 4
+escs_first_round_all   = true   # Alg. 1 righe 5-6
+escs_cap_probabilistic = false
+
+[model]
+name = "resnet20"          # "lenet5" | "resnet20"
+# ResNet-20 per CIFAR (He et al. 2016, n=3): 40.55 MMAC/campione, 62x LeNet-5.
+# [B] il cambio serve perche' con batterie realistiche LeNet consumava cosi'
+# poco da richiedere decine di migliaia di round per il primo esaurimento.
+macs_fwd_per_sample = 40551040
+n_params = 269722
