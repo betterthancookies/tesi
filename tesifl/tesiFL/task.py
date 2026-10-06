@@ -17,7 +17,7 @@ def train(net, trainloader, epochs, lr, device, proximal_mu: float = 0.0,
                budget energetico finisce). None = epoche complete, come prima.
     stats      se e' un dict, ci scrive "steps" (passi eseguiti) e
                "last_loss" (loss media dell'ultima epoca, anche parziale):
-               servono a sage_smart2. Il valore di ritorno non cambia.
+               servono a sage_smart. Il valore di ritorno non cambia.
     """
     net.to(device)
     criterion = torch.nn.CrossEntropyLoss().to(device)

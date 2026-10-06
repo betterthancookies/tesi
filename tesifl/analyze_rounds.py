@@ -35,8 +35,10 @@ from collections import defaultdict
 THRESHOLDS = (0.25, 0.30, 0.35, 0.40)
 TAIL = 20          # round di coda su cui mediare l'accuracy
 REF = "fedavg"
-ORDER = ["fedavg", "fedprox", "sage", "sage_soc", "sage_smart", "sage_smart2",
+ORDER = ["fedavg", "fedprox", "sage", "sage_peuk", "sage_soc",
+         "sage_smart_lin", "sage_smart_peuk", "sage_smart",
          "escs_sd", "escs_sp", "escs_md", "escs_mp",
+         "escs_sd_peuk", "escs_sp_peuk", "escs_md_peuk", "escs_mp_peuk",
          "escs_sd_lin", "escs_sp_lin", "escs_md_lin", "escs_mp_lin"]
 
 # results/<label>_b<btag>_seed<N>.csv ; il vecchio schema senza beta e' accettato

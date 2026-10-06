@@ -16,7 +16,7 @@ Produce in results/, UNA SERIE PER OGNI BETA (suffisso _b01, _b05, _b10):
                                PICCO, col round annotato.
   fig7_thr_soc_b*.png          SoC medio nel round in cui si raggiunge una
                                SOGLIA comune di accuracy.
-  fig8_accounting_b*.png       frecce lineare -> Peukert nel piano
+  fig8_accounting_b*.png       frecce lineare -> SoC vero (nm) nel piano
                                (morti, accuracy).
   fig9_reserve_b*.png          SoC del client piu' scarico e morti CUMULATI,
                                round per round: mostra se la riserva tiene.
@@ -24,11 +24,12 @@ Produce in results/, UNA SERIE PER OGNI BETA (suffisso _b01, _b05, _b10):
                                avere contro quello reale, nei bracci lineari.
 
 RAGGRUPPAMENTO DELLE VARIANTI
-Le quattro varianti di ESCS sono collassate in due sole curve, la media di
-{sd, sp, md, mp}:
+Le quattro varianti di ESCS sono collassate in una curva per modello di
+batteria, la media di {sd, sp, md, mp}:
     ESCS          contabilita' lineare (i quattro *_lin del paper)
-    ESCS (peuk)   contabilita' Peukert (la variante della tesi)
-e analogamente sage -> SAGE, sage_soc -> SAGE (peuk).
+    ESCS (peuk)   fuel gauge di Peukert (i quattro *_peuk)
+    ESCS (nm)     SoC vero, modello da datasheet (la variante della tesi)
+e analogamente sage -> SAGE, sage_peuk -> SAGE (peuk), sage_soc -> SAGE (nm).
 
 [B] con device omogenei escs_sd ed escs_md danno risultati IDENTICI, e cosi'
 escs_sp ed escs_mp: la distinzione system-based / model-based del paper e'
@@ -61,8 +62,8 @@ vanno tratte dalle serie per beta. Le figure pooled lo dicono in didascalia.
 
 COSA E' L'ENERGIA: la carica estratta dalla batteria, convertita in Wh come
 V_nom * C_Ah * (-dSoC), sommata su tutti i client e tutti i round (training +
-comunicazione). Il dSoC lo calcola Peukert, quindi lo stesso lavoro costa piu'
-carica se erogato a corrente piu' alta. E' l'energia che la batteria PAGA, non
+comunicazione). Il dSoC lo calcola il modello da datasheet, quindi lo stesso
+lavoro costa piu' carica se erogato a corrente piu' alta. E' l'energia che la batteria PAGA, non
 il lavoro utile prodotto dal device.
 
 [B] con device identici il SoC medio e' una trasformazione affine ESATTA
@@ -101,15 +102,22 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.transforms import Bbox
 
-# label del CSV -> gruppo mostrato nei grafici. I quattro ESCS Peukert
-# confluiscono in "escs_peuk", i quattro lineari in "escs".
+# label del CSV -> gruppo mostrato nei grafici. Tre modelli di batteria con
+# cui l'algoritmo stima il SoC: lineare (i paper), Peukert, datasheet (nm, il
+# SoC vero del simulatore). I quattro ESCS confluiscono in un gruppo per modello.
+# [B] prima che il mondo passasse al modello da datasheet, sage_soc ed escs_sd
+# leggevano un SoC Peukert e i loro gruppi si chiamavano "*_peuk": ora sono
+# "*_nm", e "*_peuk" e' il nuovo braccio col fuel gauge di Peukert.
 GROUP = {
-    "escs_sd": "escs_peuk", "escs_sp": "escs_peuk",
-    "escs_md": "escs_peuk", "escs_mp": "escs_peuk",
+    "escs_sd": "escs_nm", "escs_sp": "escs_nm",
+    "escs_md": "escs_nm", "escs_mp": "escs_nm",
+    "escs_sd_peuk": "escs_peuk", "escs_sp_peuk": "escs_peuk",
+    "escs_md_peuk": "escs_peuk", "escs_mp_peuk": "escs_peuk",
     "escs_sd_lin": "escs", "escs_sp_lin": "escs",
     "escs_md_lin": "escs", "escs_mp_lin": "escs",
-    "sage": "sage", "sage_soc": "sage_peuk", "sage_smart" : "sage_smart",
-    "sage_smart2": "sage_smart2",
+    "sage": "sage", "sage_peuk": "sage_peuk", "sage_soc": "sage_nm",
+    "sage_smart_lin": "sage_smart_lin", "sage_smart_peuk": "sage_smart_peuk",
+    "sage_smart": "sage_smart",
     "fedavg": "fedavg", "fedprox": "fedprox",
 }
 GROUPED = True          # spento da --no-group
@@ -122,40 +130,57 @@ def group_of(label):
     return GROUP.get(label, label)
 
 
-ORDER_GROUPED = ["fedavg", "fedprox", "sage", "sage_peuk", "sage_smart", "sage_smart2", "escs", "escs_peuk"]
-ORDER = ["fedavg", "fedprox", "sage", "sage_soc", "sage_smart", "sage_smart2",
+ORDER_GROUPED = ["fedavg", "fedprox",
+                 "sage", "sage_peuk", "sage_nm",
+                 "sage_smart_lin", "sage_smart_peuk", "sage_smart",
+                 "escs", "escs_peuk", "escs_nm"]
+ORDER = ["fedavg", "fedprox", "sage", "sage_peuk", "sage_soc",
+         "sage_smart_lin", "sage_smart_peuk", "sage_smart",
          "escs_sd", "escs_sp", "escs_md", "escs_mp",
+         "escs_sd_peuk", "escs_sp_peuk", "escs_md_peuk", "escs_mp_peuk",
          "escs_sd_lin", "escs_sp_lin", "escs_md_lin", "escs_mp_lin"]
 LABEL = {"fedavg": "FedAvg", "fedprox": "FedProx",
-         "sage": "SAGE", "sage_soc": "SAGE (peuk)",
-         "sage_peuk": "SAGE (peuk)", "sage_smart": "SAGE-smart",
-         "sage_smart2": "SAGE-smart2 (client-driven)",
-         "escs": "ESCS", "escs_peuk": "ESCS (peuk)",
+         "sage": "SAGE", "sage_peuk": "SAGE (peuk)",
+         "sage_soc": "SAGE (nm)", "sage_nm": "SAGE (nm)",
+         "sage_smart_lin": "SAGE-smart (lin)",
+         "sage_smart_peuk": "SAGE-smart (peuk)", "sage_smart": "SAGE-smart",
+         "escs": "ESCS", "escs_peuk": "ESCS (peuk)", "escs_nm": "ESCS (nm)",
          "escs_sd": "ESCS-SD", "escs_sp": "ESCS-SP",
          "escs_md": "ESCS-MD", "escs_mp": "ESCS-MP",
+         "escs_sd_peuk": "ESCS-SD (peuk)", "escs_sp_peuk": "ESCS-SP (peuk)",
+         "escs_md_peuk": "ESCS-MD (peuk)", "escs_mp_peuk": "ESCS-MP (peuk)",
          "escs_sd_lin": "ESCS-SD (lin)", "escs_sp_lin": "ESCS-SP (lin)",
          "escs_md_lin": "ESCS-MD (lin)", "escs_mp_lin": "ESCS-MP (lin)"}
 COLOR = {"fedavg": "#444444", "fedprox": "#1f77b4",
-         "sage": "#d62728", "sage_soc": "#e377c2", "sage_smart": "#9467bd",
-         "sage_smart2": "#ff7f0e",
-         "escs": "#c0392b", "escs_peuk": "#1a7f37",
+         "sage": "#d62728", "sage_peuk": "#ff9896",
+         "sage_soc": "#e377c2", "sage_nm": "#e377c2",
+         "sage_smart_lin": "#9467bd", "sage_smart_peuk": "#9467bd",
+         "sage_smart": "#9467bd",
+         "escs": "#c0392b", "escs_peuk": "#bcbd22", "escs_nm": "#1a7f37",
          "escs_sd": "#2ca02c", "escs_sp": "#98df8a",
          "escs_md": "#17becf", "escs_mp": "#9edae5",
+         "escs_sd_peuk": "#2ca02c", "escs_sp_peuk": "#98df8a",
+         "escs_md_peuk": "#17becf", "escs_mp_peuk": "#9edae5",
          "escs_sd_lin": "#2ca02c", "escs_sp_lin": "#98df8a",
          "escs_md_lin": "#17becf", "escs_mp_lin": "#9edae5"}
-# tratteggio = contabilita' lineare (i paper), continuo = Peukert (la tesi)
-STYLE = {"sage": "--", "escs": "--",
-         "sage_soc": "--", "escs_sp": "--", "escs_mp": "--",
+# tratteggio = lineare (i paper), punteggiato = Peukert, continuo = datasheet
+STYLE = {"sage": "--", "escs": "--", "sage_smart_lin": "--",
+         "sage_peuk": ":", "escs_peuk": ":", "sage_smart_peuk": ":",
+         "escs_sp": "--", "escs_mp": "--",
+         "escs_sd_peuk": ":", "escs_md_peuk": ":",
+         "escs_sp_peuk": ":", "escs_mp_peuk": ":",
          "escs_sd_lin": ":", "escs_md_lin": ":",
          "escs_sp_lin": "-.", "escs_mp_lin": "-."}
-# coppie (contabilita' lineare, contabilita' Peukert): stesso algoritmo,
-# stessa taratura, unica differenza la risorsa vista dal selettore
+# coppie (contabilita' lineare, SoC vero): stesso algoritmo, stessa taratura,
+# unica differenza la risorsa vista dal selettore
 PAIRS = [("sage", "sage_soc"),
+         ("sage_smart_lin", "sage_smart"),
          ("escs_sd_lin", "escs_sd"),
          ("escs_sp_lin", "escs_sp"),
          ("escs_md_lin", "escs_md"),
          ("escs_mp_lin", "escs_mp")]
-PAIRS_GROUPED = [("sage", "sage_peuk"), ("escs", "escs_peuk")]
+PAIRS_GROUPED = [("sage", "sage_nm"), ("escs", "escs_nm"),
+                 ("sage_smart_lin", "sage_smart")]
 
 # capacita' nominale del device, per convertire Wh in frazione di SoC in fig10
 try:
@@ -264,7 +289,7 @@ def fig_accounting(results_dir, out, beta):
     """Effetto del cambio di contabilita': una freccia per coppia.
 
     [B] la coda della freccia e' la contabilita' LINEARE (quella dei paper),
-    la punta e' PEUKERT. Frecce che puntano tutte a sinistra dicono che la
+    la punta e' il SoC VERO (nm). Frecce che puntano tutte a sinistra dicono che la
     correzione elimina gli esaurimenti; la componente verticale dice quanto
     costa in accuratezza. E' l'unico modo onesto di mostrarlo: a beta alto
     l'accuracy scende un poco, e il grafico non lo nasconde.
@@ -312,7 +337,7 @@ def fig_accounting(results_dir, out, beta):
     ax.set_xlabel("Depleted clients at end of run (out of 30)")
     ax.set_ylabel(f"Test accuracy (mean of last {TAIL} rounds)")
     ax.set_title(f"Effect of the energy accounting — β = {beta_str(beta)}\n"
-                 "arrow tail = linear residual energy, head = Peukert SoC;")
+                 "arrow tail = linear residual energy, head = true (datasheet) SoC;")
     ax.grid(alpha=0.3)
     ax.margins(0.16)
     _place_labels(ax, labels)
@@ -742,7 +767,7 @@ def fig_reserve(results_dir, out, beta, reserve=0.20):
 
     fig.suptitle(f"Battery reserve and device depletion \u2014 \u03b2 = {beta}\n"
                  "dashed = linear residual energy (as published), "
-                 "solid = Peukert SoC", fontsize=11)
+                 "solid = true (datasheet) SoC", fontsize=11)
     fig.tight_layout(rect=[0, 0, 1, 0.93])
     fig.savefig(out, dpi=160)
     plt.close(fig)
@@ -776,6 +801,19 @@ def fig_estimation(results_dir, out, beta, reserve=0.20):
     panels = []
     for a in lin_labs:
         runs = by_lab.get(a) or []
+        if runs and "soc_believed_mean" in runs[0][0]:
+            # [B] sage_smart_lin scrive direttamente il SoC medio creduto dal
+            # fuel gauge lineare: niente ricostruzione da energy_lin_wh, che
+            # ignorerebbe la ricarica e userebbe una capacita' unica per tier
+            Rt, true_soc, _ = _per_round_group(runs, "mean_soc")
+            R, believed, _ = _per_round_group(runs, "soc_believed_mean")
+            true_at = dict(zip(Rt, true_soc))
+            keep = [i for i, r in enumerate(R) if r in true_at]
+            if keep:
+                panels.append((a, [R[i] for i in keep],
+                               [believed[i] for i in keep],
+                               [true_at[R[i]] for i in keep]))
+            continue
         if not runs or "energy_lin_wh" not in runs[0][0]:
             continue
         denom = N_CLIENTS * CAP_WH
@@ -794,7 +832,7 @@ def fig_estimation(results_dir, out, beta, reserve=0.20):
     for ax, (a, R, believed, true_soc) in zip(axes[0], panels):
         ax.plot(R, believed, color="#2c7fb8", lw=2,
                 label="SoC believed by the selector")
-        ax.plot(R, true_soc, color="#c0392b", lw=2, label="true SoC (Peukert)")
+        ax.plot(R, true_soc, color="#c0392b", lw=2, label="true SoC (datasheet)")
         ax.fill_between(R, true_soc, believed, color="#c0392b", alpha=0.16,
                         lw=0, label="overestimation")
         ax.axhline(reserve, color="k", ls=":", lw=1.2)

@@ -90,6 +90,13 @@ MODEL_SIZE_MB = MODEL_N_PARAMS * BYTES_PER_PARAM / 1e6
 COMM_ENERGY_RX_J_PER_MB = float(_get("comm", "energy_rx_j_per_mb"))
 COMM_TX_RX_ENERGY_RATIO = float(_get("comm", "tx_rx_energy_ratio"))
 COMM_BANDWIDTH_MB_PER_S = float(_get("comm", "bandwidth_mb_per_s"))
+# sessione radio LTE (promozione + coda), Huang et al. MobiSys 2012
+SESSION_PROMO_POWER_W = float(_get("comm", "session_promo_power_w"))
+SESSION_PROMO_TIME_S = float(_get("comm", "session_promo_time_s"))
+SESSION_TAIL_POWER_W = float(_get("comm", "session_tail_power_w"))
+SESSION_TAIL_TIME_S = float(_get("comm", "session_tail_time_s"))
+COMM_RTT_S = float(_get("comm", "rtt_s"))
+CTRL_PAYLOAD_MB = float(_get("comm", "ctrl_payload_kb")) / 1000.0
 
 # =====================================================================
 # workload concorrente

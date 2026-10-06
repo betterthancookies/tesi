@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader, Subset
 from device.fuel_gauge import RECORD_KEY as DEVICE_KEY
 from device.fuel_gauge import DeviceReading
 from tesiFL.client_policy import (
-    Envelope, affordable_steps, can_afford_minimum, decide,
+    Envelope, accepts_proposal, affordable_steps, can_afford_minimum, decide,
 )
 from tesiFL.data.partition import load_data
 from tesiFL.data.model import build_model
@@ -59,7 +59,7 @@ def train(msg: Message, context: Context):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-    # sage_smart2: il server ha mandato una PROPOSTA, non un'assegnazione
+    # sage_smart: il server ha mandato una PROPOSTA, non un'assegnazione
     if Envelope.present_in(config):
         return _train_client_driven(msg, model, device, config, partition_id,
                                     num_partitions, beta, seed, proximal_mu)
@@ -133,7 +133,7 @@ def _probe_loss(model, dataset, n_probe: int, device, generator) -> float:
 def _train_client_driven(msg: Message, model, device, config, partition_id: int,
                          num_partitions: int, beta: float, seed: int,
                          proximal_mu: float) -> Message:
-    """sage_smart2: il client decide (E, B) dentro l'envelope del server.
+    """sage_smart: il client decide (E, B) dentro l'envelope del server.
 
     Fasi 5-7 della proposta:
       5. rilegge il proprio stato (late binding), stima la loss locale,
@@ -147,7 +147,7 @@ def _train_client_driven(msg: Message, model, device, config, partition_id: int,
     """
     if DEVICE_KEY not in msg.content:
         raise KeyError(
-            "sage_smart2: il messaggio non contiene i sensori del device "
+            "sage_smart: il messaggio non contiene i sensori del device "
             f"(record '{DEVICE_KEY}'): la strategia deve allegarli"
         )
     # [B] LATE BINDING: la lettura e' quella di adesso, non quella che il
@@ -163,9 +163,9 @@ def _train_client_driven(msg: Message, model, device, config, partition_id: int,
     env = dataclasses.replace(env, probe_samples=min(env.probe_samples, n))
 
     base = {
-        "s2-soc-start": float(reading.soc),
-        "s2-workload": float(reading.workload),
-        "s2-charging": int(reading.charging),
+        "smart-soc-start": float(reading.soc),
+        "smart-workload": float(reading.workload),
+        "smart-charging": int(reading.charging),
     }
 
     def optout(probe: int, loss_pre: float, e_target: int) -> Message:
@@ -182,16 +182,16 @@ def _train_client_driven(msg: Message, model, device, config, partition_id: int,
             **base,
             "num-examples": 0,
             "train_loss": 0.0,
-            "s2-optout": 1,
-            "s2-epochs": 0,
-            "s2-batch": int(b),
-            "s2-steps": 0,
-            "s2-probe": int(probe),
-            "s2-soc-final": float(soc_final),
-            "s2-e-target": int(e_target),
+            "smart-optout": 1,
+            "smart-epochs": 0,
+            "smart-batch": int(b),
+            "smart-steps": 0,
+            "smart-probe": int(probe),
+            "smart-soc-final": float(soc_final),
+            "smart-e-target": int(e_target),
         }
         if loss_pre == loss_pre:          # non NaN
-            metrics["s2-loss-pre"] = float(loss_pre)
+            metrics["smart-loss-pre"] = float(loss_pre)
         content = RecordDict({"metrics": MetricRecord(metrics)})
         return Message(content=content, reply_to=msg)
 
@@ -233,23 +233,52 @@ def _train_client_driven(msg: Message, model, device, config, partition_id: int,
         "class-dist": _class_counts(loader),
         "loss-sq-sum": loss_sq_sum,
         "loss-n": loss_n,
-        "s2-optout": 0,
-        "s2-epochs": int(plan.epochs),
-        "s2-batch": int(plan.batch),
-        "s2-steps": steps,
-        "s2-steps-budget": int(budget),
-        "s2-budget-hit": int(steps < planned),
-        "s2-probe": int(env.probe_samples),
-        "s2-soc-final": float(soc_final),
-        "s2-time-s": float(dt),
-        "s2-deadline-ok": int(dt <= env.deadline_s),
-        "s2-e-target": int(plan.e_target),
-        "s2-utility": float(plan.utility),
-        "s2-loss-pre": float(loss_pre),
-        "s2-loss-post": float(stats["last_loss"]),
+        "smart-optout": 0,
+        "smart-epochs": int(plan.epochs),
+        "smart-batch": int(plan.batch),
+        "smart-steps": steps,
+        "smart-steps-budget": int(budget),
+        "smart-budget-hit": int(steps < planned),
+        "smart-probe": int(env.probe_samples),
+        "smart-soc-final": float(soc_final),
+        "smart-time-s": float(dt),
+        "smart-deadline-ok": int(dt <= env.deadline_s),
+        "smart-e-target": int(plan.e_target),
+        "smart-utility": float(plan.utility),
+        "smart-loss-pre": float(loss_pre),
+        "smart-loss-post": float(stats["last_loss"]),
     }
     content = RecordDict({"arrays": ArrayRecord(model.state_dict()),
                           "metrics": MetricRecord(metrics)})
+    return Message(content=content, reply_to=msg)
+
+
+@app.query()
+def query(msg: Message, context: Context):
+    """Proposta di lavoro di sage_smart, prima del training (Fase 2b).
+
+    Il server propone un envelope di (E, B): il client accetta se riesce a
+    fare almeno il minimo senza intaccare la riserva, altrimenti rifiuta, e
+    il server chiama un altro client al suo posto. La risposta porta anche
+    SoC, workload e stato di carica letti adesso: il server li usa al posto
+    della propria stima.
+
+    Niente modello, niente dati: e' un messaggio di pochi byte. Il costo
+    energetico (una sessione radio) lo addebita il mondo fisico.
+    """
+    cfg = msg.content["config"]
+    dev = msg.content[DEVICE_KEY]
+    reading = DeviceReading.from_record(dev)
+    # [B] la taglia del dataset il client la conosce; nel simulatore arriva
+    # nel record del device per non caricare i dati in una query
+    n = int(dev["dataset-size"])
+    metrics = {
+        "smart-soc": float(reading.soc),
+        "smart-workload": float(reading.workload),
+        "smart-charging": int(reading.charging),
+        "smart-accept": int(accepts_proposal(reading, Envelope.from_config(cfg), n)),
+    }
+    content = RecordDict({"metrics": MetricRecord(metrics)})
     return Message(content=content, reply_to=msg)
 
 

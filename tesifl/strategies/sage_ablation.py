@@ -12,14 +12,18 @@ from strategies.sage import _js
 
 
 class PhysicalSAGEAblation(PhysicalFedAvg):
-    """Variante della tesi: SAGE con il SoC Peukert al posto di E_i.
+    """Variante della tesi: SAGE con un SoC al posto di E_i.
 
         max  sum_i y_i * (a*SoC_i + b*D_i)      a + b = 1
 
     DIFFERENZE RISPETTO A `PhysicalSAGE`, tutte volute:
-    1. la risorsa e' il SoC vero del world state (scarica Peukert), non la
-       stima lineare SoC_0 - Wh/capacita'. E' l'unica differenza che misura
-       l'errore del modello di batteria dei paper.
+    1. la risorsa e' un SoC del world state, non la stima lineare
+       SoC_0 - Wh/capacita'. E' la differenza che misura l'errore del modello
+       di batteria dei paper. Quale SoC lo sceglie `battery_mode`:
+         "soc"   (nm, etichetta sage_soc) il SoC VERO, modello da datasheet;
+         "peuk"  (etichetta sage_peuk) il fuel gauge di Peukert
+                 (WorldState.soc_peukert): idle e ricarica inclusi, cambia
+                 SOLO il modello di batteria rispetto a "soc".
     2. niente termine rinnovabile (c = 0): non c'e' un corrispettivo fisico
        nel world state, e il rumore di R_i sporcherebbe il confronto.
     3. niente soglia di eleggibilita' (2e): i client a SoC zero sono gia'
@@ -41,9 +45,13 @@ class PhysicalSAGEAblation(PhysicalFedAvg):
         half_epochs_threshold: float = 0.3,
         max_fraction: float = 0.2,   # k_per_round / N
         class_distributions: dict[int, np.ndarray] | None = None,
+        battery_mode: str = "soc",
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
+        if battery_mode not in ("soc", "peuk"):
+            raise ValueError("battery_mode: 'soc' (datasheet) oppure 'peuk' (Peukert)")
+        self.sage_battery = battery_mode
         self.a, self.b = float(sage_a), float(sage_b)
         if abs(self.a + self.b - 1.0) > 1e-9:
             raise ValueError("a + b = 1")
@@ -63,6 +71,8 @@ class PhysicalSAGEAblation(PhysicalFedAvg):
 
     # ------------------------------------------------------------ componenti
     def _resource(self, cid: int) -> float:
+        if self.sage_battery == "peuk":
+            return float(self.world.soc_peukert(cid))
         return float(self.world.snapshot(cid).soc)
 
     def _divergence(self, cid: int) -> float:

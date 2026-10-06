@@ -59,11 +59,11 @@ out = {
                 f"proximal-mu={al['proximal_mu']} "
                 f"smart-stale-weight={al['smart_stale_weight']} "
                 f"smart-stale-max={al['smart_stale_max']} "
-                f"smart2-soc-min={al['smart2_soc_min']} "
-                f"smart2-epochs-min={al['smart2_epochs_min']} "
-                f"smart2-deadline-mult={al['smart2_deadline_mult']} "
-                f"smart2-probe-samples={al['smart2_probe_samples']} "
-                f"smart2-heartbeat={str(al['smart2_heartbeat']).lower()} "
+                f"smart-soc-min={al['smart_soc_min']} "
+                f"smart-epochs-min={al['smart_epochs_min']} "
+                f"smart-deadline-mult={al['smart_deadline_mult']} "
+                f"smart-probe-samples={al['smart_probe_samples']} "
+                f"smart-max-waves={al['smart_max_waves']} "
                 f"escs-min-battery={al['escs_min_battery']} "
                 f"escs-min-nq={al['escs_min_nq']} "
                 f"escs-first-round-all={str(al['escs_first_round_all']).lower()} "
@@ -140,9 +140,12 @@ done
 
 # ---- pulizia --------------------------------------------------------
 for g in "${GPU_ARR[@]}"; do
-  left=$(ls "${RESULTS}/_gpu${g}"/*.csv 2>/dev/null | wc -l)
+  # [B] ogni run ha la sua sottocartella: un CSV rimasto li' e' di una run
+  # andata in timeout, e il nome della cartella dice quale
+  left=$(find "${RESULTS}/_gpu${g}" -name '*.csv' 2>/dev/null | wc -l)
   if [ "$left" -gt 0 ]; then
-    echo "  ATTENZIONE: ${left} CSV non rinominati in ${RESULTS}/_gpu${g}/"
+    echo "  ATTENZIONE: ${left} CSV di run in timeout in ${RESULTS}/_gpu${g}/:"
+    find "${RESULTS}/_gpu${g}" -name '*.csv' | sed 's/^/    /'
   else
     rm -rf "${RESULTS}/_gpu${g}"
   fi

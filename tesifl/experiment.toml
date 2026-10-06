@@ -1,5 +1,5 @@
 [campaign]
-name        = "rechargeONdeviceON_ResNet20_newBatt"          # -> risultati in results_<name>/
+name        = "rechargeONdeviceON_ResNet20_totale"          # -> risultati in results_<name>/
 rounds      = 250
 seeds       = [2026]         # [2026, 7, 13] per tre seed
 betas       = [0.1, 0.5, 1.0]
@@ -10,15 +10,26 @@ stagger_s   = 180            # ritardo fra l'avvio di uno shard e il successivo
 timeout_s   = 3600           # una run oltre questo tempo e' considerata persa
 
 # Algoritmi da eseguire. Commenta le righe che non ti servono.
+# Per SAGE, SAGE-smart ed ESCS-SD tre bracci, che differiscono solo per il
+# modello di batteria con cui l'algoritmo stima il SoC (la batteria VERA del
+# simulatore e' sempre quella da datasheet):
+#               lineare           Peukert            datasheet (nm)
+#   SAGE        sage (il paper)   sage_peuk          sage_soc
+#   SAGE-smart  sage_smart_lin    sage_smart_peuk    sage_smart
+#   ESCS-SD     escs_sd_lin       escs_sd_peuk       escs_sd
+# plot_battery_models.py li confronta su un Pareto per algoritmo.
 algorithms = [
   "fedavg",
   "fedprox",
   "sage",
+  "sage_peuk",
   "sage_soc",
+  "sage_smart_lin",
+  "sage_smart_peuk",
   "sage_smart",
-  "sage_smart2",
-  "escs_sd",
   "escs_sd_lin",
+  "escs_sd_peuk",
+  "escs_sd",
 ]
 
 
@@ -91,6 +102,22 @@ bytes_per_param     = 4     # float32, nessuna compressione [ASSUNZIONE]
 energy_rx_j_per_mb  = 1.5   # [DAL RELATORE] 4G LTE; WiFi sarebbe ~0.1
 tx_rx_energy_ratio  = 1.5   # [ASSUNZIONE] TX piu' cara di RX
 bandwidth_mb_per_s  = 2.0   # [ASSUNZIONE]
+# Attivazione della radio LTE (macchina a stati RRC), Huang et al., "A Close
+# Examination of Performance and Power Characteristics of 4G LTE Networks",
+# MobiSys 2012, Tabella 3 e Sez. 4.1. Ogni SESSIONE radio (un trasferimento
+# isolato) paga una promozione IDLE->CONNECTED e poi resta accesa per Ttail
+# prima di tornare IDLE: ~12.6 J, qualunque sia la taglia del messaggio.
+# [B] e' cio' che rende NON gratuiti i messaggi di controllo (stato, proposta):
+# col solo costo per MB un heartbeat da 1 KB costerebbe ~1e-3 J. Vale per TUTTI
+# gli algoritmi: download e upload del modello sono due sessioni per round.
+# Metti session_tail_time_s = 0 e session_promo_time_s = 0 per tornare al
+# modello di comunicazione precedente (solo J/MB).
+session_promo_power_w = 1.2107   # LTE promotion, 1210.7 mW
+session_promo_time_s  = 0.2601   # Tpro, 260.1 ms
+session_tail_power_w  = 1.0600   # LTE tail base, 1060.0 mW
+session_tail_time_s   = 11.576   # Ttail (RRC inactivity timer), 11.576 s
+rtt_s                 = 0.0695   # RTT mediano LTE, 69.5 ms (Sez. 4.1)
+ctrl_payload_kb       = 1.0      # [ASSUNZIONE] messaggio di controllo, andata + ritorno
 
 
 # =====================================================================
@@ -144,17 +171,20 @@ sage_abc = { "0.1" = [0.5, 0.0, 0.5], "0.5" = [0.2, 0.1, 0.7], "1.0" = [0.5, 0.2
 # l'assegnazione dinamica di (E,B), non la taratura.
 sage_ab  = { "0.1" = [0.4, 0.6], "0.5" = [0.6, 0.4], "1.0" = [0.9, 0.1] }
 
-# SAGE-smart
-smart_stale_weight = 0.3   # peso dell'anzianita' nel punteggio
-smart_stale_max    = 25    # round dopo i quali l'anzianita' e' al massimo
-
-# SAGE-smart2: selezione come SAGE-smart (stessi a, b e c = smart_stale_weight),
-# ma (E, B) li decide il CLIENT dentro un envelope proposto dal server.
-smart2_soc_min        = 0.20   # riserva che il client non intacca (vincolo 2e di SAGE)
-smart2_epochs_min     = 2      # E_lo: minimo di epoche dell'envelope
-smart2_deadline_mult  = 1.0    # deadline = mult * mediana dei tempi nominali (E, B di [algo])
-smart2_probe_samples  = 256    # campioni locali per stimare la loss prima di decidere
-smart2_heartbeat      = true   # false = server cieco: conosce solo il SoC riportato a fine round
+# SAGE-smart: il server seleziona (a*SoC + b*D + c*anzianita') e propone un
+# envelope di (E, B); il CLIENT sceglie dentro l'envelope con il proprio stato.
+# Etichette: "sage_smart" = batteria da datasheet, "sage_smart_lin" = stesso
+# algoritmo con fuel gauge LINEARE (il confronto e' come sage/sage_soc).
+smart_stale_weight   = 0.3    # peso (c) dell'anzianita' nel punteggio
+smart_stale_max      = 25     # round dopo i quali l'anzianita' e' al massimo
+smart_soc_min        = 0.20   # riserva che il client non intacca (vincolo 2e di SAGE)
+smart_epochs_min     = 2      # E_lo: minimo di epoche dell'envelope
+smart_deadline_mult  = 1.0    # deadline = mult * mediana dei tempi nominali (E, B di [algo])
+smart_probe_samples  = 256    # campioni locali per stimare la loss prima di decidere
+# Negoziazione prima del training (documento "Client Server Protocol" del
+# relatore, opzione 3 con l'opzione 2): il server ordina i client con una
+# stima del SoC, propone l'envelope ai candidati, chi rifiuta viene sostituito.
+smart_max_waves      = 2      # ondate di proposte per round (1 = nessun rimpiazzo)
 
 # ESCS
 escs_min_battery       = 0.20   # B_LVL_min, Table 4 del paper

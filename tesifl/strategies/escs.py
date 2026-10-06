@@ -50,21 +50,24 @@ class PhysicalESCS(PhysicalFedAvg):
     dell'inf iniziale nel codice originale (li' pero' inf/inf = nan
     escludeva per sempre i mai osservati in -sp; qui e' corretto).
 
-    RISORSA DI BATTERIA, i due bracci del confronto:
+    RISORSA DI BATTERIA, i tre bracci del confronto:
 
-      battery_mode="energy"  (orig) bat = SoC_0 - Wh_LINEARI / capacita',
+      battery_mode="energy"  (lin, orig) bat = SoC_0 - Wh_LINEARI / capacita',
                              cioe' battery/max_battery del paper: energia
                              residua stimata come potenza x tempo, ignora
-                             Peukert e sottostima il consumo di ~1.26x.
+                             la non-idealita' della batteria.
                              Parte da SoC_0 perche' nel paper la batteria
                              iniziale (30-100%) e' un dato del profilo.
-      battery_mode="soc"     (peuk) bat = SoC del modello di batteria Peukert.
+      battery_mode="peuk"    (peuk) bat = SoC del fuel gauge di Peukert
+                             (WorldState.soc_peukert, idle e ricarica inclusi).
+      battery_mode="soc"     (nm) bat = SoC VERO, modello da datasheet.
 
     E' la stessa sostituzione dell'ablazione su SAGE, applicata qui: se
     l'effetto si ripete su due algoritmi diversi non dipende da SAGE.
     La risorsa entra sia nell'utilita' sia nel filtro R, perche' nel paper
     sono la stessa grandezza; anche il consumo previsto e' nella stessa
-    contabilita' della risorsa (lineare con "energy", Peukert con "soc").
+    contabilita' della risorsa (lineare con "energy", Peukert con "peuk",
+    datasheet con "soc").
 
     [B] la modalita' probabilistica non ha tetto: seleziona un numero
     variabile di client, ed e' il motivo per cui nel paper -sp/-mp sono le
@@ -111,8 +114,8 @@ class PhysicalESCS(PhysicalFedAvg):
         um, sm = utility_mode.lower(), selection_mode.lower()
         if um not in ("s", "m") or sm not in ("d", "p"):
             raise ValueError("utility_mode in {s,m}, selection_mode in {d,p}")
-        if battery_mode not in ("soc", "energy"):
-            raise ValueError("battery_mode: 'soc' (peuk) oppure 'energy' (orig)")
+        if battery_mode not in ("soc", "energy", "peuk"):
+            raise ValueError("battery_mode: 'soc' (nm), 'peuk' oppure 'energy' (orig)")
         if not partition_sizes:
             raise ValueError(
                 "partition_sizes obbligatorio: senza le taglie reali la "
@@ -141,7 +144,7 @@ class PhysicalESCS(PhysicalFedAvg):
 
     @property
     def variant(self) -> str:
-        suffix = "" if self.battery_mode == "soc" else "-lin"
+        suffix = {"soc": "", "energy": "-lin", "peuk": "-peuk"}[self.battery_mode]
         return f"escs-{self.utility_mode}{self.selection_mode}{suffix}"
 
     # ----------------------------------------------------------- componenti
@@ -179,6 +182,8 @@ class PhysicalESCS(PhysicalFedAvg):
         """La risorsa di batteria vista dal selettore."""
         if self.battery_mode == "soc":
             return float(self.world.snapshot(cid).soc)
+        if self.battery_mode == "peuk":
+            return float(self.world.soc_peukert(cid))
         cap = self._capacity(cid)
         if cap <= 0.0:
             return 1.0
@@ -268,7 +273,10 @@ class PhysicalESCS(PhysicalFedAvg):
         spent = e_lin_wh if self.battery_mode == "energy" else e_wh
         self._used_wh[cid] = self._used_wh.get(cid, 0.0) + e_lin_wh
         cap = self._capacity(cid)
-        if cap > 0.0:
+        if self.battery_mode == "peuk":
+            # calo del gauge di Peukert per training + upload di questo round
+            self._cons[cid] = float(self._peuk_drop.get(cid, 0.0))
+        elif cap > 0.0:
             self._cons[cid] = float(spent / cap)
 
     def aggregate_evaluate(

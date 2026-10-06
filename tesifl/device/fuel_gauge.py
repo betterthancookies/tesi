@@ -1,4 +1,4 @@
-"""Cio' che il CLIENT sa del proprio device: la vista locale di sage_smart2.
+"""Cio' che il CLIENT sa del proprio device: la vista locale di sage_smart.
 
 In un telefono vero queste grandezze vengono dal sistema operativo: il SoC
 dal fuel gauge della batteria, il workload dallo scheduler, il profilo
@@ -6,31 +6,43 @@ hardware da come e' fatto il device. Nel simulatore il mondo fisico vive nel
 processo del server (WorldState), quindi la lettura arriva al client dentro
 il messaggio di training, in un record separato chiamato "device".
 
-[B] SEPARAZIONE DEI CANALI. Il messaggio di sage_smart2 porta due record:
+[B] SEPARAZIONE DEI CANALI. Il messaggio di sage_smart porta due record:
     "config"  la PROPOSTA del server (envelope di E e B): e' protocollo FL.
     "device"  i SENSORI del device simulato: e' fisica, non protocollo.
 La strategia non legge mai il record "device" per decidere: lo scrive il
 livello fisico (WorldState) per conto del device. In un deployment reale il
 record sparirebbe e il client leggerebbe le stesse grandezze dal sistema.
 
-[B] LA PREVISIONE COINCIDE CON LA FISICA. `soc_after` replica esattamente
-WorldState.apply_round + apply_communication: stesse funzioni (importate da
-world_state), stesso ordine, stesso clamp a zero. Il SoC finale che il
-client comunica al server e' quindi quello che il mondo applica davvero, e la
-colonna `s2_soc_err` del CSV lo verifica a ogni round (deve stare a ~1e-12).
+TRE MODELLI DI BATTERIA, scelti con `model`:
+  "nm"    (datasheet) SoC vero del mondo, previsione con il modello V(SoC, I)
+          e Q(I) di battery_model. `soc_after` replica esattamente
+          WorldState.apply_round + apply_communication: stesse funzioni,
+          stesso ordine, stesso clamp. Il SoC finale dichiarato coincide con
+          quello vero (colonna smart_soc_err ~0).
+  "lin"   SoC del fuel gauge lineare (WorldState.soc_linear), previsione con
+          P/eta * dt / (V_nom * C_nom).
+  "peuk"  SoC del fuel gauge di Peukert (WorldState.soc_peukert), previsione
+          con battery_model_peukert.delta_soc.
+  Con "lin" e "peuk" la previsione replica esattamente l'aggiornamento del
+  gauge, ma NON la scarica vera: smart_soc_err misura allora di quanto quel
+  modello sbaglia, che e' il punto del confronto.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from device.battery_model import delta_soc
+from device.battery_model import delta_soc, energy_wh_linear
+from device.battery_model_peukert import delta_soc as peukert_delta_soc
 from device.communication_model import comm_power_w, comm_time_s
 from device.compute_model import probe_time_s, training_time_s
+from device.constants import V_NOMINAL
 from device.device_profile import DeviceProfile
 from device.world_state import WorldState, effective_profile, training_power_w
 
 RECORD_KEY = "device"
+MODELS = ("nm", "lin", "peuk")
+_NAMES = {"nm": "datasheet", "lin": "linear", "peuk": "peukert"}
 
 
 @dataclass(frozen=True)
@@ -41,15 +53,23 @@ class DeviceReading:
     workload: float
     charging: bool
     profile: DeviceProfile
+    model: str = "nm"
 
     # -------------------------------------------------- lato mondo (server)
     @classmethod
-    def from_world(cls, world: WorldState, cid: int) -> "DeviceReading":
+    def from_world(cls, world: WorldState, cid: int,
+                   model: str = "nm") -> "DeviceReading":
+        if model not in MODELS:
+            raise ValueError(f"modello di batteria: uno fra {MODELS}")
+        soc = {"nm": lambda: world.snapshot(cid).soc,
+               "lin": lambda: world.soc_linear(cid),
+               "peuk": lambda: world.soc_peukert(cid)}[model]()
         return cls(
-            soc=float(world.snapshot(cid).soc),
+            soc=float(soc),
             workload=float(world.utilization(cid)),
             charging=bool(world.is_charging(cid)),
             profile=world.profile(cid),
+            model=model,
         )
 
     def to_record(self) -> dict:
@@ -58,6 +78,7 @@ class DeviceReading:
             "soc": float(self.soc),
             "workload": float(self.workload),
             "charging": bool(self.charging),
+            "battery-model": _NAMES[self.model],
             "cid": int(p.cid),
             "capacity-mah": float(p.battery_capacity_mah),
             "macs-per-s": float(p.macs_per_s),
@@ -79,6 +100,7 @@ class DeviceReading:
                 peukert_n=float(rec["peukert-n"]),
                 tier=str(rec["tier"]),
             ),
+            model={v: k for k, v in _NAMES.items()}[str(rec["battery-model"])],
         )
 
     # ------------------------------------------------------------ previsioni
@@ -95,14 +117,12 @@ class DeviceReading:
                 + probe_time_s(p, probe_samples))
 
     def soc_after(self, dt_s: float, batch_size: int) -> tuple[float, float]:
-        """(SoC dopo il training, SoC dopo l'upload), come li applica il mondo.
-
-        In carica la batteria non scende: il device e' collegato alla rete.
-        """
+        """(SoC dopo il training, SoC dopo l'upload) secondo il modello del
+        device. In carica la batteria non scende: e' collegato alla rete."""
         if self.charging:
             return self.soc, self.soc
         s1 = self._drain(self.soc, training_power_w(batch_size), dt_s)
-        if s1 <= 0.0:
+        if s1 <= 0.0 and self.model == "nm":
             # il mondo marca il device come morto e non addebita l'upload
             return 0.0, 0.0
         s2 = self._drain(s1, comm_power_w(), comm_time_s())
@@ -115,5 +135,11 @@ class DeviceReading:
         return dt, self.soc_after(dt, batch_size)[1]
 
     def _drain(self, soc: float, power_w: float, dt_s: float) -> float:
-        d = delta_soc(power_w, dt_s, self.profile, soc)
+        if self.model == "lin":
+            cap_wh = self.profile.battery_capacity_mah / 1000.0 * V_NOMINAL
+            d = -energy_wh_linear(power_w, dt_s) / cap_wh
+        elif self.model == "peuk":
+            d = peukert_delta_soc(power_w, dt_s, self.profile)
+        else:
+            d = delta_soc(power_w, dt_s, self.profile, soc)
         return max(0.0, min(1.0, soc + d))

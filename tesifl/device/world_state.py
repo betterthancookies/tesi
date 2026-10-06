@@ -9,7 +9,10 @@ import numpy as np
 from device.battery_model import (
     delta_soc, energy_wh_from_delta_soc, energy_wh_linear,
 )
-from device.communication_model import comm_power_w, comm_time_s
+from device.battery_model_peukert import delta_soc as peukert_delta_soc
+from device.communication_model import (
+    comm_power_w, comm_time_s, ctrl_power_w, ctrl_time_s,
+)
 from device.compute_model import probe_time_s, training_time_s
 from device.constants import (
     DCDC_EFFICIENCY,
@@ -25,12 +28,13 @@ from device.constants import (
     RECHARGE_AVAILABLE_DEFAULT,
     RECHARGE_PROB_BASE,
     TRAIN_POWER_W,
+    V_NOMINAL,
 )
 from device.device_profile import DeviceProfile, generate_profiles
 from device.workload import WorkloadModel
 
 
-# [B] funzioni di modulo, non metodi: le usa anche il CLIENT di sage_smart2
+# [B] funzioni di modulo, non metodi: le usa anche il CLIENT di sage_smart
 # (device/fuel_gauge.py) per prevedere il proprio consumo. Se client e mondo
 # avessero due copie della stessa formula, prima o poi divergerebbero.
 def effective_profile(p: DeviceProfile, w: float) -> DeviceProfile:
@@ -97,6 +101,24 @@ class WorldState:
     apply_round/apply_communication restituiscono entrambe, cosi' una
     strategia "orig" puo' usare la lineare e il confronto con la variante SoC
     misura davvero l'errore del modello lineare, non altro.
+
+    TRE MODELLI DI BATTERIA, per il confronto lin / peuk / nm
+      nm    (datasheet, battery_model.py) e' la batteria VERA: _soc.
+      lin   fuel gauge lineare, soc_linear():
+                SoC_lin <- SoC_lin - (P/eta * dt) / (V_nom * C_nom)
+      peuk  fuel gauge di Peukert, soc_peukert() (battery_model_peukert.py):
+                SoC_peuk <- SoC_peuk - dt / (C' / I^n)
+    I due gauge sono il SoC che il device CREDEREBBE di avere se stimasse la
+    carica con quel modello. Sono aggiornati a OGNI scarica (training,
+    comunicazione, idle) con la stessa potenza e la stessa durata della
+    batteria vera, e a ogni carica; stesso clamp in [0, 1]. A fine carica (SoC
+    vero = 1) si riallineano a 1, come fa un fuel gauge vero quando rileva la
+    carica completa.
+    [B] differiscono dal SoC vero SOLO per il modello di batteria: e' cio'
+    che serve ai bracci peuk (sage_peuk, sage_smart_peuk, escs_*_peuk) e a
+    sage_smart_lin per isolare l'errore del modello. Le varianti lineari di
+    SAGE ed ESCS invece tengono una contabilita' propria che ignora idle e
+    ricarica, come nei loro paper.
     """
 
     def __init__(self, profiles: list[DeviceProfile], seed: int,
@@ -123,9 +145,14 @@ class WorldState:
         # (SAGE: E_i iniziale da gaussiana; ESCS: battery iniziale 30-100%).
         # Le strategie "orig" partono da qui, non da 1.
         self._soc0: dict[int, float] = dict(self._soc)
+        # fuel gauge lineare: parte dallo stesso SoC, vedi docstring
+        self._soc_lin: dict[int, float] = dict(self._soc)
+        self._soc_peuk: dict[int, float] = dict(self._soc)
         self._failed: dict[int, bool] = {cid: False for cid in self._profiles}
         self._energy_wh: dict[int, float] = {cid: 0.0 for cid in self._profiles}
         self._energy_comm_wh: dict[int, float] = {cid: 0.0 for cid in self._profiles}
+        # messaggi di controllo (stato, proposte): solo sage_smart li usa
+        self._energy_ctrl_wh: dict[int, float] = {cid: 0.0 for cid in self._profiles}
         self._energy_lin_wh: dict[int, float] = {cid: 0.0 for cid in self._profiles}
         self._energy_idle_wh: dict[int, float] = {cid: 0.0 for cid in self._profiles}
         # energia presa dalla RETE durante le cariche: non pesa sulla batteria
@@ -187,9 +214,22 @@ class WorldState:
     def initial_soc(self, cid: int) -> float:
         return self._soc0[cid]
 
+    def soc_linear(self, cid: int) -> float:
+        """SoC secondo il fuel gauge LINEARE del device (vedi docstring)."""
+        return self._soc_lin[cid]
+
+    def soc_peukert(self, cid: int) -> float:
+        """SoC secondo il fuel gauge di PEUKERT del device (vedi docstring)."""
+        return self._soc_peuk[cid]
+
+    def capacity_wh(self, cid: int) -> float:
+        """Capacita' nominale in Wh, V_nom * C_nom: il denominatore lineare."""
+        return self._profiles[cid].battery_capacity_mah / 1000.0 * V_NOMINAL
+
     def energy_wh(self, cid: int) -> float:
         """Energia cumulata (train + comm) del client, in Wh (Peukert)."""
-        return self._energy_wh[cid] + self._energy_comm_wh[cid]
+        return (self._energy_wh[cid] + self._energy_comm_wh[cid]
+                + self._energy_ctrl_wh[cid])
 
     def energy_lin_wh(self, cid: int) -> float:
         """Energia cumulata (train + comm) del client, in Wh LINEARI (P*dt)."""
@@ -256,7 +296,7 @@ class WorldState:
     def probe_duration_s(self, cid: int, n_samples: int) -> float:
         """Forward di sola valutazione su n_samples, col workload corrente.
 
-        E' la stima della loss locale che il client di sage_smart2 fa prima
+        E' la stima della loss locale che il client di sage_smart fa prima
         di decidere (E, B): costa poco, ma non e' gratis e va addebitata.
         """
         return probe_time_s(self.effective_profile(cid), n_samples)
@@ -293,11 +333,27 @@ class WorldState:
         frac = d / d_req if d_req < 0.0 else 0.0
         e_lin = energy_wh_linear(power_w, dt_s) * frac
         self._energy_lin_wh[cid] += e_lin
+        self._soc_lin[cid] = max(
+            0.0, min(1.0, self._soc_lin[cid] - e_lin / self.capacity_wh(cid)))
+        # gauge di Peukert: stessa potenza, stessa frazione di tempo eseguita
+        d_peuk = peukert_delta_soc(power_w, dt_s, profile) * frac
+        self._soc_peuk[cid] = max(0.0, min(1.0, self._soc_peuk[cid] + d_peuk))
         return energy_wh_from_delta_soc(d, profile), e_lin
 
     def apply_round(self, cid: int, dt_s: float, batch_size: int) -> tuple[float, float]:
         e, e_lin = self._drain(cid, self.training_power_w(cid, batch_size), dt_s)
         self._energy_wh[cid] += e
+        return e, e_lin
+
+    def apply_control(self, cid: int, merged: bool = False) -> tuple[float, float]:
+        """Uno scambio di controllo (richiesta + risposta) con il server.
+
+        merged=True se lo scambio cade nella sessione radio del download del
+        modello che segue (client selezionato): paga il solo payload. Vedi
+        communication_model.
+        """
+        e, e_lin = self._drain(cid, ctrl_power_w(merged), ctrl_time_s(merged))
+        self._energy_ctrl_wh[cid] += e
         return e, e_lin
 
     def apply_communication(self, cid: int) -> tuple[float, float]:
@@ -354,8 +410,13 @@ class WorldState:
             if not self._charging[cid]:
                 continue
             self._soc[cid] = min(1.0, self._soc[cid] + d_soc)
+            self._soc_lin[cid] = min(1.0, self._soc_lin[cid] + d_soc)
+            self._soc_peuk[cid] = min(1.0, self._soc_peuk[cid] + d_soc)
             if self._soc[cid] >= 1.0:
                 self._charging[cid] = False
+                # carica completa rilevata: i fuel gauge si riallineano
+                self._soc_lin[cid] = 1.0
+                self._soc_peuk[cid] = 1.0
 
     # ------------------------------------------------------------ metriche
     def total_energy_train_wh(self) -> float:
@@ -370,9 +431,12 @@ class WorldState:
     def total_energy_idle_wh(self) -> float:
         return sum(self._energy_idle_wh.values())
 
+    def total_energy_ctrl_wh(self) -> float:
+        return sum(self._energy_ctrl_wh.values())
+
     def total_energy_wh(self) -> float:
         return (self.total_energy_train_wh() + self.total_energy_comm_wh()
-                + self.total_energy_idle_wh())
+                + self.total_energy_ctrl_wh() + self.total_energy_idle_wh())
 
     def total_energy_lin_wh(self) -> float:
         return sum(self._energy_lin_wh.values())
@@ -383,6 +447,7 @@ class WorldState:
             "total_energy_wh": self.total_energy_wh(),
             "energy_train_wh": self.total_energy_train_wh(),
             "energy_comm_wh": self.total_energy_comm_wh(),
+            "energy_ctrl_wh": self.total_energy_ctrl_wh(),
             "energy_idle_wh": self.total_energy_idle_wh(),
             "energy_grid_wh": sum(self._energy_grid_wh.values()),
             "energy_lin_wh": self.total_energy_lin_wh(),

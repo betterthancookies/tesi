@@ -18,8 +18,7 @@ from strategies.fedavg import PhysicalFedAvg
 from strategies.fedprox import PhysicalFedProx
 from strategies.sage import PhysicalSAGE
 from strategies.sage_ablation import PhysicalSAGEAblation
-from strategies.sage_smart import PhysicalSAGESmart
-from strategies.sage_smart2 import PhysicalSAGESmart2
+from strategies.sage_smart import MODEL_NAMES, PhysicalSAGESmart
 from strategies.escs import PhysicalESCS
 from tesiFL.data.partition import load_centralized_dataset, partition_sizes
 from tesiFL.task import test
@@ -141,15 +140,6 @@ def main(grid: Grid, context: Context) -> None:
             f"b={context.run_config['sage-b']}, c={context.run_config['sage-c']})"
         )
     elif algorithm == "sage_smart":
-        strategy = PhysicalSAGESmart(
-            sage_a=float(context.run_config["sage-a"]),
-            sage_b=float(context.run_config["sage-b"]),
-            stale_weight=float(context.run_config["smart-stale-weight"]),
-            stale_max=int(context.run_config["smart-stale-max"]),
-            **common,
-        )
-
-    elif algorithm == "sage_smart2":
         # [B] la taglia dei dataset e' un dato di ISCRIZIONE (Fase 0 della
         # proposta): serve al server per la deadline e per l'envelope prima
         # che il client abbia mai risposto. Stesso partitioner di ESCS.
@@ -158,41 +148,48 @@ def main(grid: Grid, context: Context) -> None:
             beta=float(context.run_config["beta"]),
             seed=seed,
         )
-        strategy = PhysicalSAGESmart2(
+        strategy = PhysicalSAGESmart(
             sage_a=float(context.run_config["sage-a"]),
             sage_b=float(context.run_config["sage-b"]),
             stale_weight=float(context.run_config["smart-stale-weight"]),
             stale_max=int(context.run_config["smart-stale-max"]),
             partition_sizes=sizes,
-            soc_min=float(context.run_config["smart2-soc-min"]),
-            epochs_min=int(context.run_config["smart2-epochs-min"]),
-            deadline_mult=float(context.run_config["smart2-deadline-mult"]),
-            probe_samples=int(context.run_config["smart2-probe-samples"]),
-            heartbeat=bool(context.run_config["smart2-heartbeat"]),
+            soc_min=float(context.run_config["smart-soc-min"]),
+            epochs_min=int(context.run_config["smart-epochs-min"]),
+            deadline_mult=float(context.run_config["smart-deadline-mult"]),
+            probe_samples=int(context.run_config["smart-probe-samples"]),
+            max_waves=int(context.run_config["smart-max-waves"]),
+            battery_mode=str(context.run_config["smart-battery"]),
             **common,
         )
         print(
-            f"[strategy] PhysicalSAGESmart2 (a={context.run_config['sage-a']}, "
+            f"[strategy] PhysicalSAGESmart ({strategy.variant}) "
+            f"(a={context.run_config['sage-a']}, "
             f"b={context.run_config['sage-b']}, "
             f"c={context.run_config['smart-stale-weight']}) | "
-            f"(E,B) decisi dal client | soc_min={strategy.soc_min} "
-            f"E_lo={strategy.epochs_min} deadline x{strategy.deadline_mult} "
-            f"probe={strategy.probe_samples} "
-            f"heartbeat={'ON' if strategy.heartbeat else 'OFF'}"
+            f"(E,B) decisi dal client | batteria "
+            f"{MODEL_NAMES[strategy.model]} | "
+            f"soc_min={strategy.soc_min} E_lo={strategy.epochs_min} "
+            f"deadline x{strategy.deadline_mult} probe={strategy.probe_samples} "
+            f"negoziazione max {strategy.max_waves} ondate"
         )
 
     elif algorithm == "sage_soc":
-        # variante della tesi: SoC Peukert al posto dell'energia lineare,
-        # niente termine rinnovabile (a + b = 1), niente soglia di
-        # eleggibilita'. NB: non accetta sage-c.
+        # variante della tesi: SoC al posto dell'energia lineare, niente
+        # termine rinnovabile (a + b = 1), niente soglia di eleggibilita'.
+        # NB: non accetta sage-c. sage-battery sceglie quale SoC:
+        #   "soc"  quello vero del mondo (nm, etichetta sage_soc)
+        #   "peuk" quello del fuel gauge di Peukert (etichetta sage_peuk)
         strategy = PhysicalSAGEAblation(
             sage_a=float(context.run_config["sage-a"]),
             sage_b=float(context.run_config["sage-b"]),
+            battery_mode=str(context.run_config["sage-battery"]),
             **common,
         )
         print(
             f"[strategy] PhysicalSAGEAblation (a={context.run_config['sage-a']}, "
-            f"b={context.run_config['sage-b']})"
+            f"b={context.run_config['sage-b']}, "
+            f"batteria {context.run_config['sage-battery']})"
         )
     elif algorithm == "fedprox":
         strategy = PhysicalFedProx(proximal_mu=proximal_mu, **common)
@@ -203,8 +200,8 @@ def main(grid: Grid, context: Context) -> None:
     else:
         raise ValueError(
             f"algorithm='{algorithm}' non riconosciuto: "
-            f"usa 'fedavg', 'fedprox', 'sage', 'sage_soc', 'sage_smart', "
-            f"'sage_smart2' o 'escs-XY'"
+            f"usa 'fedavg', 'fedprox', 'sage', 'sage_soc', 'sage_smart' "
+            f"o 'escs-XY'"
         )
 
     # Start strategy, run FedAvg for `num_rounds`

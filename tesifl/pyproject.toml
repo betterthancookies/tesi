@@ -50,15 +50,15 @@ idle-enabled = true       # consumo fra i round, modello ESCS Sez. 4.2
 # recharge-available sceglie la modalita':
 #   true  (a) in carica il device resta selezionabile e si allena a costo zero
 #   false (b) in carica il device e' fuori dalla federazione (N-1 client)
-# --- SAGE-smart: (E,B) dinamici lato server + bonus di anzianita'
-smart-stale-weight = 0.3   # peso del termine di anzianita' nel punteggio
-smart-stale-max = 25       # round dopo i quali l'anzianita' e' al massimo
-# --- SAGE-smart2: (E,B) decisi dal client dentro un envelope del server
-smart2-soc-min = 0.20        # riserva che il client protegge
-smart2-epochs-min = 2        # E_lo dell'envelope
-smart2-deadline-mult = 1.0   # deadline = mult * mediana dei tempi nominali
-smart2-probe-samples = 256   # campioni per stimare la loss locale
-smart2-heartbeat = true      # Fase 2: stato dinamico prima della selezione
+# --- SAGE-smart: selezione con anzianita', (E,B) decisi dal client
+smart-stale-weight = 0.3     # peso (c) del termine di anzianita' nel punteggio
+smart-stale-max = 25         # round dopo i quali l'anzianita' e' al massimo
+smart-soc-min = 0.20         # riserva che il client protegge
+smart-epochs-min = 2         # E_lo dell'envelope
+smart-deadline-mult = 1.0    # deadline = mult * mediana dei tempi nominali
+smart-probe-samples = 256    # campioni per stimare la loss locale
+smart-max-waves = 2          # ondate di proposte per round (1 = nessun rimpiazzo)
+smart-battery = "soc"        # "soc" (datasheet) | "peuk" (Peukert) | "energy" (lineare)
 model-name = "resnet20"
 recharge-enabled = true
 recharge-available = true
@@ -79,7 +79,8 @@ escs-selection = "d"
 escs-min-battery = 0.20
 escs-min-nq = 0.20
 escs-cap-probabilistic = false
-escs-battery = "soc"          # "soc" (Peukert) | "energy" (orig: SoC_0 - P*dt/cap)
+escs-battery = "soc"          # "soc" (datasheet) | "peuk" (Peukert) | "energy" (orig: SoC_0 - P*dt/cap)
+sage-battery = "soc"          # sage_soc: "soc" (datasheet) | "peuk" (Peukert)
 escs-first-round-all = true   # Alg. 1 righe 5-6 del paper: round 1 = tutti
 results-dir = "results"       # dove l'app scrive il CSV per round; va cambiata
                               # per ogni processo se si parallelizza su piu' GPU

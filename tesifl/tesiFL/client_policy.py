@@ -50,12 +50,12 @@ from dataclasses import dataclass
 from device.fuel_gauge import DeviceReading
 
 # chiavi del ConfigRecord con cui viaggia l'envelope
-K_E_LO = "s2-e-lo"
-K_E_HI = "s2-e-hi"
-K_BATCHES = "s2-batches"
-K_DEADLINE = "s2-deadline-s"
-K_SOC_MIN = "s2-soc-min"
-K_PROBE = "s2-probe-samples"
+K_E_LO = "smart-e-lo"
+K_E_HI = "smart-e-hi"
+K_BATCHES = "smart-batches"
+K_DEADLINE = "smart-deadline-s"
+K_SOC_MIN = "smart-soc-min"
+K_PROBE = "smart-probe-samples"
 
 
 @dataclass(frozen=True)
@@ -135,6 +135,18 @@ def can_afford_minimum(reading: DeviceReading, env: Envelope, n_samples: int) ->
         if soc_end >= env.soc_min:
             return True
     return False
+
+
+def accepts_proposal(reading: DeviceReading, env: Envelope, n_samples: int) -> bool:
+    """Controllo di accettazione della proposta (Fase 2b di sage_smart).
+
+    Il client accetta se riesce a fare almeno il lavoro minimo dell'envelope
+    senza intaccare la riserva, con lo stato di ADESSO. E' lo stesso
+    controllo che fara' di nuovo al momento del training: qui serve a
+    rifiutare PRIMA di scaricare il modello, cosi' il server puo' chiamare
+    un altro client nello stesso round.
+    """
+    return can_afford_minimum(reading, env, n_samples)
 
 
 def decide(reading: DeviceReading, env: Envelope, n_samples: int,
