@@ -10,23 +10,32 @@ stagger_s   = 180            # ritardo fra l'avvio di uno shard e il successivo
 timeout_s   = 3600           # una run oltre questo tempo e' considerata persa
 
 # Algoritmi da eseguire. Commenta le righe che non ti servono.
-# Per SAGE, SAGE-smart ed ESCS-SD tre bracci, che differiscono solo per il
-# modello di batteria con cui l'algoritmo stima il SoC (la batteria VERA del
-# simulatore e' sempre quella da datasheet):
+# Per SAGE, SAGE-smart ed ESCS-SD tre bracci, che differiscono SOLO per il
+# modello di batteria con cui l'algoritmo stima il SoC. lin e peuk sono fuel
+# gauge che seguono training, comunicazione, idle e ricarica come la batteria
+# VERA del simulatore, che e' sempre quella da datasheet (nm):
 #               lineare           Peukert            datasheet (nm)
-#   SAGE        sage (il paper)   sage_peuk          sage_soc
+#   SAGE        sage_lin          sage_peuk          sage_soc
 #   SAGE-smart  sage_smart_lin    sage_smart_peuk    sage_smart
 #   ESCS-SD     escs_sd_lin       escs_sd_peuk       escs_sd
+# Contabilita' dei paper (solo i Wh dei round in cui il client lavora, idle e
+# ricarica ignorati), come riferimento:
+#   sage           il SAGE del paper (anche pesi, rinnovabile, soglia diversi)
+#   escs_sd_paper  ESCS-SD con quella contabilita'
+# [B] escs_sd_lin delle campagne fino al 06/10 E' escs_sd_paper: rinomina quei
+# CSV prima di riusarli (run.sh --resume salterebbe la run nuova).
 # plot_battery_models.py li confronta su un Pareto per algoritmo.
 algorithms = [
   "fedavg",
   "fedprox",
   "sage",
+  "sage_lin",
   "sage_peuk",
   "sage_soc",
   "sage_smart_lin",
   "sage_smart_peuk",
   "sage_smart",
+  "escs_sd_paper",
   "escs_sd_lin",
   "escs_sd_peuk",
   "escs_sd",

@@ -55,12 +55,18 @@ class PhysicalSAGE(PhysicalFedAvg):
       riga 2). Se `class_distributions` non e' fornita al costruttore, si
       ricade sull'accumulo incrementale dalle metriche di training, e i mai
       osservati ereditano la D media dei noti per non restare esclusi.
-    - il paper ricarica ogni 10 round; il world state non ha ricarica, quindi
-      E_i e' monotona decrescente.
+    - il paper ricarica ogni 10 round; qui la ricarica e' quella del world
+      state (sporadica, guidata dal SoC), e E_i NON la vede: resta monotona
+      decrescente anche quando il device si e' ricaricato.
 
     [LIMITE DICHIARATO] nel paper anche i client non selezionati consumano in
-    idle e il loro E_i cala. Qui non c'e' drain di background, quindi E_i cala
-    solo per chi lavora.
+    idle e il loro E_i cala. Qui E_i conta SOLO i Wh dei round in cui il
+    client lavora (training + comunicazione), mentre il world state fa
+    consumare in idle tutti i client a ogni round: circa meta' dell'energia
+    totale, 30-40% di SoC per device a fine run, che E_i non vede. Questa
+    contabilita' e' quindi PIU' ottimista di quella del paper. Per il
+    confronto puro sul modello di batteria si usa sage_lin (ablazione col
+    fuel gauge lineare, idle e ricarica inclusi), non questo braccio.
     """
 
     def __init__(
@@ -112,6 +118,11 @@ class PhysicalSAGE(PhysicalFedAvg):
             return 1.0
         soc0 = float(self.world.initial_soc(cid))
         return float(np.clip(soc0 - self._used_wh.get(cid, 0.0) / cap, 0.0, 1.0))
+
+    def _believed_soc_mean(self) -> float | None:
+        """E_i media, per la colonna soc_believed_mean (cio' che il selettore crede)."""
+        cids = list(self._node_to_cid.values())
+        return float(np.mean([self._energy(c) for c in cids])) if cids else None
 
     def _divergence(self, cid: int) -> float:
         if cid in self._div:

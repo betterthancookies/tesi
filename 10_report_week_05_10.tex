@@ -1,0 +1,411 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{siunitx}
+\usepackage{multirow}
+\usepackage{float}
+\usepackage[autostyle]{csquotes}
+\usepackage[hidelinks]{hyperref}
+\usepackage{graphicx}
+
+\sisetup{detect-weight=true}
+
+\title{\bfseries Marocco FL thesis --- week 05/10 update}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\vspace{-3.2em}
+\begin{center}
+\emph{Client-Driven Local Work Assignment in Battery-Constrained Federated Learning}
+\end{center}
+\vspace{1em}
+
+%======================================================================
+\section*{Summary}
+
+\begin{itemize}
+  \item SAGE-smart is now \textbf{client-driven}: the server picks \emph{who}
+        trains and proposes a range of work; each client decides \emph{how much}
+        to train ($E$, $B$) with its own up-to-date state.
+  \item The client--server protocol follows the professor's note: we combine
+        \textbf{option 2} (server-side estimate) and \textbf{option 3} (the
+        client accepts or refuses the proposal, refusals are replaced).
+        Option 1 (broadcast) was tested and discarded: too expensive.
+  \item A message is no longer free: every radio activation costs about
+        \SI{12.6}{\joule} (LTE, Huang et al.\ 2012). This applies to all
+        algorithms.
+  \item Every algorithm (SAGE, ESCS-SD, SAGE-smart) now runs with three battery
+        models: linear, Peukert, datasheet (nm). Results: 33 runs, one seed,
+        three $\beta$.
+\end{itemize}
+
+%======================================================================
+\section{The problem: the server selects with old information}
+
+The server chooses clients by their state of charge (SoC). But the SoC it knows
+is the one the client reported the \emph{last time it took part}, possibly 10
+rounds ago. In the meantime the client has consumed energy in idle, or has
+been recharged, or its workload has changed. The server is therefore choosing
+with stale information.
+
+The professor's note proposes three ways to fix this:
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+option & what happens & cost \\
+\midrule
+1 -- broadcast & the server asks \emph{every} client for its state & one message per client per round \\
+2 -- estimate  & the server extrapolates the SoC from the last report & zero \\
+3 -- accept / refuse & the selected client checks its own state and can refuse & one message per candidate \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%======================================================================
+\section{How much does a message cost?}
+
+With an energy model in J/MB only, a 1\,KB status message would cost about
+\SI{0.002}{\joule}: asking the state would look free. On a phone it is not.
+On LTE, every isolated transmission wakes the radio up: it pays a
+\emph{promotion} to the connected state, and then the radio stays on for a
+\emph{tail} before going back to idle. Values from Huang et al.\ (MobiSys 2012,
+Table 3):
+
+\[
+  E_{\text{session}} =
+  \underbrace{\SI{1.21}{\watt}\times\SI{0.26}{\second}}_{\text{promotion}}
+  + \underbrace{\SI{1.06}{\watt}\times\SI{11.58}{\second}}_{\text{tail}}
+  \approx \SI{12.6}{\joule}
+\]
+
+regardless of the message size. Consequences:
+
+\begin{itemize}
+  \item \textbf{Model exchange} (all algorithms): download and upload are two
+        sessions, separated by the training. Cost per participant per round:
+        \SI{4}{\joule} of payload $+ 2\times\SI{12.6}{\joule} \approx \SI{29}{\joule}$
+        (it was \SI{4}{\joule}).
+  \item \textbf{Control message} (proposal and answer): \SI{12.6}{\joule} if it is
+        isolated, about \SI{0.002}{\joule} if the model download follows right
+        after, because the radio is already on.
+  \item \textbf{Delay}: each exchange delays the round by promotion $+$ RTT
+        $\approx \SI{0.26}{\second} + \SI{0.07}{\second} = \SI{0.33}{\second}$.
+\end{itemize}
+
+%======================================================================
+\section{Testing the three options}
+
+All options were implemented and compared on a logic simulator (real battery
+physics, fake training), 30 clients, 6 selected per round, 250 rounds.
+\enquote{State error} is the mean gap between the SoC the server believes and
+the real one.
+
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+ & state error & extra energy (250 rounds) & wasted downloads \\
+\midrule
+stale (no protocol) & \SI{0.94}{\percent} & 0 & -- \\
+1 -- broadcast & 0 & \SI{21}{\watt\hour} ($\approx\SI{12}{\percent}$ of total) & 0 \\
+2 -- estimate & \SI{0.89}{\percent} & 0 & 366$^{*}$ \\
+2 $+$ 3 & \SI{0.88}{\percent} & \SI{1.7}{\watt\hour}$^{*}$ & 0$^{*}$ \\
+\bottomrule
+\end{tabular}
+
+\smallskip
+{\footnotesize $^{*}$ stress test with the reserve raised to 0.62, to force refusals.}
+\end{center}
+
+\paragraph{Option 1} gives perfect information, but each round the $\approx 24$
+clients asked and then not selected pay a full radio session for nothing.
+
+\paragraph{Option 2} is free but blind to recharges and to workload changes
+(the note says it too: the SoC can be estimated, the load cannot). Without
+recharge its error drops from \SI{0.44}{\percent} to \SI{0.28}{\percent}: almost
+all of its error comes from recharges it cannot see.
+
+\paragraph{Option 3} lets a client refuse \emph{before} downloading the model.
+In the stress test, the estimate alone produced 366 clients that downloaded the
+model and then had to withdraw; with $2+3$ the 484 refusals all happened before
+the download, were replaced, and nobody withdrew.
+
+%======================================================================
+\section{Our choice: option 2 $+$ option 3}
+
+\begin{itemize}
+  \item \textbf{Option 2 ranks everybody for free.} For most clients the
+        estimate is good enough, because the battery changes slowly (one
+        epoch costs about \SI{0.2}{\percent} of the battery).
+  \item \textbf{Option 3 refreshes only the clients that matter}: the
+        candidates. They answer with their current state and can refuse
+        before the model is sent.
+  \item \textbf{Cost}: a client that accepts pays $\approx\SI{0.002}{\joule}$, one
+        that refuses pays \SI{12.6}{\joule}. At most 2 waves of proposals per
+        round ($\approx\SI{0.33}{\second}$ each).
+  \item \textbf{No starvation}: a refusal counts as a contact, so its
+        staleness bonus restarts from zero and it is not asked again at the
+        next round.
+\end{itemize}
+
+What it implies: real Flower messages (type \texttt{query}, with a new handler
+on the client); if nobody accepts after 2 waves the run ends as \enquote{pool
+exhausted}; a small gap remains between the answer and the training (the
+workload may change), so a client can still withdraw at training time.
+
+%======================================================================
+\section{How SAGE-smart works now, step by step}
+
+\paragraph{0. Subscription (once).} The server records the static data of each
+client: tier, capacity, speed, dataset size, initial SoC. From these it computes
+the \textbf{round deadline} (median time of 5 epochs at $B=128$, about
+\SI{100}{\second} here) and the \textbf{batches to propose}: the energy-optimal
+batch of every device rounds to 32, so the proposal is $B\in\{32,64\}$.
+
+\paragraph{1. Estimate (option 2).} For every client, with no messages:
+\[
+  \mathrm{SoC}_{\text{est}} = \mathrm{SoC}_{\text{last}}
+  - \frac{P_{\text{idle}}(w_{\text{last}})\,\Delta t}{V_{\text{nom}}\,C},
+  \qquad P_{\text{idle}}(w) = \SI{0.1}{\watt} + w\,(\SI{3}{\watt}-\SI{0.1}{\watt}).
+\]
+
+\paragraph{2. Ranking.}
+\[
+  \text{score} = a\,\mathrm{SoC}_{\text{est}} + b\,D + c\,\min\!\left(1, \tfrac{\text{rounds since last selection}}{25}\right)
+\]
+with $D$ the class divergence, $c=0.3$, and $(a,b)$ tuned per $\beta$. The
+number of selected clients grows from 2 at round 1 to 6 from round 5 on.
+
+\paragraph{3. Proposal (option 3).} Each candidate receives, without the model:
+$E\in[E_{\text{lo}},E_{\text{hi}}]$ with $E_{\text{lo}}=2$ and
+$E_{\text{hi}}=\min(10,\ E_{\text{deadline}},\ E_{\text{energy}})$, the batches
+$\{32,64\}$, the deadline and the reserve (\SI{20}{\percent}).
+
+\paragraph{4. Accept or refuse.} The client reads its current SoC, workload and
+charging state, and accepts if it can do at least 2 epochs and stay above
+\SI{20}{\percent}. Refusals are replaced by the next ones in the ranking.
+
+\paragraph{5. The client decides (the core of the thesis).} After receiving the
+model, the client:
+\begin{enumerate}
+  \item measures how useful it is: the loss $L$ of the global model on 256 local samples,
+        $u=\min(1, L/\ln 10)$ ($\ln 10 \approx 2.30$ is the loss of random guessing);
+  \item measures how much battery it can spend: $h=(\mathrm{SoC}-0.2)/0.8$ ($h=1$ when charging);
+  \item chooses $E^{*} = E_{\text{lo}} + \operatorname{round}\big((E_{\text{hi}}-E_{\text{lo}})\,u\,h\big)$;
+  \item goes down from $E^{*}$ until the predicted SoC \emph{at the end of the round}
+        stays above \SI{20}{\percent} and the time, computed with the
+        \emph{current} workload, fits the deadline. Among $\{32,64\}$ it takes
+        the batch that leaves more charge.
+\end{enumerate}
+Example measured: with the same deadline, a client with no workload chooses
+$E=5$; with \SI{10}{\percent} workload $E=4$; with \SI{30}{\percent}
+workload $E=3$. The server could not know this: this is the \emph{late binding}.
+
+\paragraph{6. Answer and aggregation.} The client sends the update and declares
+$E$, $B$, the steps done, the initial and \emph{final SoC}, the loss before and
+after. The server checks that $(E,B)$ is inside the proposal and aggregates
+with FedNova, using the declared steps $\tau_i$:
+\[
+  x \leftarrow x + \tau_{\text{eff}} \sum_i p_i \frac{\Delta_i}{\tau_i},
+  \qquad \tau_{\text{eff}}=\sum_i p_i\tau_i .
+\]
+
+\paragraph{7. Update.} The declared final SoC becomes the new starting point
+for the estimate of step 1.
+
+%======================================================================
+\section{Three battery models for every algorithm}
+
+The real battery of the simulator is always the datasheet model. What changes
+is the model the \emph{algorithm} uses to estimate the SoC:
+
+\begin{center}
+\begin{tabular}{llll}
+\toprule
+ & linear (lin) & Peukert (peuk) & datasheet (nm) \\
+\midrule
+SAGE       & \texttt{sage} (the paper)   & \texttt{sage\_peuk}       & \texttt{sage\_soc} \\
+SAGE-smart & \texttt{sage\_smart\_lin}   & \texttt{sage\_smart\_peuk} & \texttt{sage\_smart} \\
+ESCS-SD    & \texttt{escs\_sd\_lin}      & \texttt{escs\_sd\_peuk}    & \texttt{escs\_sd} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{itemize}
+  \item \textbf{nm}: the algorithm sees the true SoC.
+  \item \textbf{peuk}: a fuel gauge using Peukert ($n=1.15$), following
+        training, communication, idle and recharge.
+  \item \textbf{lin} for \textbf{SAGE-smart}: a linear fuel gauge
+        ($P\,t/(V_{\text{nom}}C)$), also following idle and recharge.
+  \item \textbf{lin} for \textbf{SAGE and ESCS}: the accounting of the papers,
+        $\mathrm{SoC}_0 - \text{Wh of the rounds the client trained}/C$.
+        It does \emph{not} count idle and recharge.
+\end{itemize}
+
+How wrong each model is, compared with the real battery (predicted drain /
+true drain, \SI{3500}{\milli\ampere\hour} cell):
+
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+ & linear & Peukert \\
+\midrule
+idle (\SI{0.1}{\watt})      & 0.96 -- 1.09 & \textbf{0.59 -- 0.67} \\
+training (2 -- \SI{3}{\watt}) & 0.95 -- 1.09 & 0.92 -- 1.11 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The linear model is almost right at every current. Peukert with $n=1.15$
+underestimates the drain at low current: in idle it sees about \SI{40}{\percent}
+less consumption than the real one.
+
+%======================================================================
+\section{Results}
+
+One seed (2026), $\beta\in\{0.1, 0.5, 1.0\}$, 250 rounds. Mean over the three
+$\beta$; per $\beta$ the number of depleted devices is shown in the second table.
+
+\begin{center}
+\begin{tabular}{llcccc}
+\toprule
+algorithm & battery & accuracy & final SoC & depleted & energy [Wh] \\
+\midrule
+\multirow{3}{*}{SAGE}       & lin (paper) & 0.530 & 0.33 & \textbf{11.7} & 277 \\
+                            & peuk        & 0.515 & 0.38 & 2.3  & 276 \\
+                            & nm          & 0.513 & 0.39 & 2.7  & 270 \\
+\midrule
+\multirow{3}{*}{SAGE-smart} & lin         & 0.620 & 0.57 & 0    & 147 \\
+                            & peuk        & 0.631 & 0.57 & 0    & 149 \\
+                            & nm          & \textbf{0.633} & 0.56 & 0 & 148 \\
+\midrule
+\multirow{3}{*}{ESCS-SD}    & lin (paper) & 0.583 & 0.33 & \textbf{11.7} & 284 \\
+                            & peuk        & 0.545 & 0.29 & 9.3  & 315 \\
+                            & nm          & 0.568 & 0.32 & 7.3  & 320 \\
+\midrule
+FedAvg  & -- & 0.577 & 0.18 & 18 & 322 \\
+FedProx & -- & 0.568 & 0.18 & 18 & 322 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{center}
+\begin{tabular}{llccc}
+\toprule
+ & & \multicolumn{3}{c}{depleted devices} \\
+algorithm & battery & $\beta=0.1$ & $\beta=0.5$ & $\beta=1.0$ \\
+\midrule
+\multirow{3}{*}{SAGE}    & lin (paper) & 12 & 12 & 11 \\
+                         & peuk        & 3  & 1  & 3  \\
+                         & nm          & 4  & 0  & 4  \\
+\midrule
+SAGE-smart               & all three   & 0  & 0  & 0  \\
+\midrule
+\multirow{3}{*}{ESCS-SD} & lin (paper) & 12 & 11 & 12 \\
+                         & peuk        & 13 & 8  & 7  \\
+                         & nm          & 9  & 6  & 7  \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Reading the results}
+
+\paragraph{The link is on depleted devices: the more faithful the battery
+state the algorithm uses, the fewer devices it depletes.} Accuracy stays almost
+flat.
+
+\paragraph{SAGE.} 11.7 depleted devices with the paper accounting, 2--3 with
+Peukert or the true SoC; the first death moves from round 118--138 to round
+194--244 (or never). The reason is not linearity: the paper accounting
+\emph{ignores idle}, which is about half of all the energy consumed and, by the
+end of the run, \SIrange{30}{38}{\percent} of SoC per device that the selector
+does not see. It believes the devices are fuller than they are, keeps choosing
+them and depletes them. Peukert and nm behave the same: the Peukert error is a
+few percent, too small to change who gets selected. The slightly higher
+accuracy of the paper version comes with 3--4 times more depleted devices (and
+it also uses different weights and rules).
+
+\paragraph{ESCS-SD.} Same direction: 11.7 $\rightarrow$ 9.3 $\rightarrow$ 7.3
+depleted devices, and the first death comes later (e.g.\ $\beta=0.5$: round
+101 $\rightarrow$ 117 $\rightarrow$ 125). Accuracy is equal at $\beta=0.5$,
+growing at $\beta=1.0$ (0.646 $\rightarrow$ 0.654 $\rightarrow$ 0.667), noisy at
+$\beta=0.1$ with one seed. ESCS still depletes 7 devices with the true SoC: its
+filter only looks at the next round, and its rounds are long (5 epochs, no
+deadline), so everybody consumes a lot in idle. Note: the linear arm seems to
+use less energy only because dead devices stop consuming.
+
+\paragraph{SAGE-smart.} No depleted device with any battery model, final SoC
+$\approx 0.57$, and about \textbf{half the energy} of the others (\SI{148}{\watt\hour}
+vs 270--\SI{320}{\watt\hour}). Here the battery model barely matters: at
+$\beta=0.5$ and $1.0$ the three variants are within 0.007 of accuracy. This is
+expected, for three reasons:
+\begin{enumerate}
+  \item its fuel gauges count idle too, so the linear one is wrong only by its
+        non-linearity: about $-0.5\%$ of SoC at the end of the run (Peukert
+        $+3$ to $+4\%$), far from the \SI{20}{\percent} reserve;
+  \item the deadline makes rounds short: total idle energy is \SI{91}{\watt\hour}
+        against 165--\SI{173}{\watt\hour} of the other algorithms, so batteries stay high;
+  \item only at $\beta=0.1$, where the loss is higher and clients train more
+        (3.4 epochs on average vs 2.2), do batteries get closer to the reserve:
+        there the order is lin $<$ peuk $<$ nm in accuracy (0.498, 0.520, 0.535).
+\end{enumerate}
+The negotiation stayed almost idle: 0--5 refusals per run, no withdrawals,
+control energy below \SI{0.02}{\watt\hour}.
+
+%======================================================================
+\newpage
+\section{Figures}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.75\linewidth]{3_fig5_pareto_soc_ball.png}
+    \caption{Final SoC vs accuracy, all $\beta$ pooled. Larger marker = more depleted devices.}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\linewidth]{3_figB_pareto_soc_models_ball.png}
+    \caption{The same plot, one panel per algorithm: linear (red), Peukert (orange), datasheet (green).}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.75\linewidth]{3_fig4_soc_ball.png}
+    \caption{Final SoC and depleted devices per algorithm.}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.75\linewidth]{3_fig2_accuracy_rounds_ball.png}
+    \caption{Accuracy per round.}
+\end{figure}
+
+%======================================================================
+\newpage
+\section{Limits and next steps}
+
+\begin{itemize}
+  \item \textbf{One seed}: the trend on depleted devices is clear
+        (11.7 $\rightarrow$ 2.5 for SAGE), the differences in accuracy are not.
+        Run seeds 7 and 13.
+  \item \textbf{Separate idle from linearity}: SAGE and ESCS linear arms ignore
+        idle, so they do not isolate the battery model. Add a full linear fuel
+        gauge for them too, as SAGE-smart already has.
+  \item \textbf{Where does the SAGE-smart gain come from?} It changes several
+        things at once (deadline, fewer epochs, $B=32$, FedNova, staleness,
+        client decision). Ablations: without late binding, without deadline,
+        without the loss term.
+  \item \textbf{Fair amount of work}: baselines always do $E=5$, $B=128$;
+        SAGE-smart about 2--3 epochs. Add a baseline with the same number of
+        epochs and compare energy per accuracy.
+  \item \textbf{A more dynamic world}: the workload changes once per round and
+        the battery drains slowly, so the information only the client has is
+        worth little and the negotiation is rarely triggered.
+\end{itemize}
+
+\end{document}

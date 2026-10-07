@@ -268,6 +268,11 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
             return float(self.world.soc_peukert(cid))
         return float(self.world.snapshot(cid).soc)
 
+    def _believed_soc_mean(self) -> float | None:
+        """SoC medio creduto dai device (fuel gauge), non la stima del server."""
+        cids = list(self._node_to_cid.values())
+        return float(np.mean([self._sensor_soc(c) for c in cids])) if cids else None
+
     def _subscribe(self) -> None:
         """Iscrizione: dati statici e SoC iniziale di ogni client."""
         cids = list(self._node_to_cid.values())
@@ -748,8 +753,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
             # [B] SoC medio CREDUTO dai device (fuel gauge), su tutta la
             # popolazione come mean_soc: con "soc" coincide con mean_soc, con
             # "peuk" ed "energy" la differenza e' l'errore del modello
-            "soc_believed_mean": float(np.mean(
-                [self._sensor_soc(c) for c in self._node_to_cid.values()])),
+            "soc_believed_mean": self._believed_soc_mean(),
         }
         log(INFO, "%s: %s risposte | E eseguite %.1f (min %.2f, max %.2f) "
             "| E_hi medio %.1f (energia %s, deadline %s) | opt-out %s | "

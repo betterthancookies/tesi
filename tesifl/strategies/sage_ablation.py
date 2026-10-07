@@ -17,13 +17,17 @@ class PhysicalSAGEAblation(PhysicalFedAvg):
         max  sum_i y_i * (a*SoC_i + b*D_i)      a + b = 1
 
     DIFFERENZE RISPETTO A `PhysicalSAGE`, tutte volute:
-    1. la risorsa e' un SoC del world state, non la stima lineare
-       SoC_0 - Wh/capacita'. E' la differenza che misura l'errore del modello
-       di batteria dei paper. Quale SoC lo sceglie `battery_mode`:
+    1. la risorsa e' un SoC del world state, non la contabilita' del paper
+       SoC_0 - Wh_round/capacita'. Quale SoC lo sceglie `battery_mode`:
          "soc"   (nm, etichetta sage_soc) il SoC VERO, modello da datasheet;
          "peuk"  (etichetta sage_peuk) il fuel gauge di Peukert
-                 (WorldState.soc_peukert): idle e ricarica inclusi, cambia
-                 SOLO il modello di batteria rispetto a "soc".
+                 (WorldState.soc_peukert);
+         "lin"   (etichetta sage_lin) il fuel gauge LINEARE
+                 (WorldState.soc_linear): P/eta * dt / (V_nom * C_nom).
+       I due gauge seguono idle e ricarica come la batteria vera: rispetto a
+       "soc" cambia SOLO il modello di batteria. E' il confronto lin / peuk /
+       nm puro, che il SAGE del paper (`sage`) non e': la sua E_i conta solo
+       i round in cui il client lavora, e ha pesi e regole diversi.
     2. niente termine rinnovabile (c = 0): non c'e' un corrispettivo fisico
        nel world state, e il rumore di R_i sporcherebbe il confronto.
     3. niente soglia di eleggibilita' (2e): i client a SoC zero sono gia'
@@ -49,8 +53,8 @@ class PhysicalSAGEAblation(PhysicalFedAvg):
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
-        if battery_mode not in ("soc", "peuk"):
-            raise ValueError("battery_mode: 'soc' (datasheet) oppure 'peuk' (Peukert)")
+        if battery_mode not in ("soc", "peuk", "lin"):
+            raise ValueError("battery_mode: 'soc' (datasheet), 'peuk' o 'lin'")
         self.sage_battery = battery_mode
         self.a, self.b = float(sage_a), float(sage_b)
         if abs(self.a + self.b - 1.0) > 1e-9:
@@ -73,7 +77,14 @@ class PhysicalSAGEAblation(PhysicalFedAvg):
     def _resource(self, cid: int) -> float:
         if self.sage_battery == "peuk":
             return float(self.world.soc_peukert(cid))
+        if self.sage_battery == "lin":
+            return float(self.world.soc_linear(cid))
         return float(self.world.snapshot(cid).soc)
+
+    def _believed_soc_mean(self) -> float | None:
+        """SoC medio che il selettore crede, per la colonna soc_believed_mean."""
+        cids = list(self._node_to_cid.values())
+        return float(np.mean([self._resource(c) for c in cids])) if cids else None
 
     def _divergence(self, cid: int) -> float:
         if cid in self._div:

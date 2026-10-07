@@ -44,10 +44,12 @@ for seed in $SEEDS; do
     # label -> algoritmo + extra specifici
     algo="$label"; extra=""
     # Modello di batteria visto dall'algoritmo: lin / peuk / nm (datasheet,
-    # il SoC vero). Senza suffisso = nm, tranne "sage" che e' il paper (lin).
+    # il SoC vero). Senza suffisso = nm; "sage" e' il SAGE del paper, *_paper
+    # la contabilita' dei paper (solo i round, idle ignorato).
     case "$label" in
       fedprox)         algo="fedprox" ;;
       sage)            algo="sage";       extra="sage-a=${SA} sage-b=${SB} sage-c=${SC}" ;;
+      sage_lin)        algo="sage_soc";   extra="sage-a=${QA} sage-b=${QB} sage-battery='lin'" ;;
       sage_peuk)       algo="sage_soc";   extra="sage-a=${QA} sage-b=${QB} sage-battery='peuk'" ;;
       sage_soc)        algo="sage_soc";   extra="sage-a=${QA} sage-b=${QB} sage-battery='soc'" ;;
       sage_smart_lin)  algo="sage_smart"; extra="sage-a=${QA} sage-b=${QB} smart-battery='energy'" ;;
@@ -61,10 +63,14 @@ for seed in $SEEDS; do
       escs_sp_peuk)    algo="escs-sp";  extra="escs-battery='peuk'" ;;
       escs_md_peuk)    algo="escs-md";  extra="escs-battery='peuk'" ;;
       escs_mp_peuk)    algo="escs-mp";  extra="escs-battery='peuk'" ;;
-      escs_sd_lin)     algo="escs-sd";  extra="escs-battery='energy'" ;;
-      escs_sp_lin)     algo="escs-sp";  extra="escs-battery='energy'" ;;
-      escs_md_lin)     algo="escs-md";  extra="escs-battery='energy'" ;;
-      escs_mp_lin)     algo="escs-mp";  extra="escs-battery='energy'" ;;
+      escs_sd_lin)     algo="escs-sd";  extra="escs-battery='lin'" ;;
+      escs_sp_lin)     algo="escs-sp";  extra="escs-battery='lin'" ;;
+      escs_md_lin)     algo="escs-md";  extra="escs-battery='lin'" ;;
+      escs_mp_lin)     algo="escs-mp";  extra="escs-battery='lin'" ;;
+      escs_sd_paper)   algo="escs-sd";  extra="escs-battery='energy'" ;;
+      escs_sp_paper)   algo="escs-sp";  extra="escs-battery='energy'" ;;
+      escs_md_paper)   algo="escs-md";  extra="escs-battery='energy'" ;;
+      escs_mp_paper)   algo="escs-mp";  extra="escs-battery='energy'" ;;
     esac
 
     # [B] UNA CARTELLA PER RUN. Prima tutte le run dello shard scrivevano in

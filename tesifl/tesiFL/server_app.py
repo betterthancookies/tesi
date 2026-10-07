@@ -180,6 +180,7 @@ def main(grid: Grid, context: Context) -> None:
         # NB: non accetta sage-c. sage-battery sceglie quale SoC:
         #   "soc"  quello vero del mondo (nm, etichetta sage_soc)
         #   "peuk" quello del fuel gauge di Peukert (etichetta sage_peuk)
+        #   "lin"  quello del fuel gauge lineare (etichetta sage_lin)
         strategy = PhysicalSAGEAblation(
             sage_a=float(context.run_config["sage-a"]),
             sage_b=float(context.run_config["sage-b"]),

@@ -164,6 +164,11 @@ class PhysicalFedAvg(FedAvg):
         )
         return dt, b
 
+    def _believed_soc_mean(self) -> float | None:
+        """SoC medio secondo la contabilita' della strategia. None = la
+        strategia non usa la batteria (FedAvg, FedProx)."""
+        return None
+
     def _round_overhead_s(self) -> float:
         """Secondi spesi prima del training (scambi di controllo). Default 0:
         solo sage_smart interroga i client prima di mandare il modello."""
@@ -243,6 +248,11 @@ class PhysicalFedAvg(FedAvg):
 
         s = self.world.stats()
         self._round_stats[int(server_round)] = dict(s)
+        # [B] SoC medio che il selettore CREDE, accanto a mean_soc (quello
+        # vero): la differenza e' l'errore della sua contabilita' di batteria
+        believed = self._believed_soc_mean()
+        if believed is not None:
+            self._round_stats[int(server_round)]["soc_believed_mean"] = believed
         log(INFO, "round %s: %.3f Wh (train %.3f + comm %.3f) | SoC medio %.2f "
             "| in ricarica %s | falliti %s",
             server_round, s["total_energy_wh"], s["energy_train_wh"],

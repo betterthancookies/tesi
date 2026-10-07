@@ -79,8 +79,8 @@ escs-selection = "d"
 escs-min-battery = 0.20
 escs-min-nq = 0.20
 escs-cap-probabilistic = false
-escs-battery = "soc"          # "soc" (datasheet) | "peuk" (Peukert) | "energy" (orig: SoC_0 - P*dt/cap)
-sage-battery = "soc"          # sage_soc: "soc" (datasheet) | "peuk" (Peukert)
+escs-battery = "soc"          # "soc" (datasheet) | "peuk" | "lin" (gauge) | "energy" (paper: solo round)
+sage-battery = "soc"          # sage_soc: "soc" (datasheet) | "peuk" (Peukert) | "lin" (gauge lineare)
 escs-first-round-all = true   # Alg. 1 righe 5-6 del paper: round 1 = tutti
 results-dir = "results"       # dove l'app scrive il CSV per round; va cambiata
                               # per ogni processo se si parallelizza su piu' GPU

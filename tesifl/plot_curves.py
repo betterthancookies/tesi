@@ -26,10 +26,12 @@ Produce in results/, UNA SERIE PER OGNI BETA (suffisso _b01, _b05, _b10):
 RAGGRUPPAMENTO DELLE VARIANTI
 Le quattro varianti di ESCS sono collassate in una curva per modello di
 batteria, la media di {sd, sp, md, mp}:
-    ESCS          contabilita' lineare (i quattro *_lin del paper)
+    ESCS (paper)  contabilita' dei paper, idle ignorato (i quattro *_paper)
+    ESCS (lin)    fuel gauge lineare completo (i quattro *_lin)
     ESCS (peuk)   fuel gauge di Peukert (i quattro *_peuk)
     ESCS (nm)     SoC vero, modello da datasheet (la variante della tesi)
-e analogamente sage -> SAGE, sage_peuk -> SAGE (peuk), sage_soc -> SAGE (nm).
+e analogamente sage -> SAGE (paper), sage_lin -> SAGE (lin),
+sage_peuk -> SAGE (peuk), sage_soc -> SAGE (nm).
 
 [B] con device omogenei escs_sd ed escs_md danno risultati IDENTICI, e cosi'
 escs_sp ed escs_mp: la distinzione system-based / model-based del paper e'
@@ -102,20 +104,24 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.transforms import Bbox
 
-# label del CSV -> gruppo mostrato nei grafici. Tre modelli di batteria con
-# cui l'algoritmo stima il SoC: lineare (i paper), Peukert, datasheet (nm, il
-# SoC vero del simulatore). I quattro ESCS confluiscono in un gruppo per modello.
-# [B] prima che il mondo passasse al modello da datasheet, sage_soc ed escs_sd
-# leggevano un SoC Peukert e i loro gruppi si chiamavano "*_peuk": ora sono
-# "*_nm", e "*_peuk" e' il nuovo braccio col fuel gauge di Peukert.
+# label del CSV -> gruppo mostrato nei grafici. Modelli di batteria con cui
+# l'algoritmo stima il SoC:
+#   paper  contabilita' dei paper: solo i Wh dei round in cui il client lavora,
+#          idle e ricarica ignorati (sage, escs_*_paper)
+#   lin    fuel gauge lineare completo (sage_lin, sage_smart_lin, escs_*_lin)
+#   peuk   fuel gauge di Peukert completo (*_peuk)
+#   nm     SoC vero, modello da datasheet (sage_soc, sage_smart, escs_*)
+# lin, peuk e nm differiscono SOLO per il modello di batteria. I quattro ESCS
+# confluiscono in un gruppo per modello.
+# [B] fino al 06/10 escs_*_lin era la contabilita' dei paper: quei CSV vanno
+# rinominati escs_*_paper prima di essere graficati insieme ai nuovi.
 GROUP = {
-    "escs_sd": "escs_nm", "escs_sp": "escs_nm",
-    "escs_md": "escs_nm", "escs_mp": "escs_nm",
-    "escs_sd_peuk": "escs_peuk", "escs_sp_peuk": "escs_peuk",
-    "escs_md_peuk": "escs_peuk", "escs_mp_peuk": "escs_peuk",
-    "escs_sd_lin": "escs", "escs_sp_lin": "escs",
-    "escs_md_lin": "escs", "escs_mp_lin": "escs",
-    "sage": "sage", "sage_peuk": "sage_peuk", "sage_soc": "sage_nm",
+    "escs_sd": "escs_nm", "escs_sp": "escs_nm", "escs_md": "escs_nm", "escs_mp": "escs_nm",
+    "escs_sd_peuk": "escs_peuk", "escs_sp_peuk": "escs_peuk", "escs_md_peuk": "escs_peuk", "escs_mp_peuk": "escs_peuk",
+    "escs_sd_lin": "escs_lin", "escs_sp_lin": "escs_lin", "escs_md_lin": "escs_lin", "escs_mp_lin": "escs_lin",
+    "escs_sd_paper": "escs", "escs_sp_paper": "escs", "escs_md_paper": "escs", "escs_mp_paper": "escs",
+    "sage": "sage", "sage_lin": "sage_lin", "sage_peuk": "sage_peuk",
+    "sage_soc": "sage_nm",
     "sage_smart_lin": "sage_smart_lin", "sage_smart_peuk": "sage_smart_peuk",
     "sage_smart": "sage_smart",
     "fedavg": "fedavg", "fedprox": "fedprox",
@@ -131,55 +137,52 @@ def group_of(label):
 
 
 ORDER_GROUPED = ["fedavg", "fedprox",
-                 "sage", "sage_peuk", "sage_nm",
+                 "sage", "sage_lin", "sage_peuk", "sage_nm",
                  "sage_smart_lin", "sage_smart_peuk", "sage_smart",
-                 "escs", "escs_peuk", "escs_nm"]
-ORDER = ["fedavg", "fedprox", "sage", "sage_peuk", "sage_soc",
+                 "escs", "escs_lin", "escs_peuk", "escs_nm"]
+ORDER = ["fedavg", "fedprox", "sage", "sage_lin", "sage_peuk", "sage_soc",
          "sage_smart_lin", "sage_smart_peuk", "sage_smart",
-         "escs_sd", "escs_sp", "escs_md", "escs_mp",
+         "escs_sd_paper", "escs_sp_paper", "escs_md_paper", "escs_mp_paper",
+         "escs_sd_lin", "escs_sp_lin", "escs_md_lin", "escs_mp_lin",
          "escs_sd_peuk", "escs_sp_peuk", "escs_md_peuk", "escs_mp_peuk",
-         "escs_sd_lin", "escs_sp_lin", "escs_md_lin", "escs_mp_lin"]
+         "escs_sd", "escs_sp", "escs_md", "escs_mp"]
 LABEL = {"fedavg": "FedAvg", "fedprox": "FedProx",
-         "sage": "SAGE", "sage_peuk": "SAGE (peuk)",
+         "sage": "SAGE (paper)", "sage_lin": "SAGE (lin)",
+         "sage_peuk": "SAGE (peuk)",
          "sage_soc": "SAGE (nm)", "sage_nm": "SAGE (nm)",
          "sage_smart_lin": "SAGE-smart (lin)",
          "sage_smart_peuk": "SAGE-smart (peuk)", "sage_smart": "SAGE-smart",
-         "escs": "ESCS", "escs_peuk": "ESCS (peuk)", "escs_nm": "ESCS (nm)",
-         "escs_sd": "ESCS-SD", "escs_sp": "ESCS-SP",
-         "escs_md": "ESCS-MD", "escs_mp": "ESCS-MP",
-         "escs_sd_peuk": "ESCS-SD (peuk)", "escs_sp_peuk": "ESCS-SP (peuk)",
-         "escs_md_peuk": "ESCS-MD (peuk)", "escs_mp_peuk": "ESCS-MP (peuk)",
-         "escs_sd_lin": "ESCS-SD (lin)", "escs_sp_lin": "ESCS-SP (lin)",
-         "escs_md_lin": "ESCS-MD (lin)", "escs_mp_lin": "ESCS-MP (lin)"}
+         "escs": "ESCS (paper)", "escs_lin": "ESCS (lin)",
+         "escs_peuk": "ESCS (peuk)", "escs_nm": "ESCS (nm)",
+         "escs_sd": "ESCS-SD", "escs_sp": "ESCS-SP", "escs_md": "ESCS-MD", "escs_mp": "ESCS-MP",
+         "escs_sd_paper": "ESCS-SD (paper)", "escs_sp_paper": "ESCS-SP (paper)", "escs_md_paper": "ESCS-MD (paper)", "escs_mp_paper": "ESCS-MP (paper)",
+         "escs_sd_lin": "ESCS-SD (lin)", "escs_sp_lin": "ESCS-SP (lin)", "escs_md_lin": "ESCS-MD (lin)", "escs_mp_lin": "ESCS-MP (lin)",
+         "escs_sd_peuk": "ESCS-SD (peuk)", "escs_sp_peuk": "ESCS-SP (peuk)", "escs_md_peuk": "ESCS-MD (peuk)", "escs_mp_peuk": "ESCS-MP (peuk)"}
 COLOR = {"fedavg": "#444444", "fedprox": "#1f77b4",
-         "sage": "#d62728", "sage_peuk": "#ff9896",
+         "sage": "#d62728", "sage_lin": "#8c564b", "sage_peuk": "#ff9896",
          "sage_soc": "#e377c2", "sage_nm": "#e377c2",
          "sage_smart_lin": "#9467bd", "sage_smart_peuk": "#9467bd",
          "sage_smart": "#9467bd",
-         "escs": "#c0392b", "escs_peuk": "#bcbd22", "escs_nm": "#1a7f37",
-         "escs_sd": "#2ca02c", "escs_sp": "#98df8a",
-         "escs_md": "#17becf", "escs_mp": "#9edae5",
-         "escs_sd_peuk": "#2ca02c", "escs_sp_peuk": "#98df8a",
-         "escs_md_peuk": "#17becf", "escs_mp_peuk": "#9edae5",
-         "escs_sd_lin": "#2ca02c", "escs_sp_lin": "#98df8a",
-         "escs_md_lin": "#17becf", "escs_mp_lin": "#9edae5"}
-# tratteggio = lineare (i paper), punteggiato = Peukert, continuo = datasheet
-STYLE = {"sage": "--", "escs": "--", "sage_smart_lin": "--",
+         "escs": "#c0392b", "escs_lin": "#17becf", "escs_peuk": "#bcbd22",
+         "escs_nm": "#1a7f37",
+         "escs_sd": "#2ca02c", "escs_sp": "#98df8a", "escs_md": "#17becf", "escs_mp": "#9edae5", "escs_sd_paper": "#2ca02c", "escs_sp_paper": "#98df8a", "escs_md_paper": "#17becf", "escs_mp_paper": "#9edae5", "escs_sd_lin": "#2ca02c", "escs_sp_lin": "#98df8a", "escs_md_lin": "#17becf", "escs_mp_lin": "#9edae5", "escs_sd_peuk": "#2ca02c", "escs_sp_peuk": "#98df8a", "escs_md_peuk": "#17becf", "escs_mp_peuk": "#9edae5"}
+# tratto-punto = paper, tratteggio = lineare, punteggiato = Peukert,
+# continuo = datasheet
+STYLE = {"sage": "-.", "escs": "-.",
+         "sage_lin": "--", "escs_lin": "--", "sage_smart_lin": "--",
          "sage_peuk": ":", "escs_peuk": ":", "sage_smart_peuk": ":",
-         "escs_sp": "--", "escs_mp": "--",
-         "escs_sd_peuk": ":", "escs_md_peuk": ":",
-         "escs_sp_peuk": ":", "escs_mp_peuk": ":",
-         "escs_sd_lin": ":", "escs_md_lin": ":",
-         "escs_sp_lin": "-.", "escs_mp_lin": "-."}
-# coppie (contabilita' lineare, SoC vero): stesso algoritmo, stessa taratura,
-# unica differenza la risorsa vista dal selettore
-PAIRS = [("sage", "sage_soc"),
+         "escs_sd_paper": "-.", "escs_sp_paper": "-.", "escs_md_paper": "-.", "escs_mp_paper": "-.",
+         "escs_sd_lin": "--", "escs_sp_lin": "--", "escs_md_lin": "--", "escs_mp_lin": "--",
+         "escs_sd_peuk": ":", "escs_sp_peuk": ":", "escs_md_peuk": ":", "escs_mp_peuk": ":"}
+# coppie (contabilita' approssimata, SoC vero): stesso algoritmo, unica
+# differenza la risorsa vista dal selettore. Sia paper -> nm (quanto costa
+# ignorare l'idle) sia lin -> nm (quanto costa la sola linearita').
+PAIRS = [("sage", "sage_soc"), ("sage_lin", "sage_soc"),
          ("sage_smart_lin", "sage_smart"),
-         ("escs_sd_lin", "escs_sd"),
-         ("escs_sp_lin", "escs_sp"),
-         ("escs_md_lin", "escs_md"),
-         ("escs_mp_lin", "escs_mp")]
-PAIRS_GROUPED = [("sage", "sage_nm"), ("escs", "escs_nm"),
+         ("escs_sd_paper", "escs_sd"), ("escs_sp_paper", "escs_sp"), ("escs_md_paper", "escs_md"), ("escs_mp_paper", "escs_mp"),
+         ("escs_sd_lin", "escs_sd"), ("escs_sp_lin", "escs_sp"), ("escs_md_lin", "escs_md"), ("escs_mp_lin", "escs_mp")]
+PAIRS_GROUPED = [("sage", "sage_nm"), ("sage_lin", "sage_nm"),
+                 ("escs", "escs_nm"), ("escs_lin", "escs_nm"),
                  ("sage_smart_lin", "sage_smart")]
 
 # capacita' nominale del device, per convertire Wh in frazione di SoC in fig10
@@ -322,6 +325,7 @@ def fig_accounting(results_dir, out, beta):
         labels.append((pt["fedavg"][0], pt["fedavg"][1],
                        f"FedAvg ({pt['fedavg'][0]:.0f}\u2020)", "#444444"))
 
+    heads = set()
     for lin, peu in pairs:
         c = COLOR.get(peu, "#333333")
         x0, y0 = pt[lin]
@@ -331,8 +335,12 @@ def fig_accounting(results_dir, out, beta):
                                     shrinkA=6, shrinkB=6, alpha=0.9))
         ax.plot(x0, y0, marker="o", ms=7, mfc="white", mec=c, mew=1.8)
         ax.plot(x1, y1, marker="o", ms=8, color=c)
-        name = LABEL.get(peu, peu).replace(" (SoC)", "")
-        labels.append((x1, y1, name, c))
+        # [B] piu' code possono puntare alla stessa testa (paper -> nm e
+        # lin -> nm): si etichettano le code, la testa una volta sola
+        labels.append((x0, y0, LABEL.get(lin, lin), COLOR.get(lin, c)))
+        if peu not in heads:
+            heads.add(peu)
+            labels.append((x1, y1, LABEL.get(peu, peu).replace(" (SoC)", ""), c))
 
     ax.set_xlabel("Depleted clients at end of run (out of 30)")
     ax.set_ylabel(f"Test accuracy (mean of last {TAIL} rounds)")
@@ -845,8 +853,9 @@ def fig_estimation(results_dir, out, beta, reserve=0.20):
         ax.legend(fontsize=8, loc="lower left")
     axes[0][0].set_ylabel("Mean state of charge")
 
-    fig.suptitle(f"Why the linear model depletes devices \u2014 \u03b2 = {beta}\n"
-                 "the selector believes it has more charge than the battery holds",
+    fig.suptitle(f"State of charge believed by the selector vs true SoC "
+                 f"\u2014 \u03b2 = {beta}\n"
+                 "paper accounting ignores idle; linear gauges track it",
                  fontsize=12)
     note = ("Shaded area is a lower bound: once clients die the true mean SoC "
             "is clamped at zero.")

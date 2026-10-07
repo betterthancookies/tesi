@@ -50,24 +50,31 @@ class PhysicalESCS(PhysicalFedAvg):
     dell'inf iniziale nel codice originale (li' pero' inf/inf = nan
     escludeva per sempre i mai osservati in -sp; qui e' corretto).
 
-    RISORSA DI BATTERIA, i tre bracci del confronto:
+    RISORSA DI BATTERIA:
 
-      battery_mode="energy"  (lin, orig) bat = SoC_0 - Wh_LINEARI / capacita',
-                             cioe' battery/max_battery del paper: energia
-                             residua stimata come potenza x tempo, ignora
-                             la non-idealita' della batteria.
-                             Parte da SoC_0 perche' nel paper la batteria
-                             iniziale (30-100%) e' un dato del profilo.
-      battery_mode="peuk"    (peuk) bat = SoC del fuel gauge di Peukert
-                             (WorldState.soc_peukert, idle e ricarica inclusi).
-      battery_mode="soc"     (nm) bat = SoC VERO, modello da datasheet.
+      battery_mode="lin"     (lin, etichetta escs_sd_lin) bat = SoC del fuel
+                             gauge LINEARE (WorldState.soc_linear):
+                             P/eta * dt / (V_nom * C_nom), idle e ricarica
+                             inclusi.
+      battery_mode="peuk"    (peuk, escs_sd_peuk) bat = SoC del fuel gauge di
+                             Peukert (WorldState.soc_peukert), idle e ricarica
+                             inclusi.
+      battery_mode="soc"     (nm, escs_sd) bat = SoC VERO, modello datasheet.
+      battery_mode="energy"  (escs_sd_paper) bat = SoC_0 - Wh_LINEARI dei soli
+                             round in cui il client lavora / capacita'. E' la
+                             contabilita' server-side scritta quando il mondo
+                             non aveva idle ne' ricarica: non vede l'idle
+                             (circa meta' dell'energia totale) ne' le
+                             ricariche. Resta per misurare quanto costa
+                             ignorare l'idle, NON come modello lineare.
 
-    E' la stessa sostituzione dell'ablazione su SAGE, applicata qui: se
-    l'effetto si ripete su due algoritmi diversi non dipende da SAGE.
+    lin, peuk e soc differiscono SOLO per il modello di batteria: e' il
+    confronto puro, lo stesso di sage_lin/sage_peuk/sage_soc e di
+    sage_smart_lin/_peuk/sage_smart. Se l'effetto si ripete su tre algoritmi
+    diversi non dipende dall'algoritmo.
     La risorsa entra sia nell'utilita' sia nel filtro R, perche' nel paper
     sono la stessa grandezza; anche il consumo previsto e' nella stessa
-    contabilita' della risorsa (lineare con "energy", Peukert con "peuk",
-    datasheet con "soc").
+    contabilita' della risorsa.
 
     [B] la modalita' probabilistica non ha tetto: seleziona un numero
     variabile di client, ed e' il motivo per cui nel paper -sp/-mp sono le
@@ -114,8 +121,8 @@ class PhysicalESCS(PhysicalFedAvg):
         um, sm = utility_mode.lower(), selection_mode.lower()
         if um not in ("s", "m") or sm not in ("d", "p"):
             raise ValueError("utility_mode in {s,m}, selection_mode in {d,p}")
-        if battery_mode not in ("soc", "energy", "peuk"):
-            raise ValueError("battery_mode: 'soc' (nm), 'peuk' oppure 'energy' (orig)")
+        if battery_mode not in ("soc", "lin", "peuk", "energy"):
+            raise ValueError("battery_mode: 'soc' (nm), 'lin', 'peuk' oppure 'energy' (paper)")
         if not partition_sizes:
             raise ValueError(
                 "partition_sizes obbligatorio: senza le taglie reali la "
@@ -144,8 +151,14 @@ class PhysicalESCS(PhysicalFedAvg):
 
     @property
     def variant(self) -> str:
-        suffix = {"soc": "", "energy": "-lin", "peuk": "-peuk"}[self.battery_mode]
+        suffix = {"soc": "", "lin": "-lin", "peuk": "-peuk",
+                  "energy": "-paper"}[self.battery_mode]
         return f"escs-{self.utility_mode}{self.selection_mode}{suffix}"
+
+    def _believed_soc_mean(self) -> float | None:
+        """SoC medio che il selettore crede, per la colonna soc_believed_mean."""
+        cids = list(self._node_to_cid.values())
+        return float(np.mean([self._battery(c) for c in cids])) if cids else None
 
     # ----------------------------------------------------------- componenti
     def _ensure_profile(self) -> None:
@@ -184,6 +197,9 @@ class PhysicalESCS(PhysicalFedAvg):
             return float(self.world.snapshot(cid).soc)
         if self.battery_mode == "peuk":
             return float(self.world.soc_peukert(cid))
+        if self.battery_mode == "lin":
+            return float(self.world.soc_linear(cid))
+        # "energy": contabilita' dei soli round (vedi docstring)
         cap = self._capacity(cid)
         if cap <= 0.0:
             return 1.0
@@ -270,7 +286,9 @@ class PhysicalESCS(PhysicalFedAvg):
         reply: Message, server_round: int,
     ) -> None:
         # consumo previsto nella STESSA contabilita' della risorsa
-        spent = e_lin_wh if self.battery_mode == "energy" else e_wh
+        # (lineare per "energy" e "lin": il calo del gauge lineare per training
+        # + upload e' esattamente e_lin_wh / capacita')
+        spent = e_lin_wh if self.battery_mode in ("energy", "lin") else e_wh
         self._used_wh[cid] = self._used_wh.get(cid, 0.0) + e_lin_wh
         cap = self._capacity(cid)
         if self.battery_mode == "peuk":
