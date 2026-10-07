@@ -7,7 +7,7 @@ clients     = 30             # numero di SuperNode
 k_fraction  = 0.2            # client per round = round(k_fraction * clients)
 gpus        = [1, 2, 3]      # un SuperLink per GPU; i beta girano in parallelo
 stagger_s   = 180            # ritardo fra l'avvio di uno shard e il successivo
-timeout_s   = 3600           # una run oltre questo tempo e' considerata persa
+timeout_s   = 7200           # una run oltre questo tempo e' considerata persa
 
 # Algoritmi da eseguire. Commenta le righe che non ti servono.
 # Per SAGE, SAGE-smart ed ESCS-SD tre bracci, che differiscono SOLO per il
