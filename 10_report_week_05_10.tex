@@ -39,9 +39,16 @@
   \item A message is no longer free: every radio activation costs about
         \SI{12.6}{\joule} (LTE, Huang et al.\ 2012). This applies to all
         algorithms.
-  \item Every algorithm (SAGE, ESCS-SD, SAGE-smart) now runs with three battery
-        models: linear, Peukert, datasheet (nm). Results: 33 runs, one seed,
-        three $\beta$.
+  \item Every algorithm (SAGE, ESCS-SD, SAGE-smart) now runs with four ways of
+        knowing the battery: the accounting of the papers, a linear fuel gauge,
+        a Peukert fuel gauge and the true SoC (datasheet). Results: 39 runs,
+        one seed, three $\beta$.
+  \item \textbf{Main result}: what reduces depleted devices is \emph{counting
+        idle and recharge} (ESCS-SD: 11.7 $\rightarrow$ 9.0; SAGE: 11.7
+        $\rightarrow$ 2.0), not the shape of the battery curve (linear
+        $\rightarrow$ datasheet: from 0 to $-1.7$ devices). The linear gauge is
+        wrong by less than one point of SoC, because \SI{3.7}{\volt} is the
+        average voltage of the cell.
 \end{itemize}
 
 %======================================================================
@@ -219,77 +226,128 @@ with FedNova, using the declared steps $\tau_i$:
 for the estimate of step 1.
 
 %======================================================================
-\section{Three battery models for every algorithm}
+\section{Four ways to know the battery}
 
-The real battery of the simulator is always the datasheet model. What changes
-is the model the \emph{algorithm} uses to estimate the SoC:
-
-\begin{center}
-\begin{tabular}{llll}
-\toprule
- & linear (lin) & Peukert (peuk) & datasheet (nm) \\
-\midrule
-SAGE       & \texttt{sage} (the paper)   & \texttt{sage\_peuk}       & \texttt{sage\_soc} \\
-SAGE-smart & \texttt{sage\_smart\_lin}   & \texttt{sage\_smart\_peuk} & \texttt{sage\_smart} \\
-ESCS-SD    & \texttt{escs\_sd\_lin}      & \texttt{escs\_sd\_peuk}    & \texttt{escs\_sd} \\
-\bottomrule
-\end{tabular}
-\end{center}
+The real battery of the simulator is always the datasheet model: its voltage
+and its usable capacity depend on the state of charge and on the current. What
+changes is how the \emph{algorithm} estimates the SoC of each client:
 
 \begin{itemize}
-  \item \textbf{nm}: the algorithm sees the true SoC.
-  \item \textbf{peuk}: a fuel gauge using Peukert ($n=1.15$), following
-        training, communication, idle and recharge.
-  \item \textbf{lin} for \textbf{SAGE-smart}: a linear fuel gauge
-        ($P\,t/(V_{\text{nom}}C)$), also following idle and recharge.
-  \item \textbf{lin} for \textbf{SAGE and ESCS}: the accounting of the papers,
-        $\mathrm{SoC}_0 - \text{Wh of the rounds the client trained}/C$.
-        It does \emph{not} count idle and recharge.
+  \item \textbf{paper}: the accounting of the SAGE and ESCS papers,
+        $\mathrm{SoC}_0 - (\text{Wh of the rounds the client trained})/C$.
+        It does \emph{not} count idle and it does not see recharges.
+  \item \textbf{lin}: a linear fuel gauge, $P\,t/(V_{\text{nom}}C)$ with
+        $V_{\text{nom}}=\SI{3.7}{\volt}$, applied to \emph{every} drain
+        (training, radio, idle) and reset to 100\,\% after a full recharge.
+  \item \textbf{peuk}: the same fuel gauge, with Peukert's law ($n=1.15$).
+  \item \textbf{nm}: the algorithm sees the true SoC of the datasheet battery.
 \end{itemize}
 
-How wrong each model is, compared with the real battery (predicted drain /
-true drain, \SI{3500}{\milli\ampere\hour} cell):
+\begin{center}
+\begin{tabular}{lllll}
+\toprule
+ & paper & lin & peuk & nm \\
+\midrule
+SAGE       & \texttt{sage}$^{*}$      & \texttt{sage\_lin}        & \texttt{sage\_peuk}        & \texttt{sage\_soc} \\
+SAGE-smart & --                       & \texttt{sage\_smart\_lin} & \texttt{sage\_smart\_peuk} & \texttt{sage\_smart} \\
+ESCS-SD    & \texttt{escs\_sd\_paper} & \texttt{escs\_sd\_lin}    & \texttt{escs\_sd\_peuk}    & \texttt{escs\_sd} \\
+\bottomrule
+\end{tabular}
+
+\smallskip
+{\footnotesize $^{*}$ the SAGE of the paper also has different weights $(a,b,c)$,
+the renewable-energy term and its own eligibility rules.}
+\end{center}
+
+\textbf{New this week}: \texttt{sage\_lin} and \texttt{escs\_sd\_lin} are now
+real linear fuel gauges. Before, the \enquote{linear} arm of SAGE and ESCS was
+the paper accounting, so it mixed two things: the idle it ignored and the
+linear model. Now the comparison splits into two separate steps:
 
 \begin{center}
-\begin{tabular}{lcc}
+\begin{tabular}{lll}
 \toprule
- & linear & Peukert \\
+step & from $\rightarrow$ to & question \\
 \midrule
-idle (\SI{0.1}{\watt})      & 0.96 -- 1.09 & \textbf{0.59 -- 0.67} \\
-training (2 -- \SI{3}{\watt}) & 0.95 -- 1.09 & 0.92 -- 1.11 \\
+A & paper $\rightarrow$ lin & does it matter to count idle and recharge? \\
+B & lin $\rightarrow$ peuk $\rightarrow$ nm & does the shape of the battery curve matter? \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-The linear model is almost right at every current. Peukert with $n=1.15$
-underestimates the drain at low current: in idle it sees about \SI{40}{\percent}
-less consumption than the real one.
+For ESCS-SD both steps are clean (same algorithm, same parameters). For SAGE,
+step B is clean, while step A also changes weights and rules.
+
+\subsection{How wrong is each gauge? (battery alone, no FL)}
+\label{sec:gauge}
+
+We drain the real battery from one SoC level to another and ask how much each
+gauge thinks was consumed (\SI{3500}{\milli\ampere\hour} cell; the
+\SI{4500}{\milli\ampere\hour} cell gives the same numbers):
+
+\begin{center}
+\small
+\begin{tabular}{lcccc}
+\toprule
+ & real drain & linear & Peukert, idle (\SI{0.1}{\watt}) & Peukert, training (\SI{3}{\watt}) \\
+\midrule
+SoC $1.0 \rightarrow 0.6$ & 0.40 & 0.423 \;($+6$\,\%)   & 0.26 \;($-35$\,\%) & 0.43 \;($+8$\,\%) \\
+SoC $0.6 \rightarrow 0.2$ & 0.40 & 0.390 \;($-2.5$\,\%) & 0.24 \;($-40$\,\%) & 0.40 \;($-1$\,\%) \\
+SoC $0.2 \rightarrow 0.0$ & 0.20 & 0.178 \;($-11$\,\%)  & 0.11 \;($-45$\,\%) & 0.18 \;($-9$\,\%) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Why the linear gauge is almost right.} A real cell has a high
+voltage when it is full (\SI{4.3}{\volt}) and a low one when it is nearly
+empty (\SIrange{3.3}{3.5}{\volt}). The phone needs a power $P=V\,I$, so for the
+same \SI{3}{\watt} it draws less current when the cell is full and more when it
+is nearly empty. The linear gauge assumes \SI{3.7}{\volt} all the time, and
+\SI{3.7}{\volt} is simply the \emph{average} voltage of the discharge curve
+(\SI{3.67}{\volt} in our datasheet). So the linear gauge is a bit pessimistic
+when the battery is full and a bit optimistic when it is nearly empty, and the
+two errors cancel: starting from 100\,\%, when the real battery reaches
+20\,\% the linear gauge reads 18.7\,\%, and when the real battery is empty it
+reads 0.9\,\%. The largest gap over a whole discharge is 2.3 points of SoC.
+
+The other non-linear effect, losing capacity at high current, does not show
+up: in our simulation a phone draws at most about 0.2C during training
+(\SI{3}{\watt} on a \SI{3500}{\milli\ampere\hour} cell) and about 0.01C in idle,
+while the datasheet loses capacity only above 0.2C (about $-4$\,\% at 0.5C).
+
+\paragraph{Why Peukert is optimistic.} With $n=1.15$ Peukert is fine during
+training, but in idle it sees only 55--65\,\% of the real consumption: it
+believes that slow drains are almost free. Since idle is about half of all the
+energy (Section~\ref{sec:results}), a Peukert gauge overestimates the SoC.
 
 %======================================================================
 \section{Results}
+\label{sec:results}
 
-One seed (2026), $\beta\in\{0.1, 0.5, 1.0\}$, 250 rounds. Mean over the three
-$\beta$; per $\beta$ the number of depleted devices is shown in the second table.
+One seed (2026), $\beta\in\{0.1, 0.5, 1.0\}$, 250 rounds, 39 runs. Mean over
+the three $\beta$. \enquote{Final SoC} counts depleted devices as 0.
 
 \begin{center}
-\begin{tabular}{llcccc}
+\begin{tabular}{llccccc}
 \toprule
-algorithm & battery & accuracy & final SoC & depleted & energy [Wh] \\
+algorithm & battery & accuracy & final SoC & depleted & energy [Wh] & idle [Wh] \\
 \midrule
-\multirow{3}{*}{SAGE}       & lin (paper) & 0.530 & 0.33 & \textbf{11.7} & 277 \\
-                            & peuk        & 0.515 & 0.38 & 2.3  & 276 \\
-                            & nm          & 0.513 & 0.39 & 2.7  & 270 \\
+\multirow{4}{*}{SAGE}       & paper & 0.530 & 0.33 & \textbf{11.7} & 277 & 152 \\
+                            & lin   & 0.510 & 0.38 & 2.0  & 276 & 170 \\
+                            & peuk  & 0.515 & 0.38 & 2.3  & 276 & 171 \\
+                            & nm    & 0.513 & 0.39 & 2.7  & 270 & 165 \\
 \midrule
-\multirow{3}{*}{SAGE-smart} & lin         & 0.620 & 0.57 & 0    & 147 \\
-                            & peuk        & 0.631 & 0.57 & 0    & 149 \\
-                            & nm          & \textbf{0.633} & 0.56 & 0 & 148 \\
+\multirow{3}{*}{SAGE-smart} & lin   & 0.620 & 0.57 & 0    & 147 & 90 \\
+                            & peuk  & 0.631 & 0.57 & 0    & 149 & 91 \\
+                            & nm    & \textbf{0.633} & 0.56 & 0 & 148 & 91 \\
 \midrule
-\multirow{3}{*}{ESCS-SD}    & lin (paper) & 0.583 & 0.33 & \textbf{11.7} & 284 \\
-                            & peuk        & 0.545 & 0.29 & 9.3  & 315 \\
-                            & nm          & 0.568 & 0.32 & 7.3  & 320 \\
+\multirow{4}{*}{ESCS-SD}    & paper & 0.583 & 0.33 & \textbf{11.7} & 284 & 140 \\
+                            & lin   & 0.575 & 0.28 & 9.0  & 319 & 173 \\
+                            & peuk  & 0.545 & 0.29 & 9.3  & 315 & 168 \\
+                            & nm    & 0.568 & 0.32 & 7.3  & 320 & 173 \\
 \midrule
-FedAvg  & -- & 0.577 & 0.18 & 18 & 322 \\
-FedProx & -- & 0.568 & 0.18 & 18 & 322 \\
+FedAvg  & -- & 0.577 & 0.18 & 18 & 322 & 166 \\
+FedProx & -- & 0.568 & 0.18 & 18 & 322 & 166 \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -297,65 +355,202 @@ FedProx & -- & 0.568 & 0.18 & 18 & 322 \\
 \begin{center}
 \begin{tabular}{llccc}
 \toprule
- & & \multicolumn{3}{c}{depleted devices} \\
+ & & \multicolumn{3}{c}{depleted devices (round of the first death)} \\
 algorithm & battery & $\beta=0.1$ & $\beta=0.5$ & $\beta=1.0$ \\
 \midrule
-\multirow{3}{*}{SAGE}    & lin (paper) & 12 & 12 & 11 \\
-                         & peuk        & 3  & 1  & 3  \\
-                         & nm          & 4  & 0  & 4  \\
+\multirow{4}{*}{SAGE}    & paper & 12 (118) & 12 (129) & 11 (138) \\
+                         & lin   & 5 (219)  & 1 (241)  & 0 (--)   \\
+                         & peuk  & 3 (223)  & 1 (244)  & 3 (216)  \\
+                         & nm    & 4 (194)  & 0 (--)   & 4 (207)  \\
 \midrule
-SAGE-smart               & all three   & 0  & 0  & 0  \\
+SAGE-smart               & all three & 0 (--) & 0 (--) & 0 (--) \\
 \midrule
-\multirow{3}{*}{ESCS-SD} & lin (paper) & 12 & 11 & 12 \\
-                         & peuk        & 13 & 8  & 7  \\
-                         & nm          & 9  & 6  & 7  \\
+\multirow{4}{*}{ESCS-SD} & paper & 12 (75)  & 11 (101) & 12 (85)  \\
+                         & lin   & 11 (93)  & 7 (122)  & 9 (109)  \\
+                         & peuk  & 13 (95)  & 8 (117)  & 7 (105)  \\
+                         & nm    & 9 (90)   & 6 (125)  & 7 (109)  \\
+\midrule
+FedAvg                   & --    & 17 (75)  & 17 (84)  & 20 (102) \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-\subsection{Reading the results}
+\begin{center}
+\begin{tabular}{llccc}
+\toprule
+ & & \multicolumn{3}{c}{accuracy (mean of the last 20 rounds)} \\
+algorithm & battery & $\beta=0.1$ & $\beta=0.5$ & $\beta=1.0$ \\
+\midrule
+\multirow{4}{*}{SAGE}       & paper & 0.346 & 0.606 & 0.637 \\
+                            & lin   & 0.301 & 0.612 & 0.616 \\
+                            & peuk  & 0.349 & 0.585 & 0.610 \\
+                            & nm    & 0.348 & 0.594 & 0.599 \\
+\midrule
+\multirow{3}{*}{SAGE-smart} & lin   & 0.498 & 0.680 & 0.682 \\
+                            & peuk  & 0.520 & 0.687 & 0.687 \\
+                            & nm    & 0.535 & 0.683 & 0.683 \\
+\midrule
+\multirow{4}{*}{ESCS-SD}    & paper & 0.471 & 0.633 & 0.646 \\
+                            & lin   & 0.446 & 0.623 & 0.655 \\
+                            & peuk  & 0.348 & 0.632 & 0.654 \\
+                            & nm    & 0.404 & 0.634 & 0.667 \\
+\bottomrule
+\end{tabular}
+\end{center}
 
-\paragraph{The link is on depleted devices: the more faithful the battery
-state the algorithm uses, the fewer devices it depletes.} Accuracy stays almost
-flat.
+%======================================================================
+\section{What changes when the battery model changes}
 
-\paragraph{SAGE.} 11.7 depleted devices with the paper accounting, 2--3 with
-Peukert or the true SoC; the first death moves from round 118--138 to round
-194--244 (or never). The reason is not linearity: the paper accounting
-\emph{ignores idle}, which is about half of all the energy consumed and, by the
-end of the run, \SIrange{30}{38}{\percent} of SoC per device that the selector
-does not see. It believes the devices are fuller than they are, keeps choosing
-them and depletes them. Peukert and nm behave the same: the Peukert error is a
-few percent, too small to change who gets selected. The slightly higher
-accuracy of the paper version comes with 3--4 times more depleted devices (and
-it also uses different weights and rules).
+\subsection{Step A: counting idle and recharge --- a large effect}
 
-\paragraph{ESCS-SD.} Same direction: 11.7 $\rightarrow$ 9.3 $\rightarrow$ 7.3
-depleted devices, and the first death comes later (e.g.\ $\beta=0.5$: round
-101 $\rightarrow$ 117 $\rightarrow$ 125). Accuracy is equal at $\beta=0.5$,
-growing at $\beta=1.0$ (0.646 $\rightarrow$ 0.654 $\rightarrow$ 0.667), noisy at
-$\beta=0.1$ with one seed. ESCS still depletes 7 devices with the true SoC: its
-filter only looks at the next round, and its rounds are long (5 epochs, no
-deadline), so everybody consumes a lot in idle. Note: the linear arm seems to
-use less energy only because dead devices stop consuming.
+\paragraph{ESCS-SD (clean comparison).} From the paper accounting to the
+linear gauge, depleted devices go from 11.7 to 9.0, and they go down in every
+$\beta$ (12 $\rightarrow$ 11, 11 $\rightarrow$ 7, 12 $\rightarrow$ 9). The
+first death comes 18--24 rounds later.
 
-\paragraph{SAGE-smart.} No depleted device with any battery model, final SoC
-$\approx 0.57$, and about \textbf{half the energy} of the others (\SI{148}{\watt\hour}
-vs 270--\SI{320}{\watt\hour}). Here the battery model barely matters: at
-$\beta=0.5$ and $1.0$ the three variants are within 0.007 of accuracy. This is
-expected, for three reasons:
+\paragraph{SAGE.} From 11.7 to 2.0 depleted devices; the first death moves
+from round 118--138 to round 219--241, or never. Part of this jump comes from
+the different weights and rules of the paper version, but the direction is the
+same as in ESCS.
+
+\paragraph{Why.} Idle is about half of all the energy (SAGE paper: 152 of
+\SI{277}{\watt\hour}; ESCS paper: 140 of \SI{284}{\watt\hour}), and the paper
+accounting does not see it: by the end of the run, 30--38\,\% of SoC per
+device is missing from its books. The selector believes the devices are fuller
+than they are, keeps choosing the same ones and depletes them.
+
+\paragraph{Two traps when reading the table.}
+\begin{itemize}
+  \item \textbf{Final SoC.} ESCS paper ends with a \emph{higher} mean SoC than
+        ESCS lin (0.33 vs 0.28) although it depletes more devices. The paper
+        accounting concentrates the drain on a few devices, which die, and
+        leaves the others fuller: the survivors end at 0.54 on average, against
+        0.40 with lin and 0.42 with nm (SAGE: 0.54 against 0.41--0.42). The mean
+        SoC must always be read together with the number of depleted devices.
+  \item \textbf{Energy.} The paper arms seem to use less energy (ESCS: 284 vs
+        \SI{319}{\watt\hour}) only because dead devices stop consuming in idle
+        (140 vs \SI{173}{\watt\hour} of idle).
+\end{itemize}
+
+\subsection{Step B: the shape of the battery curve --- a small effect}
+
+\paragraph{SAGE.} 2.0 / 2.3 / 2.7 depleted devices with lin / peuk / nm, and
+accuracy 0.510 / 0.515 / 0.513: no trend. Per $\beta$ the order even flips
+(at $\beta=0.1$ lin is the worst with 5 depleted devices, at $\beta=1.0$ it is
+the best with 0). This is the noise level of a single seed.
+
+\paragraph{SAGE-smart.} No depleted device with any of the three, final SoC
+0.56--0.57, energy 147--\SI{149}{\watt\hour}. Accuracy 0.620 / 0.631 / 0.633:
+the only gap is at $\beta=0.1$ (0.498 / 0.520 / 0.535), where the loss is
+higher, clients train more and batteries get closer to the reserve. At
+$\beta=0.5$ and $1.0$ the three are within 0.007.
+
+\paragraph{ESCS-SD.} 9.0 / 9.3 / 7.3: the only algorithm where the true SoC
+clearly helps. With nm there are 1--2 fewer depleted devices than with lin in
+every $\beta$ (11 $\rightarrow$ 9, 7 $\rightarrow$ 6, 9 $\rightarrow$ 7).
+Peukert is not better than linear.
+
+\paragraph{What does not change.} Accuracy has no consistent link with the
+battery model (gaps of 0.01--0.03 that flip between $\beta$, the largest at
+$\beta=0.1$, the noisiest regime). Energy is the same within each algorithm
+(SAGE 270--276, SAGE-smart 147--149, ESCS 315--\SI{320}{\watt\hour}): the
+battery model changes \emph{who} is selected, not how much work is done.
+
+\subsection{Why the shape matters so little: the gap measured in the runs}
+
+Gap between the mean SoC believed by the algorithm and the true mean SoC, in
+points of SoC, grouped by the true mean SoC of that round (only the arms that
+log the believed SoC):
+
+\begin{center}
+\begin{tabular}{lcccccc}
+\toprule
+true mean SoC & $>0.7$ & 0.6--0.7 & 0.5--0.6 & 0.4--0.5 & 0.3--0.4 & $<0.3$ \\
+\midrule
+SAGE, lin         & $-0.1$ & $-0.3$ & $-0.4$ & $-0.3$ & $-0.2$ & -- \\
+SAGE-smart, lin   & $-0.1$ & $-0.4$ & $-0.5$ & --     & --     & -- \\
+SAGE-smart, peuk  & $+0.3$ & $+1.6$ & $+3.2$ & --     & --     & -- \\
+ESCS-SD, lin      & $-0.1$ & $-0.2$ & $-0.2$ & $0.0$  & $+0.4$ & $+0.7$ \\
+\bottomrule
+\end{tabular}
+
+\smallskip
+{\footnotesize Mean over all 30 clients, depleted ones included (their gauge
+stops when they die): the last columns are indicative.}
+\end{center}
+
 \begin{enumerate}
-  \item its fuel gauges count idle too, so the linear one is wrong only by its
-        non-linearity: about $-0.5\%$ of SoC at the end of the run (Peukert
-        $+3$ to $+4\%$), far from the \SI{20}{\percent} reserve;
-  \item the deadline makes rounds short: total idle energy is \SI{91}{\watt\hour}
-        against 165--\SI{173}{\watt\hour} of the other algorithms, so batteries stay high;
-  \item only at $\beta=0.1$, where the loss is higher and clients train more
-        (3.4 epochs on average vs 2.2), do batteries get closer to the reserve:
-        there the order is lin $<$ peuk $<$ nm in accuracy (0.498, 0.520, 0.535).
+  \item \textbf{The linear gauge is wrong by less than one point of SoC.} It
+        is slightly pessimistic while batteries are above half, and becomes
+        optimistic only when they are low, as predicted in
+        Section~\ref{sec:gauge}.
+  \item \textbf{SAGE and SAGE-smart use the SoC mainly to rank clients, and
+        keep a margin} (20\,\% reserve; SAGE-smart even predicts the SoC at the
+        end of the round). An error of half a point moves all clients in the
+        same way, so the ranking, and therefore the selection, does not change.
+  \item \textbf{ESCS works close to empty.} Its only battery check is
+        \enquote{SoC $\geq 20\,\%$} before the round, and in the second half of
+        the run many of its devices sit around that threshold (median final
+        SoC 0.13--0.15). That is exactly where the linear gauge becomes
+        optimistic, so it lets in devices that are actually a bit lower: 1--2
+        extra depleted devices compared with the true SoC.
+  \item \textbf{Peukert overestimates the SoC by up to 3 points}, because it
+        sees idle as almost free. But it does so for all clients alike, so the
+        ranking barely changes, and in SAGE-smart the 20\,\% reserve absorbs it.
 \end{enumerate}
-The negotiation stayed almost idle: 0--5 refusals per run, no withdrawals,
-control energy below \SI{0.02}{\watt\hour}.
+
+\subsection{Is this expected?}
+
+Yes, for three reasons:
+\begin{itemize}
+  \item $V_{\text{nom}}$ is by definition the average voltage of the cell, so a
+        linear gauge is right on average and fails only at the two ends of the
+        curve.
+  \item Federated training is a light load for a phone battery (at most about
+        0.2C): the rate effects that make a battery non-linear appear at higher
+        currents.
+  \item The only place where we see a difference (ESCS, near empty) is exactly
+        where the linear model is expected to fail.
+\end{itemize}
+The shape of the curve would matter more with higher currents (heavier models,
+smaller or aged batteries), in the cold, or with policies that deliberately run
+devices close to empty.
+
+\subsection{Take-away: what removes depleted devices}
+
+\begin{center}
+\begin{tabular}{lc}
+\toprule
+what changes & depleted devices (out of 30) \\
+\midrule
+the policy (FedAvg $\rightarrow$ SAGE-smart)                   & 18 $\rightarrow$ 0 \\
+counting idle and recharge (paper $\rightarrow$ lin), ESCS-SD  & 11.7 $\rightarrow$ 9.0 \\
+counting idle and recharge (paper $\rightarrow$ lin), SAGE$^{*}$ & 11.7 $\rightarrow$ 2.0 \\
+shape of the curve (lin $\rightarrow$ nm), ESCS-SD             & 9.0 $\rightarrow$ 7.3 \\
+shape of the curve (lin $\rightarrow$ nm), SAGE                & 2.0 $\rightarrow$ 2.7 (no effect) \\
+shape of the curve (lin $\rightarrow$ nm), SAGE-smart          & 0 $\rightarrow$ 0 \\
+\bottomrule
+\end{tabular}
+
+\smallskip
+{\footnotesize $^{*}$ also different weights and rules.}
+\end{center}
+
+Order of importance: \textbf{the policy} $>$ \textbf{counting every drain}
+$>$ \textbf{the shape of the battery curve}. For the thesis this means that, in
+this setting, a simple linear gauge on the client is enough, \emph{provided it
+counts every drain}; what really matters is what the client does with it.
+
+\subsection{SAGE-smart compared with the others}
+
+No depleted device with any battery model, final SoC $\approx 0.57$, and about
+\textbf{half the energy} of the others (\SI{148}{\watt\hour} vs
+270--\SI{320}{\watt\hour}). The negotiation stayed almost idle: 0--5 refusals
+per run, no withdrawals, control energy below \SI{0.02}{\watt\hour}.
+One caveat: the comparison is at the same number of rounds. SAGE-smart rounds
+are shorter (deadline, about 2--3 epochs), so over 250 rounds its devices spend
+less time in idle (90 vs 165--\SI{173}{\watt\hour} of idle energy). Part of its
+survival comes from this.
 
 %======================================================================
 \newpage
@@ -364,19 +559,23 @@ control energy below \SI{0.02}{\watt\hour}.
 \begin{figure}[H]
     \centering
     \includegraphics[width=0.75\linewidth]{3_fig5_pareto_soc_ball.png}
-    \caption{Final SoC vs accuracy, all $\beta$ pooled. Larger marker = more depleted devices.}
+    \caption{Final SoC vs accuracy, all $\beta$ pooled, all 13 arms. Larger
+    marker = more depleted devices.}
 \end{figure}
 
 \begin{figure}[H]
     \centering
     \includegraphics[width=\linewidth]{3_figB_pareto_soc_models_ball.png}
-    \caption{The same plot, one panel per algorithm: linear (red), Peukert (orange), datasheet (green).}
+    \caption{The same plot, one panel per algorithm; the colour is the battery
+    model: paper accounting (grey), linear (red), Peukert (orange), datasheet
+    (green). Each panel has its own x scale: the three SAGE-smart points are
+    within 0.012 of SoC.}
 \end{figure}
 
 \begin{figure}[H]
     \centering
     \includegraphics[width=0.75\linewidth]{3_fig4_soc_ball.png}
-    \caption{Final SoC and depleted devices per algorithm.}
+    \caption{Final SoC (mean and median) and depleted devices per arm.}
 \end{figure}
 
 \begin{figure}[H]
@@ -390,16 +589,24 @@ control energy below \SI{0.02}{\watt\hour}.
 \section{Limits and next steps}
 
 \begin{itemize}
-  \item \textbf{One seed}: the trend on depleted devices is clear
-        (11.7 $\rightarrow$ 2.5 for SAGE), the differences in accuracy are not.
-        Run seeds 7 and 13.
-  \item \textbf{Separate idle from linearity}: SAGE and ESCS linear arms ignore
-        idle, so they do not isolate the battery model. Add a full linear fuel
-        gauge for them too, as SAGE-smart already has.
+  \item \textbf{One seed}: step A is clear (it holds in every $\beta$); the
+        differences of step B (1--2 devices) are at the noise level. Run seeds
+        7 and 13.
+  \item \textbf{Light load}: the result holds for currents up to about 0.2C. A
+        stress test with smaller batteries or a heavier model should show
+        where the shape of the curve starts to matter.
+  \item \textbf{Gauge error per device}: today only the mean over all clients
+        is logged, and depleted clients pollute it. Log the believed and the
+        true SoC of every client.
+  \item \textbf{Clean step A for SAGE}: an arm with the paper accounting and
+        the same weights as \texttt{sage\_lin}, so that only the accounting
+        changes, as in ESCS.
   \item \textbf{Where does the SAGE-smart gain come from?} It changes several
         things at once (deadline, fewer epochs, $B=32$, FedNova, staleness,
         client decision). Ablations: without late binding, without deadline,
         without the loss term.
+  \item \textbf{Same rounds or same time?} SAGE-smart rounds are shorter.
+        Compare also at the same wall-clock time or the same energy budget.
   \item \textbf{Fair amount of work}: baselines always do $E=5$, $B=128$;
         SAGE-smart about 2--3 epochs. Add a baseline with the same number of
         epochs and compare energy per accuracy.

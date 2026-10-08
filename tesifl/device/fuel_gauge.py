@@ -13,36 +13,29 @@ La strategia non legge mai il record "device" per decidere: lo scrive il
 livello fisico (WorldState) per conto del device. In un deployment reale il
 record sparirebbe e il client leggerebbe le stesse grandezze dal sistema.
 
-TRE MODELLI DI BATTERIA, scelti con `model`:
-  "nm"    (datasheet) SoC vero del mondo, previsione con il modello V(SoC, I)
-          e Q(I) di battery_model. `soc_after` replica esattamente
-          WorldState.apply_round + apply_communication: stesse funzioni,
-          stesso ordine, stesso clamp. Il SoC finale dichiarato coincide con
-          quello vero (colonna smart_soc_err ~0).
-  "lin"   SoC del fuel gauge lineare (WorldState.soc_linear), previsione con
-          P/eta * dt / (V_nom * C_nom).
-  "peuk"  SoC del fuel gauge di Peukert (WorldState.soc_peukert), previsione
-          con battery_model_peukert.delta_soc.
-  Con "lin" e "peuk" la previsione replica esattamente l'aggiornamento del
-  gauge, ma NON la scarica vera: smart_soc_err misura allora di quanto quel
-  modello sbaglia, che e' il punto del confronto.
+LA BATTERIA. Il device conosce la propria batteria: `model` e' quella del
+mondo (WorldState.battery: "lin", "peuk" o "nm") e il SoC e' quello vero.
+`soc_after` prevede il consumo con la stessa funzione con cui il mondo
+scarica la batteria (world_state.battery_delta_soc), nello stesso ordine e
+con lo stesso clamp: il SoC finale dichiarato coincide con quello vero
+(colonna smart_soc_err ~0) in tutti e tre i mondi.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from device.battery_model import delta_soc, energy_wh_linear
-from device.battery_model_peukert import delta_soc as peukert_delta_soc
 from device.communication_model import comm_power_w, comm_time_s
 from device.compute_model import probe_time_s, training_time_s
-from device.constants import V_NOMINAL
 from device.device_profile import DeviceProfile
-from device.world_state import WorldState, effective_profile, training_power_w
+from device.world_state import (
+    BATTERIES, BATTERY_NAMES, WorldState, battery_delta_soc,
+    effective_profile, training_power_w,
+)
 
 RECORD_KEY = "device"
-MODELS = ("nm", "lin", "peuk")
-_NAMES = {"nm": "datasheet", "lin": "linear", "peuk": "peukert"}
+MODELS = BATTERIES
+_NAMES = BATTERY_NAMES
 
 
 @dataclass(frozen=True)
@@ -57,19 +50,13 @@ class DeviceReading:
 
     # -------------------------------------------------- lato mondo (server)
     @classmethod
-    def from_world(cls, world: WorldState, cid: int,
-                   model: str = "nm") -> "DeviceReading":
-        if model not in MODELS:
-            raise ValueError(f"modello di batteria: uno fra {MODELS}")
-        soc = {"nm": lambda: world.snapshot(cid).soc,
-               "lin": lambda: world.soc_linear(cid),
-               "peuk": lambda: world.soc_peukert(cid)}[model]()
+    def from_world(cls, world: WorldState, cid: int) -> "DeviceReading":
         return cls(
-            soc=float(soc),
+            soc=float(world.snapshot(cid).soc),
             workload=float(world.utilization(cid)),
             charging=bool(world.is_charging(cid)),
             profile=world.profile(cid),
-            model=model,
+            model=world.battery,
         )
 
     def to_record(self) -> dict:
@@ -117,12 +104,12 @@ class DeviceReading:
                 + probe_time_s(p, probe_samples))
 
     def soc_after(self, dt_s: float, batch_size: int) -> tuple[float, float]:
-        """(SoC dopo il training, SoC dopo l'upload) secondo il modello del
+        """(SoC dopo il training, SoC dopo l'upload) secondo la batteria del
         device. In carica la batteria non scende: e' collegato alla rete."""
         if self.charging:
             return self.soc, self.soc
         s1 = self._drain(self.soc, training_power_w(batch_size), dt_s)
-        if s1 <= 0.0 and self.model == "nm":
+        if s1 <= 0.0:
             # il mondo marca il device come morto e non addebita l'upload
             return 0.0, 0.0
         s2 = self._drain(s1, comm_power_w(), comm_time_s())
@@ -135,11 +122,5 @@ class DeviceReading:
         return dt, self.soc_after(dt, batch_size)[1]
 
     def _drain(self, soc: float, power_w: float, dt_s: float) -> float:
-        if self.model == "lin":
-            cap_wh = self.profile.battery_capacity_mah / 1000.0 * V_NOMINAL
-            d = -energy_wh_linear(power_w, dt_s) / cap_wh
-        elif self.model == "peuk":
-            d = peukert_delta_soc(power_w, dt_s, self.profile)
-        else:
-            d = delta_soc(power_w, dt_s, self.profile, soc)
+        d = battery_delta_soc(self.model, power_w, dt_s, self.profile, soc)
         return max(0.0, min(1.0, soc + d))

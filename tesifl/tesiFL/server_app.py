@@ -13,12 +13,12 @@ import torch
 from flwr.app import ArrayRecord, ConfigRecord, Context, MetricRecord
 from flwr.serverapp import Grid, ServerApp
 
-from device.world_state import build_world_state
+from device.world_state import BATTERY_NAMES, build_world_state
 from strategies.fedavg import PhysicalFedAvg
 from strategies.fedprox import PhysicalFedProx
 from strategies.sage import PhysicalSAGE
 from strategies.sage_ablation import PhysicalSAGEAblation
-from strategies.sage_smart import MODEL_NAMES, PhysicalSAGESmart
+from strategies.sage_smart import PhysicalSAGESmart
 from strategies.escs import PhysicalESCS
 from tesiFL.data.partition import load_centralized_dataset, partition_sizes
 from tesiFL.task import test
@@ -74,6 +74,8 @@ def main(grid: Grid, context: Context) -> None:
     idle_on = bool(context.run_config["idle-enabled"])
     recharge_on = bool(context.run_config["recharge-enabled"])
     recharge_avail = bool(context.run_config["recharge-available"])
+    # batteria dei device: "lin" | "peuk" | "nm" (vedi WorldState)
+    battery = str(context.run_config["world-battery"])
     world = build_world_state(n_clients=n_clients, seed=seed,
                               capacity_mah=capacity_mah,
                               tiers_enabled=tiers_on,
@@ -81,9 +83,10 @@ def main(grid: Grid, context: Context) -> None:
                               idle_enabled=idle_on,
                               recharge_enabled=recharge_on,
                               recharge_available=recharge_avail,
-                              battery_variant="efficiency")
+                              battery=battery)
     from collections import Counter
     tiers = Counter(world.tier(c) for c in range(n_clients))
+    print(f"[world] batteria {BATTERY_NAMES[world.battery]} ({world.battery})")
     print(f"[world] {n_clients} SuperNode | k={k_per_round} "
           f"({k_per_round / max(n_clients, 1):.0%}) | "
           f"tier {'ON ' + str(dict(tiers)) if tiers_on else f'OFF ({capacity_mah:.0f} mAh)'}")
@@ -119,7 +122,6 @@ def main(grid: Grid, context: Context) -> None:
         )
         strategy = PhysicalESCS(
             utility_mode=suffix[0], selection_mode=suffix[1],
-            battery_mode=str(context.run_config["escs-battery"]),
             partition_sizes=sizes,
             first_round_all=bool(context.run_config["escs-first-round-all"]),
             cap_probabilistic=bool(context.run_config["escs-cap-probabilistic"]),
@@ -159,7 +161,6 @@ def main(grid: Grid, context: Context) -> None:
             deadline_mult=float(context.run_config["smart-deadline-mult"]),
             probe_samples=int(context.run_config["smart-probe-samples"]),
             max_waves=int(context.run_config["smart-max-waves"]),
-            battery_mode=str(context.run_config["smart-battery"]),
             **common,
         )
         print(
@@ -167,30 +168,24 @@ def main(grid: Grid, context: Context) -> None:
             f"(a={context.run_config['sage-a']}, "
             f"b={context.run_config['sage-b']}, "
             f"c={context.run_config['smart-stale-weight']}) | "
-            f"(E,B) decisi dal client | batteria "
-            f"{MODEL_NAMES[strategy.model]} | "
+            f"(E,B) decisi dal client | "
             f"soc_min={strategy.soc_min} E_lo={strategy.epochs_min} "
             f"deadline x{strategy.deadline_mult} probe={strategy.probe_samples} "
             f"negoziazione max {strategy.max_waves} ondate"
         )
 
     elif algorithm == "sage_soc":
-        # variante della tesi: SoC al posto dell'energia lineare, niente
-        # termine rinnovabile (a + b = 1), niente soglia di eleggibilita'.
-        # NB: non accetta sage-c. sage-battery sceglie quale SoC:
-        #   "soc"  quello vero del mondo (nm, etichetta sage_soc)
-        #   "peuk" quello del fuel gauge di Peukert (etichetta sage_peuk)
-        #   "lin"  quello del fuel gauge lineare (etichetta sage_lin)
+        # ablazione di SAGE: SoC con a + b = 1, niente termine rinnovabile,
+        # niente soglia di eleggibilita'. NB: non accetta sage-c.
+        # Etichette sage_peuk e sage_nm (mondi Peukert e datasheet).
         strategy = PhysicalSAGEAblation(
             sage_a=float(context.run_config["sage-a"]),
             sage_b=float(context.run_config["sage-b"]),
-            battery_mode=str(context.run_config["sage-battery"]),
             **common,
         )
         print(
             f"[strategy] PhysicalSAGEAblation (a={context.run_config['sage-a']}, "
-            f"b={context.run_config['sage-b']}, "
-            f"batteria {context.run_config['sage-battery']})"
+            f"b={context.run_config['sage-b']})"
         )
     elif algorithm == "fedprox":
         strategy = PhysicalFedProx(proximal_mu=proximal_mu, **common)
@@ -225,10 +220,11 @@ def main(grid: Grid, context: Context) -> None:
 
     s = world.stats()
     print(
-        f"\n=== energia fisica totale: {s['total_energy_wh']:.3f} Wh "
+        f"\n=== batteria {BATTERY_NAMES[world.battery]}: carica totale "
+        f"{s['total_energy_wh']:.3f} Wh "
         f"(train {s['energy_train_wh']:.3f} + comm {s['energy_comm_wh']:.3f} "
         f"+ idle {s['energy_idle_wh']:.3f}) "
-        f"| lineare P*dt: {s['energy_lin_wh']:.3f} Wh ===\n"
+        f"| al carico P*dt: {s['energy_lin_wh']:.3f} Wh ===\n"
         + "SoC per tier: " + " | ".join(
             f"{t} {s[f'soc_{t}']:.3f} ({s[f'dead_{t}']} morti)"
             for t in sorted(k[4:] for k in s if k.startswith("soc_"))) + "\n"

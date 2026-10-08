@@ -6,13 +6,13 @@
 
 applicato a tratti a potenza costante (un round = una potenza).
 
-RUOLO NEL SIMULATORE. La batteria VERA del mondo segue il modello da
-datasheet (battery_model.py, il modello "nm"). Peukert e' il modello che usa
-il FUEL GAUGE dei bracci "peuk": WorldState.soc_peukert tiene, per ogni
-device, il SoC che il device crederebbe di avere stimandolo con Peukert, e i
-bracci sage_peuk, sage_smart_peuk ed escs_*_peuk selezionano (e il client di
-sage_smart decide) su quel SoC. Come il braccio lineare, misura quanto conta
-l'accuratezza del modello di batteria: lineare < Peukert < datasheet.
+RUOLO NEL SIMULATORE. E' la batteria dei device nel mondo "peuk"
+(WorldState(battery="peuk"), etichette sage_peuk, sage_smart_peuk,
+escs_*_peuk): i device si scaricano con questa formula e muoiono quando il
+SoC di Peukert tocca zero. Gli altri mondi montano la batteria lineare e
+quella da datasheet (battery_model.py).
+[B] con n > 1 le correnti BASSE costano meno della stima lineare: a 0.1 W di
+idle su 3500 mAh il pieno dura ~1.6 volte quello lineare.
 
 [B] esponente n = PEUKERT_N di experiment.toml (1.15), capacita' nominale
 alla corrente di riferimento R = RATED_R_HOURS (rated_c_rate = 0.2C, 5 h).

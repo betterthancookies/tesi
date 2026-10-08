@@ -1,5 +1,5 @@
 [campaign]
-name        = "rechargeONdeviceON_ResNet20_totale"          # -> risultati in results_<name>/
+name        = "rechargeONdeviceON_ResNet20_batterie"        # -> risultati in results_<name>/
 rounds      = 250
 seeds       = [2026]         # [2026, 7, 13] per tre seed
 betas       = [0.1, 0.5, 1.0]
@@ -10,35 +10,36 @@ stagger_s   = 180            # ritardo fra l'avvio di uno shard e il successivo
 timeout_s   = 7200           # una run oltre questo tempo e' considerata persa
 
 # Algoritmi da eseguire. Commenta le righe che non ti servono.
-# Per SAGE, SAGE-smart ed ESCS-SD tre bracci, che differiscono SOLO per il
-# modello di batteria con cui l'algoritmo stima il SoC. lin e peuk sono fuel
-# gauge che seguono training, comunicazione, idle e ricarica come la batteria
-# VERA del simulatore, che e' sempre quella da datasheet (nm):
-#               lineare           Peukert            datasheet (nm)
-#   SAGE        sage_lin          sage_peuk          sage_soc
-#   SAGE-smart  sage_smart_lin    sage_smart_peuk    sage_smart
-#   ESCS-SD     escs_sd_lin       escs_sd_peuk       escs_sd
-# Contabilita' dei paper (solo i Wh dei round in cui il client lavora, idle e
-# ricarica ignorati), come riferimento:
-#   sage           il SAGE del paper (anche pesi, rinnovabile, soglia diversi)
-#   escs_sd_paper  ESCS-SD con quella contabilita'
-# [B] escs_sd_lin delle campagne fino al 06/10 E' escs_sd_paper: rinomina quei
-# CSV prima di riusarli (run.sh --resume salterebbe la run nuova).
-# plot_battery_models.py li confronta su un Pareto per algoritmo.
+# Il suffisso dell'etichetta e' la BATTERIA DEI DEVICE, cioe' la batteria
+# fisica del mondo in cui gira la run (_shard.sh -> world-battery):
+#   _lin   lineare      SoC -= P*dt / (V_nom * C)
+#   _peuk  Peukert      SoC -= dt / (C' / I^n), n = battery.peukert_n
+#   _nm    datasheet    P = V(SoC, I) * I, SoC -= I*dt / Q(I)
+# Tier, workload, idle e ricarica sono gli stessi in tutti i mondi, e ogni
+# algoritmo legge il SoC della batteria del device.
+#               lineare           Peukert            datasheet
+#   SAGE        sage_lin (*)      sage_peuk          sage_nm
+#   SAGE-smart  sage_smart_lin    sage_smart_peuk    sage_smart_nm
+#   ESCS-SD     escs_sd_lin       escs_sd_peuk       escs_sd_nm
+# (*) sage_lin e' il SAGE del PAPER (pesi a,b,c di sage_abc, termine
+#     rinnovabile, soglia 0.2); sage_peuk e sage_nm sono l'ABLAZIONE (a,b di
+#     sage_ab, niente rinnovabile ne' soglia): fra sage_lin e gli altri due
+#     cambia anche l'algoritmo.
+# FedAvg e FedProx senza suffisso: batteria lineare (fedavg_nm ecc. per
+# farli girare in un altro mondo).
+# plot_battery_models.py mette i tre mondi di ogni algoritmo su un Pareto.
 algorithms = [
   "fedavg",
   "fedprox",
-  "sage",
   "sage_lin",
   "sage_peuk",
-  "sage_soc",
+  "sage_nm",
   "sage_smart_lin",
   "sage_smart_peuk",
-  "sage_smart",
-  "escs_sd_paper",
+  "sage_smart_nm",
   "escs_sd_lin",
   "escs_sd_peuk",
-  "escs_sd",
+  "escs_sd_nm",
 ]
 
 
@@ -94,6 +95,8 @@ dcdc_efficiency  = 1.0
 # cella 100 mAh / N=30 / beta=0.1. Tenuto a 1.15 come scelta dichiarata; la
 # violazione della soglia (SoC minimo 0.102 contro riserva 0.20) resta anche
 # a 1.05, ed e' l'affermazione robusta.
+# Usato dalla batteria di Peukert (mondo _peuk). La batteria da datasheet
+# (mondo _nm) non ha esponenti: tabelle V(SoC, I) e Q(I) in battery_model.py.
 peukert_n        = 1.15
 
 
@@ -173,17 +176,18 @@ learning_rate     = 0.01   # paper SAGE
 fraction_evaluate = 1.0
 proximal_mu       = 0.1    # FedProx
 
-# SAGE: pesi (a,b,c) per beta, ottimi di Table 1 del paper.
+# SAGE del paper (sage_lin): pesi (a,b,c) per beta, ottimi di Table 1.
 sage_abc = { "0.1" = [0.5, 0.0, 0.5], "0.5" = [0.2, 0.1, 0.7], "1.0" = [0.5, 0.2, 0.3] }
-# SAGE-peuk e SAGE-smart: pesi (a,b) per beta, dalla sweep in results_findbest.
-# [B] sage_smart usa gli stessi di sage_soc: il confronto fra i due isola
+# Ablazione di SAGE (sage_peuk, sage_nm) e SAGE-smart: pesi (a,b) per beta,
+# dalla sweep in results_findbest.
+# [B] SAGE-smart usa gli stessi dell'ablazione: il confronto fra i due isola
 # l'assegnazione dinamica di (E,B), non la taratura.
 sage_ab  = { "0.1" = [0.4, 0.6], "0.5" = [0.6, 0.4], "1.0" = [0.9, 0.1] }
 
 # SAGE-smart: il server seleziona (a*SoC + b*D + c*anzianita') e propone un
 # envelope di (E, B); il CLIENT sceglie dentro l'envelope con il proprio stato.
-# Etichette: "sage_smart" = batteria da datasheet, "sage_smart_lin" = stesso
-# algoritmo con fuel gauge LINEARE (il confronto e' come sage/sage_soc).
+# Etichette sage_smart_lin / _peuk / _nm: stesso algoritmo, cambia solo la
+# batteria dei device.
 smart_stale_weight   = 0.3    # peso (c) dell'anzianita' nel punteggio
 smart_stale_max      = 25     # round dopo i quali l'anzianita' e' al massimo
 smart_soc_min        = 0.20   # riserva che il client non intacca (vincolo 2e di SAGE)

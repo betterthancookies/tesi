@@ -7,7 +7,6 @@ import pulp
 from flwr.app import ConfigRecord, Message
 from flwr.common import log
 
-from device.battery_model import V_NOMINAL
 from strategies.fedavg import PhysicalFedAvg
 
 
@@ -39,14 +38,12 @@ class PhysicalSAGE(PhysicalFedAvg):
     dell'ILP coincide con i top-k per score. La formulazione e' mantenuta per
     fedelta' al paper, non perche' aggiunga capacita' di selezione.
 
-    CONTABILITA' DELL'ENERGIA (il punto del confronto con `sage_soc`):
-      E_i(0) = SoC_0, come nel paper, dove l'energia iniziale e' un dato noto
-      (estratta da una gaussiana e normalizzata sulla capacita').
-      E_i(t) = SoC_0 - sum(Wh LINEARI spesi) / capacita' nominale.
-    I Wh lineari sono P/eta * dt: e' il modello "potenza per tempo" del
-    paper, che ignora Peukert e quindi sottostima il consumo reale di
-    ~1.26x (training) e ~1.66x (comunicazione). Il SoC vero del world state
-    NON entra nella selezione: quella e' la variante della tesi.
+    ENERGIA RESIDUA. E_i e' il SoC del device, letto dalla batteria del mondo:
+    nella campagna SAGE gira nel mondo LINEARE (etichetta sage_lin), quindi
+    E_i(t) = SoC_0 - sum(P/eta * dt) / (V_nom * C_nom) su TUTTI i consumi del
+    device: training, comunicazione, idle (anche da non selezionato, come nel
+    paper), e risale con le ricariche. E' il modello "potenza per tempo" del
+    paper applicato a tutto cio' che il device consuma.
 
     ADATTAMENTI DICHIARATI
     - R_i e' simulato stocasticamente in [0,1], come nel paper (Sez. 5.2): li'
@@ -56,17 +53,9 @@ class PhysicalSAGE(PhysicalFedAvg):
       ricade sull'accumulo incrementale dalle metriche di training, e i mai
       osservati ereditano la D media dei noti per non restare esclusi.
     - il paper ricarica ogni 10 round; qui la ricarica e' quella del world
-      state (sporadica, guidata dal SoC), e E_i NON la vede: resta monotona
-      decrescente anche quando il device si e' ricaricato.
-
-    [LIMITE DICHIARATO] nel paper anche i client non selezionati consumano in
-    idle e il loro E_i cala. Qui E_i conta SOLO i Wh dei round in cui il
-    client lavora (training + comunicazione), mentre il world state fa
-    consumare in idle tutti i client a ogni round: circa meta' dell'energia
-    totale, 30-40% di SoC per device a fine run, che E_i non vede. Questa
-    contabilita' e' quindi PIU' ottimista di quella del paper. Per il
-    confronto puro sul modello di batteria si usa sage_lin (ablazione col
-    fuel gauge lineare, idle e ricarica inclusi), non questo braccio.
+      state (sporadica, guidata dal SoC), e E_i la vede perche' e' il SoC.
+    - i client gia' a SoC zero sono fuori da `available` (morti), prima
+      ancora della soglia (2e).
     """
 
     def __init__(
@@ -94,8 +83,6 @@ class PhysicalSAGE(PhysicalFedAvg):
         self._dist: dict[int, np.ndarray] = {}   # cid -> distribuzione classi
         self._div: dict[int, float] = {}         # cid -> JSD media
         self._renew: dict[int, float] = {}       # cid -> quota rinnovabile
-        self._used_wh: dict[int, float] = {}     # cid -> Wh LINEARI cumulati
-        self._cap_wh: dict[int, float] = {}
         self._half: set[int] = set()
 
         if class_distributions:
@@ -105,24 +92,9 @@ class PhysicalSAGE(PhysicalFedAvg):
             self._recompute_div()
 
     # ------------------------------------------------------------ componenti
-    def _capacity(self, cid: int) -> float:
-        if cid not in self._cap_wh:
-            mah = float(self.world.profile(cid).battery_capacity_mah)
-            self._cap_wh[cid] = mah / 1000.0 * V_NOMINAL
-        return self._cap_wh[cid]
-
     def _energy(self, cid: int) -> float:
-        """E_i = SoC_0 - Wh_lineari / capacita', clampata in [0, 1]."""
-        cap = self._capacity(cid)
-        if cap <= 0.0:
-            return 1.0
-        soc0 = float(self.world.initial_soc(cid))
-        return float(np.clip(soc0 - self._used_wh.get(cid, 0.0) / cap, 0.0, 1.0))
-
-    def _believed_soc_mean(self) -> float | None:
-        """E_i media, per la colonna soc_believed_mean (cio' che il selettore crede)."""
-        cids = list(self._node_to_cid.values())
-        return float(np.mean([self._energy(c) for c in cids])) if cids else None
+        """E_i: il SoC della batteria del device (vedi docstring)."""
+        return float(self.world.snapshot(cid).soc)
 
     def _divergence(self, cid: int) -> float:
         if cid in self._div:
@@ -203,9 +175,7 @@ class PhysicalSAGE(PhysicalFedAvg):
         self, cid: int, n_ex: int, dt_s: float, e_wh: float, e_lin_wh: float,
         reply: Message, server_round: int,
     ) -> None:
-        # contabilita' LINEARE: e' quella del paper, non la carica Peukert
-        self._used_wh[cid] = self._used_wh.get(cid, 0.0) + e_lin_wh
-
+        # nessuna contabilita' energetica locale: il SoC lo tiene il world state
         # fallback: distribuzioni non fornite al costruttore
         dist = self._metric(reply, "class-dist", default=None)
         if dist is None:

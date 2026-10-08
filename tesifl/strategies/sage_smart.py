@@ -14,13 +14,15 @@ from device.compute_model import optimal_batch_size, probe_time_s, training_time
 from device.communication_model import ctrl_latency_s
 from device.constants import IDLE_POWER_W, TRAIN_POWER_W, V_NOMINAL, WORKLOAD_STATES
 from device.fuel_gauge import DeviceReading
-from device.world_state import effective_profile, training_power_w
+from device.world_state import (
+    BATTERY_NAMES, battery_delta_soc, effective_profile, training_power_w,
+)
 from strategies.sage_ablation import PhysicalSAGEAblation
 from tesiFL.client_policy import Envelope
 
-# battery_mode (stessi nomi di ESCS) -> modello del fuel gauge del device
-BATTERY_MODELS = {"soc": "nm", "peuk": "peuk", "energy": "lin"}
-MODEL_NAMES = {"nm": "datasheet", "peuk": "Peukert", "lin": "lineare"}
+# passo massimo con cui il server integra l'idle nella stima (Fase 2a): il
+# mondo scarica l'idle una volta per round, e un round dura 100-300 s
+_ESTIMATE_STEP_S = 300.0
 
 
 class PhysicalSAGESmart(PhysicalSAGEAblation):
@@ -38,16 +40,18 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
     FASE 2 -- STATO DEI CLIENT E NEGOZIAZIONE (documento "Client Server
               Protocol" del relatore, opzione 3 con l'opzione 2)
       a) STIMA LATO SERVER (opzione 2), nessun messaggio. Dall'ultimo report
-         di ogni client il server estrapola il SoC col consumo di idle:
-             SoC_est = SoC_rep - P_idle(w_rep) * dt / (V_nom * C_nom)
+         di ogni client il server estrapola il SoC col consumo di idle,
+         scaricando la BATTERIA DEL DEVICE (lineare, Peukert o datasheet: e'
+         un dato statico dell'iscrizione, come la capacita'):
+             SoC_est = SoC_rep - dSoC_batteria(P_idle(w_rep), dt)
          con P_idle(w) = P_idle + w (P_train - P_idle) dal profilo statico,
          w_rep l'ultimo workload riportato, dt il tempo simulato dal report.
          Con questa stima ordina i client (Fase 3). Non vede ricariche ne'
          cambi di workload.
-         [B] CIRCOLARITA': la formula ha la stessa forma del modello di idle
-         del simulatore, quindi sbaglia solo per ricariche e workload che
-         cambia. Su device veri sbaglierebbe anche per il modello: qui e'
-         ottimista, va dichiarato.
+         [B] CIRCOLARITA': formula e batteria sono le stesse del simulatore,
+         quindi la stima sbaglia solo per ricariche e workload che cambia. Su
+         device veri sbaglierebbe anche per il modello: qui e' ottimista, va
+         dichiarato.
       b) PROPOSTA E ACCETTAZIONE (opzione 3). Ai soli candidati il server
          manda una PROPOSTA (l'envelope della Fase 4, senza modello) con
          messaggi Flower veri (MessageType.QUERY). Ogni candidato rilegge il
@@ -68,7 +72,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
       [B] se in `max_waves` ondate nessuno accetta, il pool e' considerato
       esaurito e la run termina, come quando l'ILP e' infeasible.
       [B] quanto la stima sbaglia lo misura smart_info_err (|SoC stimato -
-      SoC del fuel gauge| medio sul pool), quanto costa la negoziazione
+      SoC del device| medio sul pool), quanto costa la negoziazione
       energy_ctrl_wh e smart_overhead_s.
       [B] la negoziazione avviene PRIMA di WorldState.begin_round, che fa
       avanzare il workload e decide le ricariche: resta uno scarto fra cio'
@@ -129,36 +133,24 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
       calo di SoC osservato e stima lineare; divergenza D_i dalla
       distribuzione delle classi.
 
-    MODELLO DI BATTERIA (battery_mode), i tre bracci del confronto
-      "soc"     (nm, etichetta sage_smart) il SoC che client e server vedono
-                e' quello VERO del mondo (modello da datasheet), e il client
-                prevede il consumo con lo stesso modello. E' la variante
-                della tesi.
-      "peuk"    (sage_smart_peuk) il device usa un fuel gauge di PEUKERT
-                (WorldState.soc_peukert, battery_model_peukert) e prevede il
-                consumo con la stessa formula.
-      "energy"  (sage_smart_lin) il device usa un fuel gauge LINEARE
-                (WorldState.soc_linear): SoC_lin <- SoC_lin - P/eta * dt /
-                (V_nom * C_nom), e prevede il consumo con la stessa formula.
-      Con "peuk" ed "energy" client e server ragionano su quel SoC, ma la
-      batteria vera si scarica col modello da datasheet, quindi la riserva
-      protetta puo' non esserlo davvero. E' lo stesso confronto di
-      sage/sage_peuk/sage_soc ed escs_sd_lin/escs_sd_peuk/escs_sd; qui i
-      gauge seguono anche idle e ricarica, quindi i bracci differiscono SOLO
-      per il modello di batteria.
-      La colonna smart_soc_err (|SoC dichiarato - SoC vero|) vale ~0 con
-      "soc" e misura l'errore del modello con "peuk" ed "energy";
-      soc_believed_mean e' il SoC medio creduto, da confrontare con mean_soc.
+    LA BATTERIA DEI DEVICE e' quella del mondo (WorldState.battery): lineare,
+      Peukert o datasheet, etichette sage_smart_lin / _peuk / _nm. Il client
+      legge il proprio SoC e prevede il consumo con la propria batteria
+      (DeviceReading); il server la usa nella stima della Fase 2a. Il resto
+      dell'algoritmo (envelope, negoziazione, FedNova) e' identico nei tre
+      mondi: cambia SOLO la batteria montata sui device.
+      La colonna smart_soc_err (|SoC dichiarato - SoC vero|) vale ~0 in tutti
+      e tre i mondi: il client prevede con la stessa batteria che si scarica.
 
     COSA SA IL SERVER, E DA DOVE
-      Le decisioni della strategia usano solo: profili statici (Fase 0),
-      risposte alle proposte (Fase 2), metriche riportate dai client
-      (Fase 7). Il mondo fisico entra in due soli punti, entrambi fuori
-      dalle decisioni:
+      Le decisioni della strategia usano solo: profili statici e tipo di
+      batteria (Fase 0), risposte alle proposte (Fase 2), metriche riportate
+      dai client (Fase 7). Il mondo fisico entra in due soli punti, entrambi
+      fuori dalle decisioni:
         - `_device_record`: i SENSORI del device, allegati al messaggio per
           conto del device stesso (in un telefono vero li legge dall'OS);
-        - le colonne smart_soc_err e soc_believed_mean, che confrontano
-          creduto e vero: sono verifiche, non input.
+        - le colonne smart_soc_err e smart_info_err, che confrontano
+          dichiarato/stimato e vero: sono verifiche, non input.
 
     PARAMETRI
       stale_weight, stale_max  peso (c) e scala dell'anzianita'
@@ -170,7 +162,6 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
       max_waves      ondate di proposte per round (1 = nessun rimpiazzo)
       query_timeout_s  attesa massima delle risposte ai messaggi di controllo
       calib_alpha    peso della media mobile su k_i
-      battery_mode   "soc" (datasheet) | "peuk" (Peukert) | "energy" (lineare)
     """
 
     def __init__(
@@ -188,12 +179,9 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         max_waves: int = 2,
         query_timeout_s: float = 600.0,
         calib_alpha: float = 0.3,
-        battery_mode: str = "soc",
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
-        if battery_mode not in BATTERY_MODELS:
-            raise ValueError(f"battery_mode: uno fra {tuple(BATTERY_MODELS)}")
         self.stale_w = float(stale_weight)
         self.stale_max = int(stale_max)
         self.soc_min = float(soc_min)
@@ -205,9 +193,6 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         self.max_waves = max(1, int(max_waves))
         self.query_timeout_s = float(query_timeout_s)
         self.calib_alpha = float(calib_alpha)
-        self.battery_mode = battery_mode
-        # modello del fuel gauge del device: nm (vero), lin o peuk
-        self.model = BATTERY_MODELS[battery_mode]
         # Fase 0: taglia dei dataset. Se manca, la si impara dalle risposte.
         self._n: dict[int, int] = {int(c): int(n) for c, n in
                                    (partition_sizes or {}).items()}
@@ -248,7 +233,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
 
     @property
     def variant(self) -> str:
-        return "sage-smart" + {"nm": "", "lin": "-lin", "peuk": "-peuk"}[self.model]
+        return f"sage-smart-{self.world.battery}"
 
     def configure_train(self, server_round, arrays, config, grid):
         # la griglia serve alla Fase 2 per i messaggi di controllo, che
@@ -261,17 +246,8 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
 
     # ===================================================== Fase 0 e Fase 2
     def _sensor_soc(self, cid: int) -> float:
-        """SoC che il device legge dal proprio fuel gauge."""
-        if self.model == "lin":
-            return float(self.world.soc_linear(cid))
-        if self.model == "peuk":
-            return float(self.world.soc_peukert(cid))
+        """SoC che il device legge dalla propria batteria."""
         return float(self.world.snapshot(cid).soc)
-
-    def _believed_soc_mean(self) -> float | None:
-        """SoC medio creduto dai device (fuel gauge), non la stima del server."""
-        cids = list(self._node_to_cid.values())
-        return float(np.mean([self._sensor_soc(c) for c in cids])) if cids else None
 
     def _subscribe(self) -> None:
         """Iscrizione: dati statici e SoC iniziale di ogni client."""
@@ -292,7 +268,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
             "(%.2f x mediana nominale, E=%s B=%s) | max %s ondate | batteria %s",
             self.variant, len(cids), self._deadline_s, self.deadline_mult,
             self.epochs, self.batch_size, self.max_waves,
-            MODEL_NAMES[self.model])
+            BATTERY_NAMES[self.world.battery])
 
     def _record(self, cid: int, soc: float, w: float, chg: bool, t: float) -> None:
         """Un report del client: diventa anche lo stato noto."""
@@ -304,10 +280,14 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
     def _estimate(self, cid: int) -> float:
         """Fase 2a: SoC estrapolato dall'ultimo report col consumo di idle.
 
-            SoC_est = SoC_rep - P_idle(w_rep) * dt / (V_nom * C_nom)
+            SoC_est = SoC_rep - dSoC_batteria(P_idle(w_rep), dt)
 
-        [B] lineare e senza k_i: k_i e' calibrato sul training (correnti alte),
-        in idle la corrente e' bassa e il modello lineare sbaglia poco.
+        con la batteria del device (dato statico dell'iscrizione). [B] senza
+        k_i: k_i e' calibrato sul training lineare, qui la batteria e' gia'
+        quella giusta. L'idle e' integrato a passi di al piu'
+        _ESTIMATE_STEP_S, come lo scarica il mondo round per round: con la
+        batteria da datasheet il calo dipende dal SoC, un passo unico su un
+        dt lungo lo sbaglierebbe.
         In carica al momento del report: si assume invariato, perche' non si
         sa quando la carica finisce (stima prudente, la carica lo alzerebbe).
         """
@@ -315,10 +295,16 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         if self._chg_rep.get(cid, False):
             return soc
         dt = max(0.0, self._clock_s - self._t_rep.get(cid, 0.0))
+        if dt <= 0.0:
+            return float(soc)
         w = self._w_rep.get(cid, self.w_busy)
         p_idle = IDLE_POWER_W + w * (TRAIN_POWER_W - IDLE_POWER_W)
-        cap_wh = self.world.profile(cid).battery_capacity_mah / 1000.0 * V_NOMINAL
-        return float(np.clip(soc - energy_wh_linear(p_idle, dt) / cap_wh, 0.0, 1.0))
+        prof = self.world.profile(cid)
+        n = max(1, math.ceil(dt / _ESTIMATE_STEP_S))
+        for _ in range(n):
+            soc = max(0.0, soc + battery_delta_soc(self.world.battery, p_idle,
+                                                   dt / n, prof, soc))
+        return float(min(1.0, soc))
 
     def _refresh_state(self, available: list[int]) -> None:
         """Fase 2a: lo stato con cui il server ordina i client."""
@@ -588,7 +574,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         [B] "dataset-size": il client conosce la taglia del proprio dataset;
         nel simulatore arriva qui per non dover caricare i dati in una query.
         """
-        rec = DeviceReading.from_world(self.world, cid, model=self.model).to_record()
+        rec = DeviceReading.from_world(self.world, cid).to_record()
         rec["dataset-size"] = int(self._n_of(cid) or 0)
         return ConfigRecord(rec)
 
@@ -677,9 +663,8 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
 
         # calibrazione k_i: calo di SoC dichiarato / stima lineare dello
         # stesso lavoro, con la durata ricostruita dal workload DICHIARATO.
-        # [B] con battery_mode="energy" il client dichiara un SoC lineare,
-        # quindi k_i resta 1; con "peuk" k_i impara il rapporto Peukert /
-        # lineare. In nessuno dei due casi il server vede l'errore del gauge.
+        # [B] nel mondo lineare k_i resta ~1; con Peukert e datasheet impara
+        # quanto la batteria del device paga il training rispetto a P*t.
         if not chg and steps > 0 and n_ex > 0:
             prof = self.world.profile(cid)
             peff = effective_profile(prof, w)
@@ -750,10 +735,6 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
             "smart_n_refused": int(self._n_refused),
             "smart_waves": int(self._waves),
             "smart_overhead_s": float(self._overhead_s),
-            # [B] SoC medio CREDUTO dai device (fuel gauge), su tutta la
-            # popolazione come mean_soc: con "soc" coincide con mean_soc, con
-            # "peuk" ed "energy" la differenza e' l'errore del modello
-            "soc_believed_mean": self._believed_soc_mean(),
         }
         log(INFO, "%s: %s risposte | E eseguite %.1f (min %.2f, max %.2f) "
             "| E_hi medio %.1f (energia %s, deadline %s) | opt-out %s | "

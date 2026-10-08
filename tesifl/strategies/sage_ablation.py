@@ -16,18 +16,13 @@ class PhysicalSAGEAblation(PhysicalFedAvg):
 
         max  sum_i y_i * (a*SoC_i + b*D_i)      a + b = 1
 
+    Nella campagna gira nei mondi Peukert e datasheet (etichette sage_peuk e
+    sage_nm); il SAGE del paper gira in quello lineare (sage_lin).
+
     DIFFERENZE RISPETTO A `PhysicalSAGE`, tutte volute:
-    1. la risorsa e' un SoC del world state, non la contabilita' del paper
-       SoC_0 - Wh_round/capacita'. Quale SoC lo sceglie `battery_mode`:
-         "soc"   (nm, etichetta sage_soc) il SoC VERO, modello da datasheet;
-         "peuk"  (etichetta sage_peuk) il fuel gauge di Peukert
-                 (WorldState.soc_peukert);
-         "lin"   (etichetta sage_lin) il fuel gauge LINEARE
-                 (WorldState.soc_linear): P/eta * dt / (V_nom * C_nom).
-       I due gauge seguono idle e ricarica come la batteria vera: rispetto a
-       "soc" cambia SOLO il modello di batteria. E' il confronto lin / peuk /
-       nm puro, che il SAGE del paper (`sage`) non e': la sua E_i conta solo
-       i round in cui il client lavora, e ha pesi e regole diversi.
+    1. la risorsa e' il SoC del device con a + b = 1 (pesi tarati per beta,
+       sage_ab in experiment.toml) invece della terna (a, b, c) del paper.
+       Come in SAGE il SoC e' quello della batteria del mondo.
     2. niente termine rinnovabile (c = 0): non c'e' un corrispettivo fisico
        nel world state, e il rumore di R_i sporcherebbe il confronto.
     3. niente soglia di eleggibilita' (2e): i client a SoC zero sono gia'
@@ -36,8 +31,10 @@ class PhysicalSAGEAblation(PhysicalFedAvg):
        k/0.2 l'ILP diventa infeasible e la run termina per esaurimento.
 
     Meta' epoche sotto SoC 0.3 e divergenza D_i come in SAGE. I pesi (a, b)
-    vanno scelti per beta (vedi run_grid.sh), quindi sage e sage_soc
-    differiscono anche per taratura: va tenuto presente leggendo i risultati.
+    vanno scelti per beta, quindi sage_lin e sage_peuk/sage_nm differiscono
+    per batteria E per algoritmo (pesi, rinnovabile, soglia): va tenuto
+    presente leggendo i risultati. Fra sage_peuk e sage_nm cambia solo la
+    batteria.
     """
 
     def __init__(
@@ -49,13 +46,9 @@ class PhysicalSAGEAblation(PhysicalFedAvg):
         half_epochs_threshold: float = 0.3,
         max_fraction: float = 0.2,   # k_per_round / N
         class_distributions: dict[int, np.ndarray] | None = None,
-        battery_mode: str = "soc",
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
-        if battery_mode not in ("soc", "peuk", "lin"):
-            raise ValueError("battery_mode: 'soc' (datasheet), 'peuk' o 'lin'")
-        self.sage_battery = battery_mode
         self.a, self.b = float(sage_a), float(sage_b)
         if abs(self.a + self.b - 1.0) > 1e-9:
             raise ValueError("a + b = 1")
@@ -75,16 +68,8 @@ class PhysicalSAGEAblation(PhysicalFedAvg):
 
     # ------------------------------------------------------------ componenti
     def _resource(self, cid: int) -> float:
-        if self.sage_battery == "peuk":
-            return float(self.world.soc_peukert(cid))
-        if self.sage_battery == "lin":
-            return float(self.world.soc_linear(cid))
+        """SoC della batteria del device."""
         return float(self.world.snapshot(cid).soc)
-
-    def _believed_soc_mean(self) -> float | None:
-        """SoC medio che il selettore crede, per la colonna soc_believed_mean."""
-        cids = list(self._node_to_cid.values())
-        return float(np.mean([self._resource(c) for c in cids])) if cids else None
 
     def _divergence(self, cid: int) -> float:
         if cid in self._div:

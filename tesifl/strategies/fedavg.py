@@ -43,7 +43,6 @@ class PhysicalFedAvg(FedAvg):
         # durata dell'ultimo round (training piu' lento + ritardo iniziale):
         # il server la conosce, ha aspettato le risposte
         self._last_round_s = 0.0
-        self._peuk_drop: dict[int, float] = {}   # cid -> calo gauge Peukert
         # [B] selezione vuota = fine della run. Serve a sage_soc, che termina
         # per esaurimento del pool e non per numero di round: senza questo
         # flag Flower continuerebbe a valutare tutti i client fino a R_max.
@@ -164,11 +163,6 @@ class PhysicalFedAvg(FedAvg):
         )
         return dt, b
 
-    def _believed_soc_mean(self) -> float | None:
-        """SoC medio secondo la contabilita' della strategia. None = la
-        strategia non usa la batteria (FedAvg, FedProx)."""
-        return None
-
     def _round_overhead_s(self) -> float:
         """Secondi spesi prima del training (scambi di controllo). Default 0:
         solo sage_smart interroga i client prima di mandare il modello."""
@@ -188,8 +182,9 @@ class PhysicalFedAvg(FedAvg):
     ) -> None:
         """Hook per le sottoclassi, chiamato dopo l'addebito fisico.
 
-        e_wh      Wh Peukert (carica realmente pagata dalla batteria)
-        e_lin_wh  Wh lineari P*dt (quelli che vedono SAGE/ESCS originali)
+        e_wh      Wh di carica pagati dalla batteria del mondo (training +
+                  upload): e_wh / (V_nom * C_nom) e' il calo di SoC esatto
+        e_lin_wh  Wh al carico, P*dt
         """
         return None
 
@@ -225,12 +220,8 @@ class PhysicalFedAvg(FedAvg):
             n_ex = int(self._metric(reply, "num-examples", "num_examples"))
             dt, b = self._work_done(cid, n_ex, reply)
             durations[cid] = dt
-            peuk0 = self.world.soc_peukert(cid)
             e_tr, l_tr = self.world.apply_round(cid, dt_s=dt, batch_size=b)
             e_cm, l_cm = self.world.apply_communication(cid)
-            # calo del fuel gauge di Peukert per training + upload: serve ai
-            # bracci "peuk" (ESCS) per il consumo previsto
-            self._peuk_drop[cid] = peuk0 - self.world.soc_peukert(cid)
             self._on_round_result(cid, n_ex, dt, float(e_tr + e_cm),
                                   float(l_tr + l_cm), reply, server_round)
 
@@ -248,11 +239,6 @@ class PhysicalFedAvg(FedAvg):
 
         s = self.world.stats()
         self._round_stats[int(server_round)] = dict(s)
-        # [B] SoC medio che il selettore CREDE, accanto a mean_soc (quello
-        # vero): la differenza e' l'errore della sua contabilita' di batteria
-        believed = self._believed_soc_mean()
-        if believed is not None:
-            self._round_stats[int(server_round)]["soc_believed_mean"] = believed
         log(INFO, "round %s: %.3f Wh (train %.3f + comm %.3f) | SoC medio %.2f "
             "| in ricarica %s | falliti %s",
             server_round, s["total_energy_wh"], s["energy_train_wh"],

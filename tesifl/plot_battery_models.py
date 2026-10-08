@@ -7,25 +7,25 @@ Da ~/tesifl (dopo una campagna con le etichette di experiment.toml):
     python plot_battery_models.py --dir results_<name> --beta 0.5
     python plot_battery_models.py --dir results_<name> --path
 
-Per SAGE, SAGE-smart ed ESCS-SD mette sullo stesso piano i tre bracci che
-differiscono SOLO per il modello di batteria con cui l'algoritmo stima il SoC
-(lin e peuk sono fuel gauge completi: idle e ricarica inclusi):
+Per SAGE, SAGE-smart ed ESCS-SD mette sullo stesso piano le tre run che
+differiscono per la BATTERIA DEI DEVICE, cioe' quella fisica del mondo
+(tier, workload, idle e ricarica uguali):
 
                 lineare           Peukert            datasheet (nm)
-    SAGE        sage_lin          sage_peuk          sage_soc
-    SAGE-smart  sage_smart_lin    sage_smart_peuk    sage_smart
-    ESCS-SD     escs_sd_lin       escs_sd_peuk       escs_sd
+    SAGE        sage_lin (*)      sage_peuk          sage_nm
+    SAGE-smart  sage_smart_lin    sage_smart_peuk    sage_smart_nm
+    ESCS-SD     escs_sd_lin       escs_sd_peuk       escs_sd_nm
 
-e, se presente, in grigio la contabilita' dei paper (solo i round in cui il
-client lavora, idle ignorato): sage per SAGE, escs_sd_paper per ESCS-SD.
+(*) il SAGE del paper; sage_peuk e sage_nm sono l'ablazione, quindi per SAGE
+fra lin e gli altri due cambia anche l'algoritmo.
 
 Il grafico e' quello di fig5 di plot_curves.py (fig_pareto_soc):
     x  SoC medio a fine run, morti contati come 0
     y  accuracy media degli ultimi TAIL round
     marker piu' grande = piu' client esauriti (†)
 stessi assi, stessi marker, stesso posizionamento delle etichette. Cambia
-solo il colore, che qui indica il MODELLO (uguale nei tre algoritmi):
-grigio paper, rosso lineare, arancio Peukert, verde datasheet.
+solo il colore, che qui indica la BATTERIA (uguale nei tre algoritmi):
+rosso lineare, arancio Peukert, verde datasheet.
 
 Produce in --dir, con suffisso _ball (tutti i beta) o _b<beta>:
     figB_pareto_soc_sage_<b>.png
@@ -58,17 +58,13 @@ import plot_curves as pc
 
 FAMILIES = [
     ("sage", "SAGE",
-     {"paper": "sage", "lin": "sage_lin", "peuk": "sage_peuk", "nm": "sage_soc"}),
+     {"lin": "sage_lin", "peuk": "sage_peuk", "nm": "sage_nm"}),
     ("sage_smart", "SAGE-smart",
-     {"lin": "sage_smart_lin", "peuk": "sage_smart_peuk", "nm": "sage_smart"}),
+     {"lin": "sage_smart_lin", "peuk": "sage_smart_peuk", "nm": "sage_smart_nm"}),
     ("escs_sd", "ESCS-SD",
-     {"paper": "escs_sd_paper", "lin": "escs_sd_lin", "peuk": "escs_sd_peuk",
-      "nm": "escs_sd"}),
+     {"lin": "escs_sd_lin", "peuk": "escs_sd_peuk", "nm": "escs_sd_nm"}),
 ]
-# "paper" = contabilita' dei paper (idle ignorato), in grigio: e' un
-# riferimento, il confronto sul modello di batteria e' lin -> peuk -> nm
-MODELS = [("paper", "paper", "#7f7f7f"),
-          ("lin", "lin", "#d62728"),
+MODELS = [("lin", "lin", "#d62728"),
           ("peuk", "peuk", "#ff7f0e"),
           ("nm", "nm", "#2ca02c")]
 
@@ -106,29 +102,16 @@ def common_betas(stats, labels):
 
     [B] mediare su beta diversi confronterebbe regimi diversi: se ESCS-nm ha
     solo beta 1.0 e ESCS-lin tutti e tre, la differenza fra i due punti
-    sarebbe in gran parte l'effetto del beta, non del modello di batteria.
+    sarebbe in gran parte l'effetto del beta, non della batteria.
     """
-    # solo lin / peuk / nm: il braccio paper e' un riferimento e non deve
-    # restringere il confronto principale (vedi restrict)
-    sets = [set(stats[lab]) for key, lab in labels.items()
-            if key != "paper" and lab in stats]
+    sets = [set(stats[lab]) for lab in labels.values() if lab in stats]
     return sorted(set.intersection(*sets)) if sets else []
 
 
 def restrict(stats, labels, betas):
-    """label -> lista di punti, sui soli beta indicati.
-
-    Il braccio paper entra solo se ha TUTTI quei beta, altrimenti la sua media
-    sarebbe su regimi diversi da quella degli altri tre punti.
-    """
-    out = {}
-    for key, lab in labels.items():
-        if lab not in stats:
-            continue
-        if key == "paper" and not all(b in stats[lab] for b in betas):
-            continue
-        out[lab] = [p for b in betas for p in stats[lab].get(b, [])]
-    return out
+    """label -> lista di punti, sui soli beta indicati."""
+    return {lab: [p for b in betas for p in stats[lab].get(b, [])]
+            for lab in labels.values() if lab in stats}
 
 
 def draw(ax, stats, name, labels, beta, path=False):
@@ -151,8 +134,7 @@ def draw(ax, stats, name, labels, beta, path=False):
         if D > 0:
             tag += f" ({D:.0f}†)"
         items.append((mx, my, tag, color))
-        if key != "paper":
-            pts.append((mx, my))     # --path: solo lin -> peuk -> nm
+        pts.append((mx, my))         # --path: lin -> peuk -> nm
         drawn.append(key)
     if path and len(pts) > 1:
         for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
@@ -231,8 +213,8 @@ def main():
                      else f"{name} (β = {beta_label(args.beta, betas)})")
     for ax in axes[0][1:]:
         ax.set_ylabel("")
-    fig.suptitle(f"Battery model seen by the algorithm: paper accounting (grey) / "
-                 f"linear / Peukert / datasheet (nm) — β = {pc.beta_str(args.beta)}\n"
+    fig.suptitle(f"Battery of the devices: linear / Peukert / datasheet (nm) "
+                 f"— β = {pc.beta_str(args.beta)}\n"
                  "larger marker = more depleted clients (†); "
                  "top-right is better", fontsize=11)
     fig.tight_layout(rect=[0, 0, 1, 0.92])

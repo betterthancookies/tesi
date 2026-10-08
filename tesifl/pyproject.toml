@@ -58,7 +58,10 @@ smart-epochs-min = 2         # E_lo dell'envelope
 smart-deadline-mult = 1.0    # deadline = mult * mediana dei tempi nominali
 smart-probe-samples = 256    # campioni per stimare la loss locale
 smart-max-waves = 2          # ondate di proposte per round (1 = nessun rimpiazzo)
-smart-battery = "soc"        # "soc" (datasheet) | "peuk" (Peukert) | "energy" (lineare)
+# --- batteria dei device (la batteria FISICA del mondo, per tutti gli
+# algoritmi): "lin" (lineare) | "peuk" (Peukert) | "nm" (datasheet).
+# _shard.sh la ricava dal suffisso dell'etichetta.
+world-battery = "nm"
 model-name = "resnet20"
 recharge-enabled = true
 recharge-available = true
@@ -79,8 +82,6 @@ escs-selection = "d"
 escs-min-battery = 0.20
 escs-min-nq = 0.20
 escs-cap-probabilistic = false
-escs-battery = "soc"          # "soc" (datasheet) | "peuk" | "lin" (gauge) | "energy" (paper: solo round)
-sage-battery = "soc"          # sage_soc: "soc" (datasheet) | "peuk" (Peukert) | "lin" (gauge lineare)
 escs-first-round-all = true   # Alg. 1 righe 5-6 del paper: round 1 = tutti
 results-dir = "results"       # dove l'app scrive il CSV per round; va cambiata
                               # per ogni processo se si parallelizza su piu' GPU

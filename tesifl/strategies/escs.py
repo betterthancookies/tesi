@@ -50,31 +50,13 @@ class PhysicalESCS(PhysicalFedAvg):
     dell'inf iniziale nel codice originale (li' pero' inf/inf = nan
     escludeva per sempre i mai osservati in -sp; qui e' corretto).
 
-    RISORSA DI BATTERIA:
-
-      battery_mode="lin"     (lin, etichetta escs_sd_lin) bat = SoC del fuel
-                             gauge LINEARE (WorldState.soc_linear):
-                             P/eta * dt / (V_nom * C_nom), idle e ricarica
-                             inclusi.
-      battery_mode="peuk"    (peuk, escs_sd_peuk) bat = SoC del fuel gauge di
-                             Peukert (WorldState.soc_peukert), idle e ricarica
-                             inclusi.
-      battery_mode="soc"     (nm, escs_sd) bat = SoC VERO, modello datasheet.
-      battery_mode="energy"  (escs_sd_paper) bat = SoC_0 - Wh_LINEARI dei soli
-                             round in cui il client lavora / capacita'. E' la
-                             contabilita' server-side scritta quando il mondo
-                             non aveva idle ne' ricarica: non vede l'idle
-                             (circa meta' dell'energia totale) ne' le
-                             ricariche. Resta per misurare quanto costa
-                             ignorare l'idle, NON come modello lineare.
-
-    lin, peuk e soc differiscono SOLO per il modello di batteria: e' il
-    confronto puro, lo stesso di sage_lin/sage_peuk/sage_soc e di
-    sage_smart_lin/_peuk/sage_smart. Se l'effetto si ripete su tre algoritmi
-    diversi non dipende dall'algoritmo.
+    RISORSA DI BATTERIA. bat = SoC del device, letto dalla batteria del mondo
+    (lineare, Peukert o datasheet: etichette escs_sd_lin / _peuk / _nm). Fra
+    le tre etichette l'algoritmo e' identico e cambia SOLO la batteria
+    montata sui device, come per sage_smart_lin/_peuk/_nm.
     La risorsa entra sia nell'utilita' sia nel filtro R, perche' nel paper
-    sono la stessa grandezza; anche il consumo previsto e' nella stessa
-    contabilita' della risorsa.
+    sono la stessa grandezza; il consumo previsto e' il calo di SoC che la
+    stessa batteria ha avuto nell'ultimo round del client.
 
     [B] la modalita' probabilistica non ha tetto: seleziona un numero
     variabile di client, ed e' il motivo per cui nel paper -sp/-mp sono le
@@ -105,7 +87,6 @@ class PhysicalESCS(PhysicalFedAvg):
         *args,
         utility_mode: str = "s",
         selection_mode: str = "d",
-        battery_mode: str = "soc",
         partition_sizes: dict[int, int] | None = None,
         first_round_all: bool = True,
         battery_weight: float = 1 / 3,
@@ -121,15 +102,12 @@ class PhysicalESCS(PhysicalFedAvg):
         um, sm = utility_mode.lower(), selection_mode.lower()
         if um not in ("s", "m") or sm not in ("d", "p"):
             raise ValueError("utility_mode in {s,m}, selection_mode in {d,p}")
-        if battery_mode not in ("soc", "lin", "peuk", "energy"):
-            raise ValueError("battery_mode: 'soc' (nm), 'lin', 'peuk' oppure 'energy' (paper)")
         if not partition_sizes:
             raise ValueError(
                 "partition_sizes obbligatorio: senza le taglie reali la "
                 "latenza di riferimento e' sbagliata e l'utilita' collassa"
             )
         self.utility_mode, self.selection_mode = um, sm
-        self.battery_mode = battery_mode
         self.first_round_all = bool(first_round_all)
         self.w_b, self.w_c, self.w_l = (
             float(battery_weight), float(cpu_cost_weight), float(link_prob_weight)
@@ -142,7 +120,6 @@ class PhysicalESCS(PhysicalFedAvg):
 
         self._loss: dict[int, float] = {}     # cid -> eval loss ultimo round
         self._cons: dict[int, float] = {}     # cid -> consumo ultimo round (frazione)
-        self._used_wh: dict[int, float] = {}  # cid -> Wh LINEARI cumulati (mode energy)
         self._nq: dict[int, float] = {}       # cid -> qualita' rete, statica
         self._lat_ref: dict[int, float] = {}  # cid -> latenza di profilo
         self._max_lat = 0.0
@@ -151,14 +128,7 @@ class PhysicalESCS(PhysicalFedAvg):
 
     @property
     def variant(self) -> str:
-        suffix = {"soc": "", "lin": "-lin", "peuk": "-peuk",
-                  "energy": "-paper"}[self.battery_mode]
-        return f"escs-{self.utility_mode}{self.selection_mode}{suffix}"
-
-    def _believed_soc_mean(self) -> float | None:
-        """SoC medio che il selettore crede, per la colonna soc_believed_mean."""
-        cids = list(self._node_to_cid.values())
-        return float(np.mean([self._battery(c) for c in cids])) if cids else None
+        return f"escs-{self.utility_mode}{self.selection_mode}-{self.world.battery}"
 
     # ----------------------------------------------------------- componenti
     def _ensure_profile(self) -> None:
@@ -192,19 +162,8 @@ class PhysicalESCS(PhysicalFedAvg):
         return self._cap_wh[cid]
 
     def _battery(self, cid: int) -> float:
-        """La risorsa di batteria vista dal selettore."""
-        if self.battery_mode == "soc":
-            return float(self.world.snapshot(cid).soc)
-        if self.battery_mode == "peuk":
-            return float(self.world.soc_peukert(cid))
-        if self.battery_mode == "lin":
-            return float(self.world.soc_linear(cid))
-        # "energy": contabilita' dei soli round (vedi docstring)
-        cap = self._capacity(cid)
-        if cap <= 0.0:
-            return 1.0
-        soc0 = float(self.world.initial_soc(cid))
-        return float(np.clip(soc0 - self._used_wh.get(cid, 0.0) / cap, 0.0, 1.0))
+        """La risorsa di batteria vista dal selettore: il SoC del device."""
+        return float(self.world.snapshot(cid).soc)
 
     def _consumption(self, cid: int) -> float:
         if cid in self._cons:
@@ -285,17 +244,11 @@ class PhysicalESCS(PhysicalFedAvg):
         self, cid: int, n_ex: int, dt_s: float, e_wh: float, e_lin_wh: float,
         reply: Message, server_round: int,
     ) -> None:
-        # consumo previsto nella STESSA contabilita' della risorsa
-        # (lineare per "energy" e "lin": il calo del gauge lineare per training
-        # + upload e' esattamente e_lin_wh / capacita')
-        spent = e_lin_wh if self.battery_mode in ("energy", "lin") else e_wh
-        self._used_wh[cid] = self._used_wh.get(cid, 0.0) + e_lin_wh
+        # consumo previsto: il calo di SoC di training + upload di questo
+        # round, nella batteria del mondo (e_wh = V_nom * C_nom * |dSoC|)
         cap = self._capacity(cid)
-        if self.battery_mode == "peuk":
-            # calo del gauge di Peukert per training + upload di questo round
-            self._cons[cid] = float(self._peuk_drop.get(cid, 0.0))
-        elif cap > 0.0:
-            self._cons[cid] = float(spent / cap)
+        if cap > 0.0:
+            self._cons[cid] = float(e_wh / cap)
 
     def aggregate_evaluate(
         self, server_round: int, replies: Iterable[Message]

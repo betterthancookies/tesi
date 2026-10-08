@@ -1,6 +1,10 @@
 """Modello di batteria da datasheet: V(SoC, I) e Q(I) tabulati.
 
-SOSTITUISCE PEUKERT. Peukert riassume la non-idealita' della batteria in un
+E' la batteria dei device nel mondo "nm" (WorldState(battery="nm")). Gli
+altri due mondi usano la batteria lineare (energy_wh_linear, qui sotto) e
+quella di Peukert (battery_model_peukert.py).
+
+RISPETTO A PEUKERT. Peukert riassume la non-idealita' della batteria in un
 solo esponente, che nel simulatore era n=1.15 -- un valore da piombo-acido,
 mentre per il litio la letteratura riporta 1.01-1.10. La sensitivity fatta
 allora lo confermava: a n=1.05 l'errore del modello lineare scendeva da 1.26x
@@ -26,9 +30,27 @@ cella da 2.6 Ah, i device simulati ne hanno 3.5-4.5: usare gli ampere assoluti
 legherebbe il modello a quella taglia. Con il C-rate le stesse curve valgono
 per qualunque capacita', che e' anche il motivo per cui il C-rate esiste.
 
-FONTE: curve di scarica del datasheet (Ta=25 C), digitalizzate. Gli endpoint
-Q(0.2C)=2.60 Ah, Q(0.5C)=2.50 Ah, Q(1C)=2.39 Ah sono letti dalle stesse curve
-e qui espressi come frazione della capacita' nominale.
+FONTE: curve di scarica del datasheet (Ta=25 C) del documento "Accurate
+Battery Model" del relatore, digitalizzate pixel per pixel dall'immagine
+(linea centrale di ogni curva, griglia del grafico come riferimento; errore
+di lettura ~0.01 V). Le capacita' Q(0.2C)=2.60 Ah, Q(0.5C)=2.50 Ah,
+Q(1C)=2.39 Ah sono quelle del documento, espresse come frazione della
+capacita' nominale.
+
+[B] ASSE DEL SoC DELLE TABELLE. Nel simulatore il SoC scende di I*dt/Q(I),
+quindi a corrente costante arriva a 0 quando e' stata erogata la capacita'
+utilizzabile A QUEL RATE. Ogni curva e' percio' tabulata sulla PROPRIA
+lunghezza: SoC = 1 - x / x_fine, con x_fine il punto in cui la curva tocca il
+cut-off di 2.5 V (99.5 / 97.2 / 95.1 % sul grafico). Cosi' V = 2.5 V a SoC 0
+per ogni rate, cioe' la batteria e' scarica quando il SoC dice zero. Tabulare
+tutte e tre le curve sull'asse nominale metterebbe SoC 0 della curva a 1C a
+x = 91.9 %, dove il grafico segna ancora 2.85 V.
+[B] il punto a SoC 1 e' la tensione SOTTO CARICO subito dopo il picco
+iniziale (x = 0.4 %): il picco a 4.3 V dei primi istanti e' la tensione a
+vuoto della cella carica, non quella che il carico vede.
+[B] le tabelle precedenti erano lette a occhio e stavano 0.07-0.10 V sotto il
+grafico fra SoC 0.65 e 0.9 a 0.2C, con il ginocchio finale troppo anticipato
+(tensione media 3.68 V contro i 3.72 V del grafico).
 """
 
 from __future__ import annotations
@@ -40,22 +62,27 @@ from device.device_profile import DeviceProfile
 
 # ---------------------------------------------------------------- tabelle
 # SoC crescente: 0 = scarica, 1 = piena. Il datasheet riporta la capacita'
-# SCARICATA in ascissa, quindi SoC = 1 - x/100 e le curve sono ribaltate.
-_SOC = np.array([0.00, 0.03, 0.06, 0.10, 0.15, 0.20, 0.30, 0.40,
-                 0.50, 0.60, 0.70, 0.80, 0.85, 0.90, 0.95, 1.00])
+# SCARICATA in ascissa, quindi le curve sono ribaltate: SoC = 1 - x / x_fine
+# (vedi docstring). Punti fitti sotto il 10%, dove sta il ginocchio.
+_SOC = np.array([0.00, 0.01, 0.02, 0.03, 0.04, 0.05, 0.075, 0.10, 0.15,
+                 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60,
+                 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 0.98, 1.00])
 
-# V a 0.2C -- il ginocchio finale sta intorno al 5-10% di carica residua
-_V_02C = np.array([2.50, 2.95, 3.30, 3.45, 3.50, 3.53, 3.57, 3.60,
-                   3.65, 3.70, 3.76, 3.85, 3.93, 4.02, 4.18, 4.30])
+# V a 0.2C -- la curva di gran lunga piu' usata: training ~0.2C, idle ~0.01C
+_V_02C = np.array([2.50, 3.00, 3.15, 3.26, 3.33, 3.38, 3.44, 3.46, 3.51,
+                   3.54, 3.57, 3.59, 3.61, 3.64, 3.66, 3.69, 3.71, 3.75,
+                   3.80, 3.85, 3.90, 3.95, 4.03, 4.09, 4.17, 4.22, 4.24])
 # V a 0.5C
-_V_05C = np.array([2.45, 2.85, 3.20, 3.35, 3.42, 3.46, 3.50, 3.54,
-                   3.58, 3.63, 3.70, 3.80, 3.88, 3.97, 4.13, 4.27])
+_V_05C = np.array([2.50, 2.80, 2.94, 3.04, 3.11, 3.16, 3.24, 3.29, 3.36,
+                   3.41, 3.44, 3.47, 3.49, 3.51, 3.53, 3.55, 3.59, 3.62,
+                   3.66, 3.71, 3.76, 3.81, 3.89, 3.96, 4.03, 4.08, 4.12])
 # V a 1C
-_V_1C = np.array([2.40, 2.75, 3.05, 3.20, 3.28, 3.33, 3.38, 3.42,
-                  3.45, 3.50, 3.57, 3.66, 3.74, 3.83, 3.90, 3.97])
+_V_1C = np.array([2.50, 2.68, 2.78, 2.86, 2.91, 2.96, 3.04, 3.10, 3.18,
+                  3.23, 3.27, 3.30, 3.33, 3.35, 3.38, 3.40, 3.43, 3.47,
+                  3.50, 3.55, 3.59, 3.65, 3.72, 3.78, 3.84, 3.89, 3.95])
 
 _CRATES = np.array([0.2, 0.5, 1.0])
-_VTAB = np.vstack([_V_02C, _V_05C, _V_1C])          # (3, 16)
+_VTAB = np.vstack([_V_02C, _V_05C, _V_1C])          # (3, 27)
 
 # capacita' utilizzabile come FRAZIONE della nominale, dagli endpoint
 _QFRAC = np.array([2.60, 2.50, 2.39]) / 2.60         # 1.000, 0.962, 0.919
@@ -144,11 +171,12 @@ def load_power_to_battery_current(power_w: float,
 
 
 def energy_wh_linear(power_w: float, dt_s: float) -> float:
-    """Energia SENZA il modello di batteria: P/eta * dt.
+    """Energia al carico, P/eta * dt, senza alcun modello di batteria.
 
-    E' la contabilita' dei paper di riferimento, che stimano la carica residua
-    sottraendo i Wh spesi dalla capacita' nominale. Invariata: e' il termine di
-    paragone, non deve seguire il modello nuovo.
+    E' anche il consumo della batteria LINEARE (mondo "lin"): li' il SoC
+    scende di P/eta * dt / (V_nom * C_nom). Negli altri mondi resta la
+    colonna energy_lin_wh del CSV: l'energia che il device ha usato, a
+    prescindere da quanta carica la batteria abbia pagato per erogarla.
     """
     if power_w <= 0.0 or dt_s <= 0.0:
         return 0.0

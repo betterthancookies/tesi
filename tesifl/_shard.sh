@@ -41,37 +41,38 @@ for seed in $SEEDS; do
       SKIP=$((SKIP + 1)); continue
     fi
 
-    # label -> algoritmo + extra specifici
-    algo="$label"; extra=""
-    # Modello di batteria visto dall'algoritmo: lin / peuk / nm (datasheet,
-    # il SoC vero). Senza suffisso = nm; "sage" e' il SAGE del paper, *_paper
-    # la contabilita' dei paper (solo i round, idle ignorato).
+    # label -> batteria dei device + algoritmo + extra specifici.
+    # Il suffisso _lin / _peuk / _nm e' la batteria FISICA del mondo (lineare,
+    # Peukert, datasheet); senza suffisso (fedavg, fedprox) e' lineare.
     case "$label" in
-      fedprox)         algo="fedprox" ;;
-      sage)            algo="sage";       extra="sage-a=${SA} sage-b=${SB} sage-c=${SC}" ;;
-      sage_lin)        algo="sage_soc";   extra="sage-a=${QA} sage-b=${QB} sage-battery='lin'" ;;
-      sage_peuk)       algo="sage_soc";   extra="sage-a=${QA} sage-b=${QB} sage-battery='peuk'" ;;
-      sage_soc)        algo="sage_soc";   extra="sage-a=${QA} sage-b=${QB} sage-battery='soc'" ;;
-      sage_smart_lin)  algo="sage_smart"; extra="sage-a=${QA} sage-b=${QB} smart-battery='energy'" ;;
-      sage_smart_peuk) algo="sage_smart"; extra="sage-a=${QA} sage-b=${QB} smart-battery='peuk'" ;;
-      sage_smart)      algo="sage_smart"; extra="sage-a=${QA} sage-b=${QB} smart-battery='soc'" ;;
-      escs_sd)         algo="escs-sd";  extra="escs-battery='soc'" ;;
-      escs_sp)         algo="escs-sp";  extra="escs-battery='soc'" ;;
-      escs_md)         algo="escs-md";  extra="escs-battery='soc'" ;;
-      escs_mp)         algo="escs-mp";  extra="escs-battery='soc'" ;;
-      escs_sd_peuk)    algo="escs-sd";  extra="escs-battery='peuk'" ;;
-      escs_sp_peuk)    algo="escs-sp";  extra="escs-battery='peuk'" ;;
-      escs_md_peuk)    algo="escs-md";  extra="escs-battery='peuk'" ;;
-      escs_mp_peuk)    algo="escs-mp";  extra="escs-battery='peuk'" ;;
-      escs_sd_lin)     algo="escs-sd";  extra="escs-battery='lin'" ;;
-      escs_sp_lin)     algo="escs-sp";  extra="escs-battery='lin'" ;;
-      escs_md_lin)     algo="escs-md";  extra="escs-battery='lin'" ;;
-      escs_mp_lin)     algo="escs-mp";  extra="escs-battery='lin'" ;;
-      escs_sd_paper)   algo="escs-sd";  extra="escs-battery='energy'" ;;
-      escs_sp_paper)   algo="escs-sp";  extra="escs-battery='energy'" ;;
-      escs_md_paper)   algo="escs-md";  extra="escs-battery='energy'" ;;
-      escs_mp_paper)   algo="escs-mp";  extra="escs-battery='energy'" ;;
+      *_lin)  battery="lin" ;;
+      *_peuk) battery="peuk" ;;
+      *_nm)   battery="nm" ;;
+      *)      battery="lin" ;;
     esac
+    base="${label%_lin}"; base="${base%_peuk}"; base="${base%_nm}"
+    algo=""; extra=""
+    case "$base" in
+      fedavg)     algo="fedavg" ;;
+      fedprox)    algo="fedprox" ;;
+      # SAGE: nel mondo lineare quello del paper (a, b, c, rinnovabile),
+      # negli altri l'ablazione (a, b, niente rinnovabile ne' soglia)
+      sage)       if [ "$battery" = "lin" ]; then
+                    algo="sage";     extra="sage-a=${SA} sage-b=${SB} sage-c=${SC}"
+                  else
+                    algo="sage_soc"; extra="sage-a=${QA} sage-b=${QB}"
+                  fi ;;
+      sage_smart) algo="sage_smart"; extra="sage-a=${QA} sage-b=${QB}" ;;
+      escs_sd)    algo="escs-sd" ;;
+      escs_sp)    algo="escs-sp" ;;
+      escs_md)    algo="escs-md" ;;
+      escs_mp)    algo="escs-mp" ;;
+    esac
+    if [ -z "$algo" ]; then
+      echo "--- ${label}: etichetta sconosciuta, salto (vedi experiment.toml)"
+      FAIL=$((FAIL + 1)); continue
+    fi
+    extra="world-battery='${battery}'${extra:+ $extra}"
 
     # [B] UNA CARTELLA PER RUN. Prima tutte le run dello shard scrivevano in
     # ${WDIR} e lo shard prendeva il CSV piu' recente: una run oltre il
