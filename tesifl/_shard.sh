@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Uno shard = un beta su una GPU. Lanciato da run.sh, non a mano.
+# Con meno GPU che beta, run.sh mette piu' shard in fila sulla stessa GPU.
 # Riceve tutto per ambiente: BETA GPU ROT FORCE RESULTS NAME ROUNDS CLIENTS K
 # SEEDS ALGOS TIMEOUT WORLD ALGOCFG
 set -u
@@ -80,8 +81,9 @@ for seed in $SEEDS; do
     # aspettava la run SUCCESSIVA e veniva salvato col nome sbagliato, e da li'
     # tutte le etichette successive slittavano di una posizione (campagna
     # rechargeONdeviceON_ResNet20_totale, beta 0.1). Con una cartella propria
-    # un CSV in ritardo non puo' finire sotto un'altra etichetta.
-    RDIR="${WDIR}/${label}_s${seed}"
+    # un CSV in ritardo non puo' finire sotto un'altra etichetta. Il beta e'
+    # nel nome perche' con una GPU sola piu' shard usano la stessa ${WDIR}.
+    RDIR="${WDIR}/${label}_b${BTAG}_s${seed}"
     rm -rf "${RDIR}"; mkdir -p "${RDIR}"
     cfg="num-server-rounds=${ROUNDS} algorithm='${algo}' seed=${seed} beta=${BETA}"
     cfg="$cfg clients-per-round=${K} results-dir='${RDIR}'"
@@ -90,6 +92,8 @@ for seed in $SEEDS; do
 
     echo ""
     echo "--- ${label} b=${BETA} seed=${seed} ---"
+    # una run alla volta: la precedente deve aver chiuso (vedi superlinks.sh)
+    bash superlinks.sh wait-idle "${GPU}"
     before=$(date +%s)
     out=$(flwr run . "${SUPERLINK}" \
             --federation-config "num-supernodes=${CLIENTS}" \
@@ -126,5 +130,6 @@ for seed in $SEEDS; do
   done
 done
 
+bash superlinks.sh wait-idle "${GPU}"   # nessun residuo per lo shard successivo
 echo ""
 echo "=== shard beta=${BETA}: ${DONE} fatte, ${SKIP} saltate, ${FAIL} fallite ==="

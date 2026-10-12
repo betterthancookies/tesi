@@ -5,8 +5,11 @@ seeds       = [2026]         # [2026, 7, 13] per tre seed
 betas       = [0.1, 0.5, 1.0]
 clients     = 30             # numero di SuperNode
 k_fraction  = 0.2            # client per round = round(k_fraction * clients)
-gpus        = [1, 2, 3]      # un SuperLink per GPU; i beta girano in parallelo
-stagger_s   = 180            # ritardo fra l'avvio di uno shard e il successivo
+gpus        = [2]            # un SuperLink per GPU; beta i -> GPU (i mod n_gpu).
+                             # Tante GPU quanti beta: in parallelo. Meno GPU:
+                             # i beta della stessa GPU girano IN SEQUENZA.
+                             # [1, 2, 3] sul vecchio server, [2] sul nuovo.
+stagger_s   = 180            # ritardo fra l'avvio di una GPU e la successiva
 timeout_s   = 7200           # una run oltre questo tempo e' considerata persa
 
 # Algoritmi da eseguire. Commenta le righe che non ti servono.
