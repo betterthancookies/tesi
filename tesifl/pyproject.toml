@@ -8,10 +8,12 @@ version = "1.1.6"
 description = ""
 license = {file = "LICENSE"}
 dependencies = [
-    # [B] versione FISSATA: con ">=" il server nuovo (ottobre 2026) ha preso
-    # un flwr piu' recente che non accetta piu' --serverappio-api-address
-    # (superlinks.sh). 1.32.1 e' la versione con cui sono state fatte le campagne.
-    "flwr[simulation]==1.32.1",
+    # [B] Flower esige ">=" qui (fab-format-version = 1): "==" fa fallire flwr
+    # run. Ma con ">=" pip prende l'ultima versione, e la 1.39 non accetta piu'
+    # --serverappio-api-address (superlinks.sh). La versione delle campagne e'
+    # la 1.32.1: su un server nuovo installala PRIMA di "pip install -e .":
+    #     pip install "flwr[simulation]==1.32.1"
+    "flwr[simulation]>=1.32.1",
     "flwr-datasets[vision]>=0.6.0",
     "torch==2.10.0",
     "torchvision==0.25.0",
