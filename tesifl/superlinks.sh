@@ -54,7 +54,7 @@ sim_procs() {
 # id delle run non finite (pending, starting, running) sul SuperLink della
 # GPU $1, una per riga; "?" se flwr ls non risponde
 active_runs() {
-  flwr ls "$(name_of "$1")" --format json 2>/dev/null | python3 -c '
+  timeout 30 flwr ls "$(name_of "$1")" --format json 2>/dev/null | python3 -c '
 import json, sys
 s = sys.stdin.read()
 try:
@@ -62,9 +62,11 @@ try:
 except Exception:
     print("?"); sys.exit()
 for r in runs:
-    if not str(r.get("status", "")).startswith("finished"):
-        print(r["run-id"])'
+    if not str(r.get("status", "")).lower().startswith("finished"):
+        print(r["run-id"], r.get("status", ""), sep=":")'
 }
+# solo gli id, per flwr stop
+run_ids() { echo "$1" | cut -d: -f1; }
 
 count() { [ "$1" = "?" ] && echo "?" || echo "$1" | grep -c .; }
 
@@ -143,24 +145,30 @@ wait-idle)
   # crescevano a ogni run. _shard.sh chiama questo prima di ogni run; dopo
   # WAIT_MAX secondi i residui vengono fermati.
   gpu="${2:?uso: bash superlinks.sh wait-idle <gpu>}"
-  n=$(name_of "$gpu"); t=0
+  n=$(name_of "$gpu"); t0=$(date +%s); t=0; last=-60
   [ -n "$(sl_pid "$gpu")" ] || exit 0
   while :; do
     runs=$(active_runs "$gpu"); procs=$(sim_procs "$gpu")
     [ "$runs" = "?" ] && runs=""          # flwr ls muto: contano i processi
     [ -z "$runs" ] && [ -z "$procs" ] && break
+    t=$(( $(date +%s) - t0 ))             # tempo vero, flwr ls non e' istantaneo
+    if [ $(( t - last )) -ge 60 ]; then   # un segno di vita al minuto
+      echo "  ${n}: aspetto la chiusura della run precedente (${t}s/${WAIT_MAX}s):" \
+           "run [$(echo $runs)] processi [$(echo $procs)]"
+      last=$t
+    fi
     if [ "$t" -ge "$WAIT_MAX" ]; then
-      echo "  ${n}: dopo ${t}s ancora run [$(echo $runs)] processi [$(echo $procs)]: li fermo"
-      for id in $runs; do flwr stop "$id" "$n" >/dev/null 2>&1; done
+      echo "  ${n}: dopo ${t}s la fermo"
+      for id in $(run_ids "$runs"); do flwr stop "$id" "$n" >/dev/null 2>&1; done
       sleep 5
       for pr in $(sim_procs "$gpu"); do kill "$pr" 2>/dev/null; done
       sleep 5
       for pr in $(sim_procs "$gpu"); do kill -9 "$pr" 2>/dev/null; done
       break
     fi
-    sleep 5; t=$((t + 5))
+    sleep 5
   done
-  [ "$t" -gt 0 ] && echo "  ${n}: atteso ${t}s la chiusura della run precedente"
+  [ "$t" -gt 0 ] && echo "  ${n}: chiusa dopo ${t}s"
   exit 0
   ;;
 
