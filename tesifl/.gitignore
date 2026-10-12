@@ -1,6 +1,6 @@
 # bytecode di Python, a ogni profondita' sotto tesifl/
 __pycache__/
 *.pyc
-
-# log delle campagne (log_<name>_b*.log) e del fastTest
 *.log
+*.tsv
+results_*/
