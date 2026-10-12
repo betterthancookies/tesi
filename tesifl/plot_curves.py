@@ -16,19 +16,20 @@ Produce in results/, UNA SERIE PER OGNI BETA (suffisso _b01, _b05, _b10):
                                PICCO, col round annotato.
   fig7_thr_soc_b*.png          SoC medio nel round in cui si raggiunge una
                                SOGLIA comune di accuracy.
-  fig8_accounting_b*.png       frecce lineare -> Peukert nel piano
-                               (morti, accuracy).
+  fig8_accounting_b*.png       frecce batteria lineare -> datasheet nel
+                               piano (morti, accuracy).
   fig9_reserve_b*.png          SoC del client piu' scarico e morti CUMULATI,
                                round per round: mostra se la riserva tiene.
-  fig10_estimation_b*.png      il MECCANISMO: SoC che il selettore crede di
-                               avere contro quello reale, nei bracci lineari.
 
 RAGGRUPPAMENTO DELLE VARIANTI
-Le quattro varianti di ESCS sono collassate in due sole curve, la media di
-{sd, sp, md, mp}:
-    ESCS          contabilita' lineare (i quattro *_lin del paper)
-    ESCS (peuk)   contabilita' Peukert (la variante della tesi)
-e analogamente sage -> SAGE, sage_soc -> SAGE (peuk).
+Il suffisso di ogni etichetta e' la batteria dei device (lin, peuk, nm:
+lineare, Peukert, datasheet). Le quattro varianti di ESCS sono collassate in
+una curva per batteria, la media di {sd, sp, md, mp}:
+    ESCS (lin)    i quattro escs_*_lin
+    ESCS (peuk)   i quattro escs_*_peuk
+    ESCS (nm)     i quattro escs_*_nm
+SAGE e SAGE-smart restano separati: sage_lin (il SAGE del paper),
+sage_peuk e sage_nm (l'ablazione), sage_smart_lin / _peuk / _nm.
 
 [B] con device omogenei escs_sd ed escs_md danno risultati IDENTICI, e cosi'
 escs_sp ed escs_mp: la distinzione system-based / model-based del paper e'
@@ -49,7 +50,7 @@ Il pannello dei morti di fig9 lo rende visibile.
 
 SERIE AGGREGATA SUI BETA (suffisso _ball)
 Oltre a una serie per ogni beta viene prodotta una serie "pooled" che mette
-insieme tutte le beta, con le stesse dieci figure.
+insieme tutte le beta, con le stesse nove figure.
 
 [B] i tre beta sono REGIMI DIVERSI, non ripetizioni dello stesso esperimento:
 a beta 0.1 l'accuratezza di coda sta intorno a 0.45 e a beta 1.0 intorno a
@@ -60,10 +61,12 @@ La serie _ball serve a dare un quadro d'insieme in una slide; le conclusioni
 vanno tratte dalle serie per beta. Le figure pooled lo dicono in didascalia.
 
 COSA E' L'ENERGIA: la carica estratta dalla batteria, convertita in Wh come
-V_nom * C_Ah * (-dSoC), sommata su tutti i client e tutti i round (training +
-comunicazione). Il dSoC lo calcola Peukert, quindi lo stesso lavoro costa piu'
-carica se erogato a corrente piu' alta. E' l'energia che la batteria PAGA, non
-il lavoro utile prodotto dal device.
+V_nom * C_Ah * (-dSoC), sommata su tutti i client e tutti i round (training,
+comunicazione, idle). Il dSoC lo calcola la batteria del mondo della run:
+con quella lineare coincide con P*dt, con Peukert le correnti basse costano
+meno, col datasheet la stessa energia costa piu' carica a batteria scarica.
+E' l'energia che la batteria PAGA, non il lavoro utile prodotto dal device
+(quello e' energy_lin_wh nel CSV).
 
 [B] con device identici il SoC medio e' una trasformazione affine ESATTA
 dell'energia cumulata:
@@ -101,14 +104,18 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.transforms import Bbox
 
-# label del CSV -> gruppo mostrato nei grafici. I quattro ESCS Peukert
-# confluiscono in "escs_peuk", i quattro lineari in "escs".
+# label del CSV -> gruppo mostrato nei grafici. Il suffisso e' la batteria
+# dei device, cioe' quella fisica del mondo in cui la run ha girato:
+#   lin    lineare     (fedavg, fedprox, sage_lin = SAGE del paper, *_lin)
+#   peuk   Peukert     (*_peuk)
+#   nm     datasheet   (*_nm)
+# Le quattro varianti ESCS confluiscono in un gruppo per batteria.
+_ESCS = ("sd", "sp", "md", "mp")
+_BATT = ("lin", "peuk", "nm")
 GROUP = {
-    "escs_sd": "escs_peuk", "escs_sp": "escs_peuk",
-    "escs_md": "escs_peuk", "escs_mp": "escs_peuk",
-    "escs_sd_lin": "escs", "escs_sp_lin": "escs",
-    "escs_md_lin": "escs", "escs_mp_lin": "escs",
-    "sage": "sage", "sage_soc": "sage_peuk", "sage_smart" : "sage_smart",
+    **{f"escs_{v}_{b}": f"escs_{b}" for v in _ESCS for b in _BATT},
+    **{f"sage_{b}": f"sage_{b}" for b in _BATT},
+    **{f"sage_smart_{b}": f"sage_smart_{b}" for b in _BATT},
     "fedavg": "fedavg", "fedprox": "fedprox",
 }
 GROUPED = True          # spento da --no-group
@@ -121,46 +128,39 @@ def group_of(label):
     return GROUP.get(label, label)
 
 
-ORDER_GROUPED = ["fedavg", "fedprox", "sage", "sage_peuk", "sage_smart", "escs", "escs_peuk"]
-ORDER = ["fedavg", "fedprox", "sage", "sage_soc", "sage_smart", 
-         "escs_sd", "escs_sp", "escs_md", "escs_mp",
-         "escs_sd_lin", "escs_sp_lin", "escs_md_lin", "escs_mp_lin"]
+ORDER_GROUPED = ["fedavg", "fedprox",
+                 "sage_lin", "sage_peuk", "sage_nm",
+                 "sage_smart_lin", "sage_smart_peuk", "sage_smart_nm",
+                 "escs_lin", "escs_peuk", "escs_nm"]
+ORDER = (["fedavg", "fedprox", "sage_lin", "sage_peuk", "sage_nm",
+          "sage_smart_lin", "sage_smart_peuk", "sage_smart_nm"]
+         + [f"escs_{v}_{b}" for b in _BATT for v in _ESCS])
+_BNAME = {"lin": "lin", "peuk": "peuk", "nm": "nm"}
 LABEL = {"fedavg": "FedAvg", "fedprox": "FedProx",
-         "sage": "SAGE", "sage_soc": "SAGE (peuk)",
-         "sage_peuk": "SAGE (peuk)", "sage_smart": "SAGE-smart",
-         "escs": "ESCS", "escs_peuk": "ESCS (peuk)",
-         "escs_sd": "ESCS-SD", "escs_sp": "ESCS-SP",
-         "escs_md": "ESCS-MD", "escs_mp": "ESCS-MP",
-         "escs_sd_lin": "ESCS-SD (lin)", "escs_sp_lin": "ESCS-SP (lin)",
-         "escs_md_lin": "ESCS-MD (lin)", "escs_mp_lin": "ESCS-MP (lin)"}
+         **{f"sage_{b}": f"SAGE ({_BNAME[b]})" for b in _BATT},
+         **{f"sage_smart_{b}": f"SAGE-smart ({_BNAME[b]})" for b in _BATT},
+         **{f"escs_{b}": f"ESCS ({_BNAME[b]})" for b in _BATT},
+         **{f"escs_{v}_{b}": f"ESCS-{v.upper()} ({_BNAME[b]})"
+            for v in _ESCS for b in _BATT}}
+_ESCS_COLOR = {"sd": "#2ca02c", "sp": "#98df8a", "md": "#17becf", "mp": "#9edae5"}
 COLOR = {"fedavg": "#444444", "fedprox": "#1f77b4",
-         "sage": "#d62728", "sage_soc": "#e377c2", "sage_smart": "#9467bd",
-         "escs": "#c0392b", "escs_peuk": "#1a7f37",
-         "escs_sd": "#2ca02c", "escs_sp": "#98df8a",
-         "escs_md": "#17becf", "escs_mp": "#9edae5",
-         "escs_sd_lin": "#2ca02c", "escs_sp_lin": "#98df8a",
-         "escs_md_lin": "#17becf", "escs_mp_lin": "#9edae5"}
-# tratteggio = contabilita' lineare (i paper), continuo = Peukert (la tesi)
-STYLE = {"sage": "--", "escs": "--",
-         "sage_soc": "--", "escs_sp": "--", "escs_mp": "--",
-         "escs_sd_lin": ":", "escs_md_lin": ":",
-         "escs_sp_lin": "-.", "escs_mp_lin": "-."}
-# coppie (contabilita' lineare, contabilita' Peukert): stesso algoritmo,
-# stessa taratura, unica differenza la risorsa vista dal selettore
-PAIRS = [("sage", "sage_soc"),
-         ("escs_sd_lin", "escs_sd"),
-         ("escs_sp_lin", "escs_sp"),
-         ("escs_md_lin", "escs_md"),
-         ("escs_mp_lin", "escs_mp")]
-PAIRS_GROUPED = [("sage", "sage_peuk"), ("escs", "escs_peuk")]
-
-# capacita' nominale del device, per convertire Wh in frazione di SoC in fig10
-try:
-    from device.constants import BATTERY_CAPACITY_MAH, V_NOMINAL
-except ImportError:
-    BATTERY_CAPACITY_MAH, V_NOMINAL = 200.0, 3.7
-CAP_WH = BATTERY_CAPACITY_MAH / 1000.0 * V_NOMINAL
-N_CLIENTS = 30      # sovrascritti da --capacity/--clients, o dedotti da --dir
+         "sage_lin": "#d62728", "sage_peuk": "#ff9896", "sage_nm": "#e377c2",
+         **{f"sage_smart_{b}": "#9467bd" for b in _BATT},
+         "escs_lin": "#17becf", "escs_peuk": "#bcbd22", "escs_nm": "#1a7f37",
+         **{f"escs_{v}_{b}": c for v, c in _ESCS_COLOR.items() for b in _BATT}}
+# tratteggio = lineare, punteggiato = Peukert, continuo = datasheet
+_DASH = {"lin": "--", "peuk": ":", "nm": "-"}
+STYLE = {**{f"sage_{b}": _DASH[b] for b in _BATT},
+         **{f"sage_smart_{b}": _DASH[b] for b in _BATT},
+         **{f"escs_{b}": _DASH[b] for b in _BATT},
+         **{f"escs_{v}_{b}": _DASH[b] for v in _ESCS for b in _BATT}}
+# coppie (batteria lineare, batteria da datasheet): stesso algoritmo, unica
+# differenza la batteria dei device. [B] per SAGE la coppia sage_lin ->
+# sage_nm cambia anche l'algoritmo (paper -> ablazione).
+PAIRS = ([("sage_lin", "sage_nm"), ("sage_smart_lin", "sage_smart_nm")]
+         + [(f"escs_{v}_lin", f"escs_{v}_nm") for v in _ESCS])
+PAIRS_GROUPED = [("sage_lin", "sage_nm"), ("sage_smart_lin", "sage_smart_nm"),
+                 ("escs_lin", "escs_nm")]
 
 TAIL = 20        # round di coda su cui mediare l'accuracy finale
 THRESHOLD = 0.40  # soglia di accuracy per fig7
@@ -258,13 +258,13 @@ def _place_labels(ax, items, pad=2.0):
 
 
 def fig_accounting(results_dir, out, beta):
-    """Effetto del cambio di contabilita': una freccia per coppia.
+    """Effetto della batteria dei device: una freccia per coppia.
 
-    [B] la coda della freccia e' la contabilita' LINEARE (quella dei paper),
-    la punta e' PEUKERT. Frecce che puntano tutte a sinistra dicono che la
-    correzione elimina gli esaurimenti; la componente verticale dice quanto
-    costa in accuratezza. E' l'unico modo onesto di mostrarlo: a beta alto
-    l'accuracy scende un poco, e il grafico non lo nasconde.
+    [B] la coda della freccia e' la run con batteria LINEARE, la punta la
+    stessa run con batteria da DATASHEET (nm). La componente orizzontale dice
+    quanti device in piu' o in meno si esauriscono con la batteria realistica,
+    quella verticale quanto cambia l'accuratezza. Per SAGE la coppia cambia
+    anche l'algoritmo (paper -> ablazione).
     """
     by_lab = _rows_by_beta(results_dir, beta)
     pt = {}
@@ -294,6 +294,7 @@ def fig_accounting(results_dir, out, beta):
         labels.append((pt["fedavg"][0], pt["fedavg"][1],
                        f"FedAvg ({pt['fedavg'][0]:.0f}\u2020)", "#444444"))
 
+    heads = set()
     for lin, peu in pairs:
         c = COLOR.get(peu, "#333333")
         x0, y0 = pt[lin]
@@ -303,13 +304,17 @@ def fig_accounting(results_dir, out, beta):
                                     shrinkA=6, shrinkB=6, alpha=0.9))
         ax.plot(x0, y0, marker="o", ms=7, mfc="white", mec=c, mew=1.8)
         ax.plot(x1, y1, marker="o", ms=8, color=c)
-        name = LABEL.get(peu, peu).replace(" (SoC)", "")
-        labels.append((x1, y1, name, c))
+        # [B] se piu' code puntassero alla stessa testa, la testa si etichetta
+        # una volta sola
+        labels.append((x0, y0, LABEL.get(lin, lin), COLOR.get(lin, c)))
+        if peu not in heads:
+            heads.add(peu)
+            labels.append((x1, y1, LABEL.get(peu, peu).replace(" (SoC)", ""), c))
 
     ax.set_xlabel("Depleted clients at end of run (out of 30)")
     ax.set_ylabel(f"Test accuracy (mean of last {TAIL} rounds)")
-    ax.set_title(f"Effect of the energy accounting — β = {beta_str(beta)}\n"
-                 "arrow tail = linear residual energy, head = Peukert SoC;")
+    ax.set_title(f"Effect of the device battery model — β = {beta_str(beta)}\n"
+                 "arrow tail = linear battery, head = datasheet battery")
     ax.grid(alpha=0.3)
     ax.margins(0.16)
     _place_labels(ax, labels)
@@ -701,10 +706,9 @@ def _per_round_group(runs, key):
 def fig_reserve(results_dir, out, beta, reserve=0.20):
     """SoC del client piu' scarico e morti cumulati, round per round.
 
-    E' la figura piu' diretta del confronto fra contabilita': il braccio
-    Peukert si ferma alla riserva perche' il selettore vede la carica vera,
-    quello lineare la sfonda perche' crede di avere piu' margine di quanto
-    ne abbia, e i client si esauriscono.
+    Mostra se la riserva tiene e quando i device iniziano a morire, per ogni
+    algoritmo e batteria (tratteggio lineare, punteggiato Peukert, continuo
+    datasheet).
     """
     by_lab = _rows_by_beta(results_dir, beta)
     if not by_lab:
@@ -738,82 +742,10 @@ def fig_reserve(results_dir, out, beta, reserve=0.20):
     ax2.legend(fontsize=8)
 
     fig.suptitle(f"Battery reserve and device depletion \u2014 \u03b2 = {beta}\n"
-                 "dashed = linear residual energy (as published), "
-                 "solid = Peukert SoC", fontsize=11)
+                 "device battery: dashed = linear, dotted = Peukert, "
+                 "solid = datasheet", fontsize=11)
     fig.tight_layout(rect=[0, 0, 1, 0.93])
     fig.savefig(out, dpi=160)
-    plt.close(fig)
-    return True
-
-
-def fig_estimation(results_dir, out, beta, reserve=0.20):
-    """Il MECCANISMO: carica creduta dal selettore contro carica reale.
-
-    Un pannello per ogni algoritmo a contabilita' lineare. Il selettore stima
-    la carica residua come
-        SoC_creduto = SoC_0 - Wh_lineari / capacita'
-    dove i Wh lineari sono P*dt, senza Peukert. Poiche' Peukert fa pagare di
-    piu' la stessa potenza (~1.26x sul training, ~1.66x sulla comunicazione),
-    la stima e' sistematicamente ottimista e l'errore si accumula. Quando il
-    selettore crede di essere alla soglia di riserva, la batteria e' gia'
-    sotto: e' il motivo per cui i bracci lineari esauriscono i device.
-
-    SoC_0 e' ricostruito dal primo round, prima di qualunque clamping:
-        SoC_0 = mean_soc(1) + Wh_peukert(1) / (N * capacita')
-
-    [B] dopo le prime morti il SoC reale medio e' clampato a 0, quindi
-    l'errore mostrato SOTTOSTIMA quello vero: la banda e' un limite inferiore.
-
-    [B] i gradini nelle curve di gruppo sono i round in cui una variante si
-    esaurisce e smette di contribuire alla media (vedi _per_round_group).
-    """
-    by_lab = _rows_by_beta(results_dir, beta)
-    lin_labs = [a for a in order_of(by_lab)
-                if a in ("escs", "sage") or a.endswith("_lin")]
-    panels = []
-    for a in lin_labs:
-        runs = by_lab.get(a) or []
-        if not runs or "energy_lin_wh" not in runs[0][0]:
-            continue
-        denom = N_CLIENTS * CAP_WH
-        R, true_soc, _ = _per_round_group(runs, "mean_soc")
-        _, e_peuk, _ = _per_round_group(runs, "total_energy_wh")
-        _, e_lin, _ = _per_round_group(runs, "energy_lin_wh")
-        if not R or not e_lin:
-            continue
-        soc0 = true_soc[0] + e_peuk[0] / denom
-        panels.append((a, R, [soc0 - e / denom for e in e_lin], true_soc))
-    if not panels:
-        return False
-
-    fig, axes = plt.subplots(1, len(panels), figsize=(6.2 * len(panels), 5.4),
-                             squeeze=False, sharey=True)
-    for ax, (a, R, believed, true_soc) in zip(axes[0], panels):
-        ax.plot(R, believed, color="#2c7fb8", lw=2,
-                label="SoC believed by the selector")
-        ax.plot(R, true_soc, color="#c0392b", lw=2, label="true SoC (Peukert)")
-        ax.fill_between(R, true_soc, believed, color="#c0392b", alpha=0.16,
-                        lw=0, label="overestimation")
-        ax.axhline(reserve, color="k", ls=":", lw=1.2)
-        ax.annotate("reserve", (1.0, reserve), xycoords=("axes fraction", "data"),
-                    ha="right", va="bottom", fontsize=8, color="#555555")
-        gap = believed[-1] - true_soc[-1]
-        ax.set_title(f"{LABEL.get(a, a)}  (final gap {gap:+.3f} SoC)", fontsize=11)
-        ax.set_xlabel("Communication round")
-        ax.grid(alpha=0.3)
-        ax.legend(fontsize=8, loc="lower left")
-    axes[0][0].set_ylabel("Mean state of charge")
-
-    fig.suptitle(f"Why the linear model depletes devices \u2014 \u03b2 = {beta}\n"
-                 "the selector believes it has more charge than the battery holds",
-                 fontsize=12)
-    note = ("Shaded area is a lower bound: once clients die the true mean SoC "
-            "is clamped at zero.")
-    if beta == ALL:
-        note += "\n" + POOLED_NOTE
-    fig.text(0.01, -0.02, note, fontsize=7.5, color="#555555")
-    fig.tight_layout(rect=[0, 0, 1, 0.90])
-    fig.savefig(out, dpi=160, bbox_inches="tight")
     plt.close(fig)
     return True
 
@@ -830,25 +762,10 @@ def main():
     ap.add_argument("--threshold", type=float, default=THRESHOLD,
                     help="soglia di accuracy per fig7")
     ap.add_argument("--reserve", type=float, default=0.20,
-                    help="soglia di riserva del SoC, per fig9 e fig10")
+                    help="soglia di riserva del SoC, per fig9")
     ap.add_argument("--no-group", action="store_true",
                     help="non raggruppare le varianti ESCS")
-    ap.add_argument("--capacity", type=float, default=None,
-                    help="capacita' in mAh; se omessa si deduce da results_c<CAP>_n<N>")
-    ap.add_argument("--clients", type=int, default=None,
-                    help="numero di client; se omesso si deduce dal nome della cartella")
     args = ap.parse_args()
-
-    # [B] fig10 converte Wh in frazione di SoC e serve la capacita' GIUSTA
-    # della cella: con --dir results_c100_n10 usare 200 mAh sballerebbe la
-    # curva di un fattore due. Il nome della cartella la contiene, quindi
-    # la si deduce, e --capacity/--clients la sovrascrivono.
-    global CAP_WH, N_CLIENTS
-    m = re.search(r"_c(\d+)_n(\d+)", os.path.basename(os.path.normpath(args.dir)))
-    cap_mah = args.capacity if args.capacity else (float(m.group(1)) if m else BATTERY_CAPACITY_MAH)
-    N_CLIENTS = args.clients if args.clients else (int(m.group(2)) if m else 30)
-    CAP_WH = cap_mah / 1000.0 * V_NOMINAL
-    print(f"[cella] {cap_mah:.0f} mAh, N={N_CLIENTS}")
 
     global GROUPED
     GROUPED = not args.no_group
@@ -874,7 +791,6 @@ def main():
         f7 = os.path.join(args.dir, f"fig7_thr_soc_b{t}.png")
         f8 = os.path.join(args.dir, f"fig8_accounting_b{t}.png")
         f9 = os.path.join(args.dir, f"fig9_reserve_b{t}.png")
-        f10 = os.path.join(args.dir, f"fig10_estimation_b{t}.png")
         fig_energy_accuracy(data[beta], f1, beta, args.smooth)
         fig_accuracy_rounds(data[beta], f2, beta, args.smooth)
         fig_pareto(data[beta], f3, beta)
@@ -891,8 +807,6 @@ def main():
             print(f"  {f8}")
         if fig_reserve(args.dir, f9, beta, args.reserve):
             print(f"  {f9}")
-        if fig_estimation(args.dir, f10, beta, args.reserve):
-            print(f"  {f10}")
 
 
 if __name__ == "__main__":

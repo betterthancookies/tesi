@@ -9,8 +9,11 @@ import numpy as np
 from device.battery_model import (
     delta_soc, energy_wh_from_delta_soc, energy_wh_linear,
 )
-from device.communication_model import comm_power_w, comm_time_s
-from device.compute_model import training_time_s
+from device.battery_model_peukert import delta_soc as peukert_delta_soc
+from device.communication_model import (
+    comm_power_w, comm_time_s, ctrl_power_w, ctrl_time_s,
+)
+from device.compute_model import probe_time_s, training_time_s
 from device.constants import (
     DCDC_EFFICIENCY,
     BATCH_SIZE_REF,
@@ -25,9 +28,55 @@ from device.constants import (
     RECHARGE_AVAILABLE_DEFAULT,
     RECHARGE_PROB_BASE,
     TRAIN_POWER_W,
+    V_NOMINAL,
 )
 from device.device_profile import DeviceProfile, generate_profiles
 from device.workload import WorkloadModel
+
+
+# [B] funzioni di modulo, non metodi: le usa anche il CLIENT di sage_smart
+# (device/fuel_gauge.py) per prevedere il proprio consumo. Se client e mondo
+# avessero due copie della stessa formula, prima o poi divergerebbero.
+def effective_profile(p: DeviceProfile, w: float) -> DeviceProfile:
+    """Profilo col throughput ridotto dal workload w."""
+    if w <= 0.0:
+        return p
+    return DeviceProfile(
+        cid=p.cid, battery_capacity_mah=p.battery_capacity_mah,
+        macs_per_s=p.macs_per_s * max(1e-3, 1.0 - w),
+        peukert_n=p.peukert_n, tier=p.tier,
+    )
+
+
+def training_power_w(batch_size: int) -> float:
+    """P(B) = P0 * (B/B_ref)^gamma, limitata in [mult_min, mult_max] * P0."""
+    mult = (batch_size / BATCH_SIZE_REF) ** POWER_EXPONENT_BATCH
+    mult = min(max(mult, POWER_BATCH_MULT_MIN), POWER_BATCH_MULT_MAX)
+    return TRAIN_POWER_W * mult
+
+
+# batterie dei device: una per mondo, vedi WorldState
+BATTERIES = ("lin", "peuk", "nm")
+BATTERY_NAMES = {"lin": "linear", "peuk": "Peukert", "nm": "datasheet"}
+
+
+def battery_delta_soc(battery: str, power_w: float, dt_s: float,
+                      profile: DeviceProfile, soc: float) -> float:
+    """Variazione di SoC (<= 0) della batteria `battery` per power_w x dt_s.
+
+    lin   SoC -= P/eta * dt / (V_nom * C_nom)                (energy_wh_linear)
+    peuk  SoC -= dt / t_pieno,  t_pieno = C' / I^n           (battery_model_peukert)
+    nm    SoC -= I * dt / Q(I), P = V(SoC, I) * I            (battery_model)
+    Solo nm dipende dal SoC corrente: la tensione cala al calare della carica.
+    """
+    if battery == "nm":
+        return delta_soc(power_w, dt_s, profile, soc)
+    if battery == "peuk":
+        return peukert_delta_soc(power_w, dt_s, profile)
+    if battery == "lin":
+        cap_wh = profile.battery_capacity_mah / 1000.0 * V_NOMINAL
+        return -energy_wh_linear(power_w, dt_s) / cap_wh
+    raise ValueError(f"batteria '{battery}': una fra {BATTERIES}")
 
 
 @dataclass(frozen=True)
@@ -40,7 +89,7 @@ class WorldStateSnapshot:
 
 
 class WorldState:
-    """Mondo fisico: tre tier di device, workload concorrente, scarica Peukert.
+    """Mondo fisico: tre tier di device, workload concorrente, idle, ricarica.
 
     Un device che tocca SoC 0 e' morto in modo permanente e non torna
     disponibile.
@@ -67,22 +116,36 @@ class WorldState:
     mondo torna esattamente a quello delle campagne precedenti. E' il test che
     separa l'effetto dell'eterogeneita' da quello della politica.
 
+    LA BATTERIA DEI DEVICE (`battery`), una per mondo:
+      lin   lineare:  SoC <- SoC - (P/eta * dt) / (V_nom * C_nom)
+      peuk  Peukert:  SoC <- SoC - dt / (C' / I^n)      (battery_model_peukert)
+      nm    datasheet: P = V(SoC, I) * I, SoC <- SoC - I * dt / Q(I)
+                                                        (battery_model)
+    E' la batteria FISICA del mondo: con essa si scaricano tutti i device a
+    ogni consumo (training, comunicazione, controllo, idle), e un device muore
+    quando il SUO SoC tocca zero. Gli algoritmi leggono questo SoC, cioe'
+    quello del telefono. Tier, workload, idle e ricarica sono identici nei
+    tre mondi: a parita' di seed cambia SOLO come la batteria traduce la
+    potenza in SoC.
+
     DUE CONTABILITA' ENERGETICHE, tenute separate di proposito:
-      - Peukert:  Wh = V * C_rated * |dSoC|, la carica che la batteria paga
-                  davvero. E' quella dei contatori globali (stats, CSV).
-      - lineare:  Wh = P/eta * dt, potenza per tempo. E' quella che vedono
-                  SAGE ed ESCS originali, che sottraggono i Wh spesi dalla
-                  capacita' nominale: sottostimano il consumo reale.
-    apply_round/apply_communication restituiscono entrambe, cosi' una
-    strategia "orig" puo' usare la lineare e il confronto con la variante SoC
-    misura davvero l'errore del modello lineare, non altro.
+      - batteria: Wh = V_nom * C_nom * |dSoC|, la carica che la batteria del
+                  mondo paga. E' quella dei contatori globali (total_energy_wh).
+      - carico:   Wh = P/eta * dt, l'energia che il device usa (energy_lin_wh).
+    Nel mondo lin coincidono. Negli altri la stessa energia al carico costa
+    piu' o meno carica: Peukert fa pagare poco le correnti basse (idle), il
+    datasheet fa pagare di piu' a batteria scarica (tensione bassa).
     """
 
     def __init__(self, profiles: list[DeviceProfile], seed: int,
                  workload: WorkloadModel | None = None,
                  idle_enabled: bool = True,
                  recharge_enabled: bool = False,
-                 recharge_available: bool = RECHARGE_AVAILABLE_DEFAULT) -> None:
+                 recharge_available: bool = RECHARGE_AVAILABLE_DEFAULT,
+                 battery: str = "nm") -> None:
+        if battery not in BATTERIES:
+            raise ValueError(f"batteria '{battery}': una fra {BATTERIES}")
+        self.battery = battery
         self._profiles = {p.cid: p for p in profiles}
         self._rng = np.random.default_rng(seed)
         self._idle_enabled = bool(idle_enabled)
@@ -100,11 +163,12 @@ class WorldState:
         }
         # [B] il SoC iniziale e' un dato noto anche ai paper di riferimento
         # (SAGE: E_i iniziale da gaussiana; ESCS: battery iniziale 30-100%).
-        # Le strategie "orig" partono da qui, non da 1.
         self._soc0: dict[int, float] = dict(self._soc)
         self._failed: dict[int, bool] = {cid: False for cid in self._profiles}
         self._energy_wh: dict[int, float] = {cid: 0.0 for cid in self._profiles}
         self._energy_comm_wh: dict[int, float] = {cid: 0.0 for cid in self._profiles}
+        # messaggi di controllo (stato, proposte): solo sage_smart li usa
+        self._energy_ctrl_wh: dict[int, float] = {cid: 0.0 for cid in self._profiles}
         self._energy_lin_wh: dict[int, float] = {cid: 0.0 for cid in self._profiles}
         self._energy_idle_wh: dict[int, float] = {cid: 0.0 for cid in self._profiles}
         # energia presa dalla RETE durante le cariche: non pesa sulla batteria
@@ -166,12 +230,17 @@ class WorldState:
     def initial_soc(self, cid: int) -> float:
         return self._soc0[cid]
 
+    def capacity_wh(self, cid: int) -> float:
+        """Capacita' nominale in Wh, V_nom * C_nom."""
+        return self._profiles[cid].battery_capacity_mah / 1000.0 * V_NOMINAL
+
     def energy_wh(self, cid: int) -> float:
-        """Energia cumulata (train + comm) del client, in Wh (Peukert)."""
-        return self._energy_wh[cid] + self._energy_comm_wh[cid]
+        """Carica cumulata (train + comm + controllo) del client, in Wh."""
+        return (self._energy_wh[cid] + self._energy_comm_wh[cid]
+                + self._energy_ctrl_wh[cid])
 
     def energy_lin_wh(self, cid: int) -> float:
-        """Energia cumulata (train + comm) del client, in Wh LINEARI (P*dt)."""
+        """Energia al carico cumulata del client, P*dt, idle incluso."""
         return self._energy_lin_wh[cid]
 
     def energy_idle_wh(self, cid: int) -> float:
@@ -215,15 +284,8 @@ class WorldState:
     # -------------------------------------------------------------- tempi
     def effective_profile(self, cid: int) -> DeviceProfile:
         """Profilo col throughput ridotto dal workload corrente."""
-        p = self._profiles[cid]
-        w = self.workload.utilization(cid)
-        if w <= 0.0:
-            return p
-        return DeviceProfile(
-            cid=p.cid, battery_capacity_mah=p.battery_capacity_mah,
-            macs_per_s=p.macs_per_s * max(1e-3, 1.0 - w),
-            peukert_n=p.peukert_n, tier=p.tier,
-        )
+        return effective_profile(self._profiles[cid],
+                                 self.workload.utilization(cid))
 
     def round_duration_s(
         self, cid: int, epochs: int, batch_size: int, dataset_size_local: int,
@@ -239,17 +301,26 @@ class WorldState:
         p = self.effective_profile(cid) if include_workload else self._profiles[cid]
         return training_time_s(p, epochs, dataset_size_local, batch_size)
 
+    def probe_duration_s(self, cid: int, n_samples: int) -> float:
+        """Forward di sola valutazione su n_samples, col workload corrente.
+
+        E' la stima della loss locale che il client di sage_smart fa prima
+        di decidere (E, B): costa poco, ma non e' gratis e va addebitata.
+        """
+        return probe_time_s(self.effective_profile(cid), n_samples)
+
     def communication_time_s(self, cid: int) -> float:
         return comm_time_s()
 
     def training_power_w(self, cid: int, batch_size: int) -> float:
-        mult = (batch_size / BATCH_SIZE_REF) ** POWER_EXPONENT_BATCH
-        mult = min(max(mult, POWER_BATCH_MULT_MIN), POWER_BATCH_MULT_MAX)
-        return TRAIN_POWER_W * mult
+        return training_power_w(batch_size)
 
     # ------------------------------------------------------------ consumo
     def _drain(self, cid: int, power_w: float, dt_s: float) -> tuple[float, float]:
-        """Applica power_w per dt_s. Ritorna (Wh Peukert, Wh lineari) pagati."""
+        """Applica power_w per dt_s con la batteria del mondo.
+
+        Ritorna (Wh di carica pagati dalla batteria, Wh al carico P*dt).
+        """
         if self._failed[cid]:
             return 0.0, 0.0
         if self._charging[cid]:
@@ -259,7 +330,7 @@ class WorldState:
             return 0.0, 0.0
         profile = self._profiles[cid]
         soc = self._soc[cid]
-        d_req = delta_soc(power_w, dt_s, profile, soc)
+        d_req = battery_delta_soc(self.battery, power_w, dt_s, profile, soc)
         new_soc = max(0.0, min(1.0, soc + d_req))
         # [B] energia dal delta EFFETTIVO, non da quello richiesto: il SoC e'
         # clampato a 0 ma il delta no, quindi un client che muore nel round
@@ -268,8 +339,8 @@ class WorldState:
         self._soc[cid] = new_soc
         if new_soc <= 0.0:
             self._failed[cid] = True
-        # la lineare va scalata con la stessa frazione effettiva: se il
-        # client muore a meta' round paga meta' anche nella contabilita' P*dt
+        # l'energia al carico va scalata con la stessa frazione effettiva: se
+        # il client muore a meta' round, ha lavorato solo per meta' round
         frac = d / d_req if d_req < 0.0 else 0.0
         e_lin = energy_wh_linear(power_w, dt_s) * frac
         self._energy_lin_wh[cid] += e_lin
@@ -278,6 +349,17 @@ class WorldState:
     def apply_round(self, cid: int, dt_s: float, batch_size: int) -> tuple[float, float]:
         e, e_lin = self._drain(cid, self.training_power_w(cid, batch_size), dt_s)
         self._energy_wh[cid] += e
+        return e, e_lin
+
+    def apply_control(self, cid: int, merged: bool = False) -> tuple[float, float]:
+        """Uno scambio di controllo (richiesta + risposta) con il server.
+
+        merged=True se lo scambio cade nella sessione radio del download del
+        modello che segue (client selezionato): paga il solo payload. Vedi
+        communication_model.
+        """
+        e, e_lin = self._drain(cid, ctrl_power_w(merged), ctrl_time_s(merged))
+        self._energy_ctrl_wh[cid] += e
         return e, e_lin
 
     def apply_communication(self, cid: int) -> tuple[float, float]:
@@ -350,9 +432,12 @@ class WorldState:
     def total_energy_idle_wh(self) -> float:
         return sum(self._energy_idle_wh.values())
 
+    def total_energy_ctrl_wh(self) -> float:
+        return sum(self._energy_ctrl_wh.values())
+
     def total_energy_wh(self) -> float:
         return (self.total_energy_train_wh() + self.total_energy_comm_wh()
-                + self.total_energy_idle_wh())
+                + self.total_energy_ctrl_wh() + self.total_energy_idle_wh())
 
     def total_energy_lin_wh(self) -> float:
         return sum(self._energy_lin_wh.values())
@@ -363,6 +448,7 @@ class WorldState:
             "total_energy_wh": self.total_energy_wh(),
             "energy_train_wh": self.total_energy_train_wh(),
             "energy_comm_wh": self.total_energy_comm_wh(),
+            "energy_ctrl_wh": self.total_energy_ctrl_wh(),
             "energy_idle_wh": self.total_energy_idle_wh(),
             "energy_grid_wh": sum(self._energy_grid_wh.values()),
             "energy_lin_wh": self.total_energy_lin_wh(),
@@ -399,11 +485,13 @@ def build_world_state(n_clients: int, seed: int,
                       idle_enabled: bool = True,
                       recharge_enabled: bool = False,
                       recharge_available: bool = True,
+                      battery: str = "nm",
                       **kwargs) -> WorldState:
-    """`battery_variant` accettato e ignorato: resta solo Peukert.
+    """`battery` e' la batteria dei device: "lin", "peuk" o "nm".
 
     I tre flag disattivano tier, workload e idle. Tutti a False riproducono
-    esattamente il mondo delle campagne precedenti.
+    esattamente il mondo delle campagne precedenti. Lo stesso seed da' la
+    stessa popolazione (tier, SoC iniziali, workload) in tutti e tre i mondi.
     """
     profiles = generate_profiles(n_clients, seed=seed, capacity_mah=capacity_mah,
                                  tiers_enabled=tiers_enabled)
@@ -412,7 +500,8 @@ def build_world_state(n_clients: int, seed: int,
     return WorldState(profiles=profiles, seed=seed, workload=workload,
                       idle_enabled=idle_enabled,
                       recharge_enabled=recharge_enabled,
-                      recharge_available=recharge_available)
+                      recharge_available=recharge_available,
+                      battery=battery)
 
 
 if __name__ == "__main__":

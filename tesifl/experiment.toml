@@ -1,5 +1,5 @@
 [campaign]
-name        = "rechargeONdeviceON_ResNet20_newBatt"          # -> risultati in results_<name>/
+name        = "rechargeONdeviceON_ResNet20_batterie"        # -> risultati in results_<name>/
 rounds      = 250
 seeds       = [2026]         # [2026, 7, 13] per tre seed
 betas       = [0.1, 0.5, 1.0]
@@ -7,17 +7,39 @@ clients     = 30             # numero di SuperNode
 k_fraction  = 0.2            # client per round = round(k_fraction * clients)
 gpus        = [1, 2, 3]      # un SuperLink per GPU; i beta girano in parallelo
 stagger_s   = 180            # ritardo fra l'avvio di uno shard e il successivo
-timeout_s   = 3600           # una run oltre questo tempo e' considerata persa
+timeout_s   = 7200           # una run oltre questo tempo e' considerata persa
 
 # Algoritmi da eseguire. Commenta le righe che non ti servono.
+# Il suffisso dell'etichetta e' la BATTERIA DEI DEVICE, cioe' la batteria
+# fisica del mondo in cui gira la run (_shard.sh -> world-battery):
+#   _lin   lineare      SoC -= P*dt / (V_nom * C)
+#   _peuk  Peukert      SoC -= dt / (C' / I^n), n = battery.peukert_n
+#   _nm    datasheet    P = V(SoC, I) * I, SoC -= I*dt / Q(I)
+# Tier, workload, idle e ricarica sono gli stessi in tutti i mondi, e ogni
+# algoritmo legge il SoC della batteria del device.
+#               lineare           Peukert            datasheet
+#   SAGE        sage_lin (*)      sage_peuk          sage_nm
+#   SAGE-smart  sage_smart_lin    sage_smart_peuk    sage_smart_nm
+#   ESCS-SD     escs_sd_lin       escs_sd_peuk       escs_sd_nm
+# (*) sage_lin e' il SAGE del PAPER (pesi a,b,c di sage_abc, termine
+#     rinnovabile, soglia 0.2); sage_peuk e sage_nm sono l'ABLAZIONE (a,b di
+#     sage_ab, niente rinnovabile ne' soglia): fra sage_lin e gli altri due
+#     cambia anche l'algoritmo.
+# FedAvg e FedProx senza suffisso: batteria lineare (fedavg_nm ecc. per
+# farli girare in un altro mondo).
+# plot_battery_models.py mette i tre mondi di ogni algoritmo su un Pareto.
 algorithms = [
   "fedavg",
   "fedprox",
-  "sage",
-  "sage_soc",
-  "sage_smart",
-  "escs_sd",
+  "sage_lin",
+  "sage_peuk",
+  "sage_nm",
+  "sage_smart_lin",
+  "sage_smart_peuk",
+  "sage_smart_nm",
   "escs_sd_lin",
+  "escs_sd_peuk",
+  "escs_sd_nm",
 ]
 
 
@@ -73,6 +95,8 @@ dcdc_efficiency  = 1.0
 # cella 100 mAh / N=30 / beta=0.1. Tenuto a 1.15 come scelta dichiarata; la
 # violazione della soglia (SoC minimo 0.102 contro riserva 0.20) resta anche
 # a 1.05, ed e' l'affermazione robusta.
+# Usato dalla batteria di Peukert (mondo _peuk). La batteria da datasheet
+# (mondo _nm) non ha esponenti: tabelle V(SoC, I) e Q(I) in battery_model.py.
 peukert_n        = 1.15
 
 
@@ -90,6 +114,22 @@ bytes_per_param     = 4     # float32, nessuna compressione [ASSUNZIONE]
 energy_rx_j_per_mb  = 1.5   # [DAL RELATORE] 4G LTE; WiFi sarebbe ~0.1
 tx_rx_energy_ratio  = 1.5   # [ASSUNZIONE] TX piu' cara di RX
 bandwidth_mb_per_s  = 2.0   # [ASSUNZIONE]
+# Attivazione della radio LTE (macchina a stati RRC), Huang et al., "A Close
+# Examination of Performance and Power Characteristics of 4G LTE Networks",
+# MobiSys 2012, Tabella 3 e Sez. 4.1. Ogni SESSIONE radio (un trasferimento
+# isolato) paga una promozione IDLE->CONNECTED e poi resta accesa per Ttail
+# prima di tornare IDLE: ~12.6 J, qualunque sia la taglia del messaggio.
+# [B] e' cio' che rende NON gratuiti i messaggi di controllo (stato, proposta):
+# col solo costo per MB un heartbeat da 1 KB costerebbe ~1e-3 J. Vale per TUTTI
+# gli algoritmi: download e upload del modello sono due sessioni per round.
+# Metti session_tail_time_s = 0 e session_promo_time_s = 0 per tornare al
+# modello di comunicazione precedente (solo J/MB).
+session_promo_power_w = 1.2107   # LTE promotion, 1210.7 mW
+session_promo_time_s  = 0.2601   # Tpro, 260.1 ms
+session_tail_power_w  = 1.0600   # LTE tail base, 1060.0 mW
+session_tail_time_s   = 11.576   # Ttail (RRC inactivity timer), 11.576 s
+rtt_s                 = 0.0695   # RTT mediano LTE, 69.5 ms (Sez. 4.1)
+ctrl_payload_kb       = 1.0      # [ASSUNZIONE] messaggio di controllo, andata + ritorno
 
 
 # =====================================================================
@@ -136,16 +176,28 @@ learning_rate     = 0.01   # paper SAGE
 fraction_evaluate = 1.0
 proximal_mu       = 0.1    # FedProx
 
-# SAGE: pesi (a,b,c) per beta, ottimi di Table 1 del paper.
+# SAGE del paper (sage_lin): pesi (a,b,c) per beta, ottimi di Table 1.
 sage_abc = { "0.1" = [0.5, 0.0, 0.5], "0.5" = [0.2, 0.1, 0.7], "1.0" = [0.5, 0.2, 0.3] }
-# SAGE-peuk e SAGE-smart: pesi (a,b) per beta, dalla sweep in results_findbest.
-# [B] sage_smart usa gli stessi di sage_soc: il confronto fra i due isola
+# Ablazione di SAGE (sage_peuk, sage_nm) e SAGE-smart: pesi (a,b) per beta,
+# dalla sweep in results_findbest.
+# [B] SAGE-smart usa gli stessi dell'ablazione: il confronto fra i due isola
 # l'assegnazione dinamica di (E,B), non la taratura.
 sage_ab  = { "0.1" = [0.4, 0.6], "0.5" = [0.6, 0.4], "1.0" = [0.9, 0.1] }
 
-# SAGE-smart
-smart_stale_weight = 0.3   # peso dell'anzianita' nel punteggio
-smart_stale_max    = 25    # round dopo i quali l'anzianita' e' al massimo
+# SAGE-smart: il server seleziona (a*SoC + b*D + c*anzianita') e propone un
+# envelope di (E, B); il CLIENT sceglie dentro l'envelope con il proprio stato.
+# Etichette sage_smart_lin / _peuk / _nm: stesso algoritmo, cambia solo la
+# batteria dei device.
+smart_stale_weight   = 0.3    # peso (c) dell'anzianita' nel punteggio
+smart_stale_max      = 25     # round dopo i quali l'anzianita' e' al massimo
+smart_soc_min        = 0.20   # riserva che il client non intacca (vincolo 2e di SAGE)
+smart_epochs_min     = 2      # E_lo: minimo di epoche dell'envelope
+smart_deadline_mult  = 1.0    # deadline = mult * mediana dei tempi nominali (E, B di [algo])
+smart_probe_samples  = 256    # campioni locali per stimare la loss prima di decidere
+# Negoziazione prima del training (documento "Client Server Protocol" del
+# relatore, opzione 3 con l'opzione 2): il server ordina i client con una
+# stima del SoC, propone l'envelope ai candidati, chi rifiuta viene sostituito.
+smart_max_waves      = 2      # ondate di proposte per round (1 = nessun rimpiazzo)
 
 # ESCS
 escs_min_battery       = 0.20   # B_LVL_min, Table 4 del paper

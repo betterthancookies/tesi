@@ -41,25 +41,50 @@ for seed in $SEEDS; do
       SKIP=$((SKIP + 1)); continue
     fi
 
-    # label -> algoritmo + extra specifici
-    algo="$label"; extra=""
+    # label -> batteria dei device + algoritmo + extra specifici.
+    # Il suffisso _lin / _peuk / _nm e' la batteria FISICA del mondo (lineare,
+    # Peukert, datasheet); senza suffisso (fedavg, fedprox) e' lineare.
     case "$label" in
-      fedprox)        algo="fedprox" ;;
-      sage)           algo="sage";      extra="sage-a=${SA} sage-b=${SB} sage-c=${SC}" ;;
-      sage_soc)       algo="sage_soc";  extra="sage-a=${QA} sage-b=${QB}" ;;
-      sage_smart)     algo="sage_smart";      extra="sage-a=${QA} sage-b=${QB}" ;;
-      escs_sd)        algo="escs-sd" ;;
-      escs_sp)        algo="escs-sp" ;;
-      escs_md)        algo="escs-md" ;;
-      escs_mp)        algo="escs-mp" ;;
-      escs_sd_lin)    algo="escs-sd";  extra="escs-battery='energy'" ;;
-      escs_sp_lin)    algo="escs-sp";  extra="escs-battery='energy'" ;;
-      escs_md_lin)    algo="escs-md";  extra="escs-battery='energy'" ;;
-      escs_mp_lin)    algo="escs-mp";  extra="escs-battery='energy'" ;;
+      *_lin)  battery="lin" ;;
+      *_peuk) battery="peuk" ;;
+      *_nm)   battery="nm" ;;
+      *)      battery="lin" ;;
     esac
+    base="${label%_lin}"; base="${base%_peuk}"; base="${base%_nm}"
+    algo=""; extra=""
+    case "$base" in
+      fedavg)     algo="fedavg" ;;
+      fedprox)    algo="fedprox" ;;
+      # SAGE: nel mondo lineare quello del paper (a, b, c, rinnovabile),
+      # negli altri l'ablazione (a, b, niente rinnovabile ne' soglia)
+      sage)       if [ "$battery" = "lin" ]; then
+                    algo="sage";     extra="sage-a=${SA} sage-b=${SB} sage-c=${SC}"
+                  else
+                    algo="sage_soc"; extra="sage-a=${QA} sage-b=${QB}"
+                  fi ;;
+      sage_smart) algo="sage_smart"; extra="sage-a=${QA} sage-b=${QB}" ;;
+      escs_sd)    algo="escs-sd" ;;
+      escs_sp)    algo="escs-sp" ;;
+      escs_md)    algo="escs-md" ;;
+      escs_mp)    algo="escs-mp" ;;
+    esac
+    if [ -z "$algo" ]; then
+      echo "--- ${label}: etichetta sconosciuta, salto (vedi experiment.toml)"
+      FAIL=$((FAIL + 1)); continue
+    fi
+    extra="world-battery='${battery}'${extra:+ $extra}"
 
+    # [B] UNA CARTELLA PER RUN. Prima tutte le run dello shard scrivevano in
+    # ${WDIR} e lo shard prendeva il CSV piu' recente: una run oltre il
+    # timeout continuava a girare, il suo CSV arrivava mentre lo shard
+    # aspettava la run SUCCESSIVA e veniva salvato col nome sbagliato, e da li'
+    # tutte le etichette successive slittavano di una posizione (campagna
+    # rechargeONdeviceON_ResNet20_totale, beta 0.1). Con una cartella propria
+    # un CSV in ritardo non puo' finire sotto un'altra etichetta.
+    RDIR="${WDIR}/${label}_s${seed}"
+    rm -rf "${RDIR}"; mkdir -p "${RDIR}"
     cfg="num-server-rounds=${ROUNDS} algorithm='${algo}' seed=${seed} beta=${BETA}"
-    cfg="$cfg clients-per-round=${K} results-dir='${WDIR}'"
+    cfg="$cfg clients-per-round=${K} results-dir='${RDIR}'"
     cfg="$cfg ${WORLD} ${ALGOCFG}"
     [ -n "$extra" ] && cfg="$cfg $extra"
 
@@ -77,20 +102,25 @@ for seed in $SEEDS; do
     echo "  run_id=${rid}"
     printf "%s\t%s\t%s\t%s\n" "$seed" "$BETA" "$label" "$rid" >> "$TSV"
 
-    # attende il CSV
+    # attende il CSV di QUESTA run, nella sua cartella
     ok=0
     while [ $(( $(date +%s) - before )) -lt "$TIMEOUT" ]; do
-      newest=$(ls -t "${WDIR}"/*.csv 2>/dev/null | head -1)
-      if [ -n "$newest" ] && [ "$(stat -c %Y "$newest")" -ge "$before" ]; then
+      newest=$(ls -t "${RDIR}"/*.csv 2>/dev/null | head -1)
+      if [ -n "$newest" ]; then
         mv "$newest" "$target"; ok=1; break
       fi
       sleep 20
     done
     if [ "$ok" = "1" ]; then
       echo "  -> ${target} ($(( $(date +%s) - before ))s)"
+      rm -rf "${RDIR}"
       DONE=$((DONE + 1))
     else
-      echo "  TIMEOUT dopo ${TIMEOUT}s: nessun CSV"
+      # [B] la run va FERMATA: lasciata andare contende la GPU alle successive
+      # e le rallenta, che e' il modo in cui scattano altri timeout
+      echo "  TIMEOUT dopo ${TIMEOUT}s: nessun CSV, fermo la run ${rid}"
+      flwr stop "${rid}" "${SUPERLINK}" >/dev/null 2>&1 \
+        || echo "  (flwr stop ${rid} ${SUPERLINK} non riuscito: fermala a mano)"
       FAIL=$((FAIL + 1))
     fi
   done

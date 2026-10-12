@@ -50,21 +50,13 @@ class PhysicalESCS(PhysicalFedAvg):
     dell'inf iniziale nel codice originale (li' pero' inf/inf = nan
     escludeva per sempre i mai osservati in -sp; qui e' corretto).
 
-    RISORSA DI BATTERIA, i due bracci del confronto:
-
-      battery_mode="energy"  (orig) bat = SoC_0 - Wh_LINEARI / capacita',
-                             cioe' battery/max_battery del paper: energia
-                             residua stimata come potenza x tempo, ignora
-                             Peukert e sottostima il consumo di ~1.26x.
-                             Parte da SoC_0 perche' nel paper la batteria
-                             iniziale (30-100%) e' un dato del profilo.
-      battery_mode="soc"     (peuk) bat = SoC del modello di batteria Peukert.
-
-    E' la stessa sostituzione dell'ablazione su SAGE, applicata qui: se
-    l'effetto si ripete su due algoritmi diversi non dipende da SAGE.
+    RISORSA DI BATTERIA. bat = SoC del device, letto dalla batteria del mondo
+    (lineare, Peukert o datasheet: etichette escs_sd_lin / _peuk / _nm). Fra
+    le tre etichette l'algoritmo e' identico e cambia SOLO la batteria
+    montata sui device, come per sage_smart_lin/_peuk/_nm.
     La risorsa entra sia nell'utilita' sia nel filtro R, perche' nel paper
-    sono la stessa grandezza; anche il consumo previsto e' nella stessa
-    contabilita' della risorsa (lineare con "energy", Peukert con "soc").
+    sono la stessa grandezza; il consumo previsto e' il calo di SoC che la
+    stessa batteria ha avuto nell'ultimo round del client.
 
     [B] la modalita' probabilistica non ha tetto: seleziona un numero
     variabile di client, ed e' il motivo per cui nel paper -sp/-mp sono le
@@ -95,7 +87,6 @@ class PhysicalESCS(PhysicalFedAvg):
         *args,
         utility_mode: str = "s",
         selection_mode: str = "d",
-        battery_mode: str = "soc",
         partition_sizes: dict[int, int] | None = None,
         first_round_all: bool = True,
         battery_weight: float = 1 / 3,
@@ -111,15 +102,12 @@ class PhysicalESCS(PhysicalFedAvg):
         um, sm = utility_mode.lower(), selection_mode.lower()
         if um not in ("s", "m") or sm not in ("d", "p"):
             raise ValueError("utility_mode in {s,m}, selection_mode in {d,p}")
-        if battery_mode not in ("soc", "energy"):
-            raise ValueError("battery_mode: 'soc' (peuk) oppure 'energy' (orig)")
         if not partition_sizes:
             raise ValueError(
                 "partition_sizes obbligatorio: senza le taglie reali la "
                 "latenza di riferimento e' sbagliata e l'utilita' collassa"
             )
         self.utility_mode, self.selection_mode = um, sm
-        self.battery_mode = battery_mode
         self.first_round_all = bool(first_round_all)
         self.w_b, self.w_c, self.w_l = (
             float(battery_weight), float(cpu_cost_weight), float(link_prob_weight)
@@ -132,7 +120,6 @@ class PhysicalESCS(PhysicalFedAvg):
 
         self._loss: dict[int, float] = {}     # cid -> eval loss ultimo round
         self._cons: dict[int, float] = {}     # cid -> consumo ultimo round (frazione)
-        self._used_wh: dict[int, float] = {}  # cid -> Wh LINEARI cumulati (mode energy)
         self._nq: dict[int, float] = {}       # cid -> qualita' rete, statica
         self._lat_ref: dict[int, float] = {}  # cid -> latenza di profilo
         self._max_lat = 0.0
@@ -141,8 +128,7 @@ class PhysicalESCS(PhysicalFedAvg):
 
     @property
     def variant(self) -> str:
-        suffix = "" if self.battery_mode == "soc" else "-lin"
-        return f"escs-{self.utility_mode}{self.selection_mode}{suffix}"
+        return f"escs-{self.utility_mode}{self.selection_mode}-{self.world.battery}"
 
     # ----------------------------------------------------------- componenti
     def _ensure_profile(self) -> None:
@@ -176,14 +162,8 @@ class PhysicalESCS(PhysicalFedAvg):
         return self._cap_wh[cid]
 
     def _battery(self, cid: int) -> float:
-        """La risorsa di batteria vista dal selettore."""
-        if self.battery_mode == "soc":
-            return float(self.world.snapshot(cid).soc)
-        cap = self._capacity(cid)
-        if cap <= 0.0:
-            return 1.0
-        soc0 = float(self.world.initial_soc(cid))
-        return float(np.clip(soc0 - self._used_wh.get(cid, 0.0) / cap, 0.0, 1.0))
+        """La risorsa di batteria vista dal selettore: il SoC del device."""
+        return float(self.world.snapshot(cid).soc)
 
     def _consumption(self, cid: int) -> float:
         if cid in self._cons:
@@ -264,12 +244,11 @@ class PhysicalESCS(PhysicalFedAvg):
         self, cid: int, n_ex: int, dt_s: float, e_wh: float, e_lin_wh: float,
         reply: Message, server_round: int,
     ) -> None:
-        # consumo previsto nella STESSA contabilita' della risorsa
-        spent = e_lin_wh if self.battery_mode == "energy" else e_wh
-        self._used_wh[cid] = self._used_wh.get(cid, 0.0) + e_lin_wh
+        # consumo previsto: il calo di SoC di training + upload di questo
+        # round, nella batteria del mondo (e_wh = V_nom * C_nom * |dSoC|)
         cap = self._capacity(cid)
         if cap > 0.0:
-            self._cons[cid] = float(spent / cap)
+            self._cons[cid] = float(e_wh / cap)
 
     def aggregate_evaluate(
         self, server_round: int, replies: Iterable[Message]

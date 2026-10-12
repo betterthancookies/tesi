@@ -12,14 +12,17 @@ from strategies.sage import _js
 
 
 class PhysicalSAGEAblation(PhysicalFedAvg):
-    """Variante della tesi: SAGE con il SoC Peukert al posto di E_i.
+    """Variante della tesi: SAGE con un SoC al posto di E_i.
 
         max  sum_i y_i * (a*SoC_i + b*D_i)      a + b = 1
 
+    Nella campagna gira nei mondi Peukert e datasheet (etichette sage_peuk e
+    sage_nm); il SAGE del paper gira in quello lineare (sage_lin).
+
     DIFFERENZE RISPETTO A `PhysicalSAGE`, tutte volute:
-    1. la risorsa e' il SoC vero del world state (scarica Peukert), non la
-       stima lineare SoC_0 - Wh/capacita'. E' l'unica differenza che misura
-       l'errore del modello di batteria dei paper.
+    1. la risorsa e' il SoC del device con a + b = 1 (pesi tarati per beta,
+       sage_ab in experiment.toml) invece della terna (a, b, c) del paper.
+       Come in SAGE il SoC e' quello della batteria del mondo.
     2. niente termine rinnovabile (c = 0): non c'e' un corrispettivo fisico
        nel world state, e il rumore di R_i sporcherebbe il confronto.
     3. niente soglia di eleggibilita' (2e): i client a SoC zero sono gia'
@@ -28,8 +31,10 @@ class PhysicalSAGEAblation(PhysicalFedAvg):
        k/0.2 l'ILP diventa infeasible e la run termina per esaurimento.
 
     Meta' epoche sotto SoC 0.3 e divergenza D_i come in SAGE. I pesi (a, b)
-    vanno scelti per beta (vedi run_grid.sh), quindi sage e sage_soc
-    differiscono anche per taratura: va tenuto presente leggendo i risultati.
+    vanno scelti per beta, quindi sage_lin e sage_peuk/sage_nm differiscono
+    per batteria E per algoritmo (pesi, rinnovabile, soglia): va tenuto
+    presente leggendo i risultati. Fra sage_peuk e sage_nm cambia solo la
+    batteria.
     """
 
     def __init__(
@@ -63,6 +68,7 @@ class PhysicalSAGEAblation(PhysicalFedAvg):
 
     # ------------------------------------------------------------ componenti
     def _resource(self, cid: int) -> float:
+        """SoC della batteria del device."""
         return float(self.world.snapshot(cid).soc)
 
     def _divergence(self, cid: int) -> float:

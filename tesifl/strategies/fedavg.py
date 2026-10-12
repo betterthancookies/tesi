@@ -31,15 +31,18 @@ class PhysicalFedAvg(FedAvg):
         self._rng = np.random.default_rng(selection_seed)
         self._node_to_cid: dict[int, int] = {}
         self._epochs_sent: dict[int, int] = {}   # cid -> epoche del round in corso
-        # [B] il batch ora e' per client: SAGE-smart lo assegna in modo
-        # dinamico, e l'addebito energetico deve usare quello EFFETTIVO
-        # (la potenza di training scala con B) e non il valore globale.
+        # [B] il batch ora e' per client: in SAGE-smart lo sceglie il client,
+        # e l'addebito energetico deve usare quello EFFETTIVO (la potenza di
+        # training scala con B) e non il valore globale.
         self._batch_sent: dict[int, int] = {}
         # [B] i pesi globali inviati nel round: servono a FedNova per
         # ricavare Delta_i = w_i - w_globale. FedAvg standard non ne ha
         # bisogno perche' media direttamente i pesi finali.
         self._global_arrays = None
         self._round_stats: dict[int, dict] = {}  # per il CSV per-round
+        # durata dell'ultimo round (training piu' lento + ritardo iniziale):
+        # il server la conosce, ha aspettato le risposte
+        self._last_round_s = 0.0
         # [B] selezione vuota = fine della run. Serve a sage_soc, che termina
         # per esaurimento del pool e non per numero di round: senza questo
         # flag Flower continuerebbe a valutare tutti i client fino a R_max.
@@ -95,6 +98,9 @@ class PhysicalFedAvg(FedAvg):
             rec = RecordDict(
                 {self.arrayrecord_key: arrays, self.configrecord_key: cfg}
             )
+            dev = self._device_record(cid)
+            if dev is not None:
+                rec["device"] = dev
             messages.extend(
                 self._construct_messages(rec, [int(nid)], MessageType.TRAIN)
             )
@@ -132,14 +138,53 @@ class PhysicalFedAvg(FedAvg):
     ) -> None:
         return None
 
+    def _device_record(self, cid: int) -> ConfigRecord | None:
+        """Sensori del device simulato da allegare al messaggio di training.
+
+        None per tutte le strategie server-side: il client non ne ha bisogno.
+        sage_smart lo usa per dare al client cio' che un telefono vero
+        leggerebbe dal sistema operativo (SoC, workload, carica).
+        """
+        return None
+
+    def _work_done(self, cid: int, n_ex: int, reply: Message) -> tuple[float, int]:
+        """(durata in s, batch) del lavoro che il client ha DAVVERO eseguito.
+
+        Default: quello assegnato dal server, che il client esegue per intero.
+        sage_smart lo sostituisce con quello che il client dichiara, perche'
+        li' (E, B) li decide il client.
+        """
+        b = self._batch_sent.get(cid, self.batch_size)
+        dt = self.world.round_duration_s(
+            cid,
+            epochs=self._epochs_sent.get(cid, self.epochs),
+            batch_size=b,
+            dataset_size_local=n_ex,
+        )
+        return dt, b
+
+    def _round_overhead_s(self) -> float:
+        """Secondi spesi prima del training (scambi di controllo). Default 0:
+        solo sage_smart interroga i client prima di mandare il modello."""
+        return 0.0
+
+    def _aggregatable(self, replies: list[Message]) -> list[Message]:
+        """Reply che entrano nella media. Default: tutte.
+
+        sage_smart esclude i client che si sono ritirati dal round (opt-out):
+        hanno pagato la comunicazione ma non hanno un update da mediare.
+        """
+        return replies
+
     def _on_round_result(
         self, cid: int, n_ex: int, dt_s: float, e_wh: float, e_lin_wh: float,
         reply: Message, server_round: int,
     ) -> None:
         """Hook per le sottoclassi, chiamato dopo l'addebito fisico.
 
-        e_wh      Wh Peukert (carica realmente pagata dalla batteria)
-        e_lin_wh  Wh lineari P*dt (quelli che vedono SAGE/ESCS originali)
+        e_wh      Wh di carica pagati dalla batteria del mondo (training +
+                  upload): e_wh / (V_nom * C_nom) e' il calo di SoC esatto
+        e_lin_wh  Wh al carico, P*dt
         """
         return None
 
@@ -158,6 +203,7 @@ class PhysicalFedAvg(FedAvg):
         self, server_round: int, replies: list[Message]
     ) -> tuple[ArrayRecord | None, MetricRecord | None]:
         # nessuna reply: niente da aggregare, e super() dividerebbe per zero
+        self._last_round_s = float(self._round_overhead_s())
         if not replies:
             return None, None
 
@@ -172,15 +218,9 @@ class PhysicalFedAvg(FedAvg):
                 continue
             cid = self._node_to_cid[reply.metadata.src_node_id]
             n_ex = int(self._metric(reply, "num-examples", "num_examples"))
-            dt = self.world.round_duration_s(
-                cid,
-                epochs=self._epochs_sent.get(cid, self.epochs),
-                batch_size=self._batch_sent.get(cid, self.batch_size),
-                dataset_size_local=n_ex,
-            )
+            dt, b = self._work_done(cid, n_ex, reply)
             durations[cid] = dt
-            e_tr, l_tr = self.world.apply_round(
-                cid, dt_s=dt, batch_size=self._batch_sent.get(cid, self.batch_size))
+            e_tr, l_tr = self.world.apply_round(cid, dt_s=dt, batch_size=b)
             e_cm, l_cm = self.world.apply_communication(cid)
             self._on_round_result(cid, n_ex, dt, float(e_tr + e_cm),
                                   float(l_tr + l_cm), reply, server_round)
@@ -190,7 +230,12 @@ class PhysicalFedAvg(FedAvg):
         # non e' stato selezionato paga l'intera durata. L'ordine conta: se
         # l'idle venisse prima, un client al limite morirebbe di idle invece
         # che di training e il conteggio cambierebbe.
-        self.world.apply_idle(durations)
+        # [B] il ritardo prima del training (messaggi di controllo di
+        # sage_smart) allunga il round: in idle lo pagano tutti tranne i
+        # selezionati, che in quel tempo stanno parlando col server.
+        overhead = float(self._round_overhead_s())
+        self._last_round_s = max(durations.values(), default=0.0) + overhead
+        self.world.apply_idle({c: d + overhead for c, d in durations.items()})
 
         s = self.world.stats()
         self._round_stats[int(server_round)] = dict(s)
@@ -199,4 +244,7 @@ class PhysicalFedAvg(FedAvg):
             server_round, s["total_energy_wh"], s["energy_train_wh"],
             s["energy_comm_wh"], s["mean_soc"], s["n_recharging"], s["n_failed"])
 
+        replies = self._aggregatable(replies)
+        if not replies:
+            return None, None
         return super().aggregate_train(server_round, replies)
