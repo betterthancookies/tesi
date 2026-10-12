@@ -88,7 +88,8 @@ scelta non e' neutrale:
 Fra le tre, fig7 e' quella difendibile in tesi; fig6 e' utile ma va letta
 con il round accanto.
 
-Le curve sono la MEDIANA sui seed con banda interquartile.
+Le curve sono la MEDIA sulle run con banda +-1 dev. std (nessuna banda nella
+serie pooled): la stessa statistica dei Pareto, cosi' i numeri coincidono.
 I beta non si mescolano mai in una stessa figura: sono regimi diversi.
 """
 import argparse
@@ -376,12 +377,20 @@ def order_of(d):
     return out + [a for a in sorted(d) if a not in seen]
 
 
-def _median_band(seeds, smooth_w):
+def _mean_band(seeds, smooth_w):
+    """Media sulle run, round per round, con banda +-1 dev. std.
+
+    [B] MEDIA, non mediana: e' la stessa statistica di fig3/fig5, cosi' la
+    fine delle curve coincide con i punti dei Pareto. Con la mediana, nella
+    serie pooled sui tre beta la curva finiva sul beta di mezzo e ignorava
+    beta 0.1 (SAGE-smart: 0.68 in fig2 contro 0.62 in fig5).
+    """
     n = min(len(v) for v in seeds)
-    E = np.median([[x[1] for x in v[:n]] for v in seeds], axis=0)
+    E = np.mean([[x[1] for x in v[:n]] for v in seeds], axis=0)
     R = [x[0] for x in seeds[0][:n]]
     A = np.array([smooth([x[2] for x in v[:n]], smooth_w) for v in seeds])
-    return R, E, np.median(A, 0), np.percentile(A, 25, 0), np.percentile(A, 75, 0)
+    mean, std = A.mean(0), A.std(0)
+    return R, E, mean, mean - std, mean + std
 
 
 def _rows_by_beta(results_dir, beta):
@@ -422,20 +431,29 @@ def _acc_rows(rows):
     return out
 
 
+def _band_title(beta, ns):
+    """[B] nella serie pooled la banda non si disegna, come le barre di
+    fig3/fig5: sarebbe la dispersione FRA beta, non incertezza."""
+    if beta == ALL:
+        return f"(mean over {ns} runs)"
+    return f"(mean over {ns} seeds, ±1 std band)"
+
+
 def fig_energy_accuracy(d, out, beta, smooth_w):
     fig, ax = plt.subplots(figsize=(9, 5.5))
     ns = 0
     for a in order_of(d):
         seeds = list(d[a].values())
         ns = max(ns, len(seeds))
-        _, E, med, lo, hi = _median_band(seeds, smooth_w)
-        ax.plot(E, med, label=LABEL.get(a, a), color=COLOR.get(a),
+        _, E, mean, lo, hi = _mean_band(seeds, smooth_w)
+        ax.plot(E, mean, label=LABEL.get(a, a), color=COLOR.get(a),
                 linestyle=STYLE.get(a, "-"), lw=1.8)
-        ax.fill_between(E, lo, hi, color=COLOR.get(a), alpha=0.10, lw=0)
+        if beta != ALL:
+            ax.fill_between(E, lo, hi, color=COLOR.get(a), alpha=0.10, lw=0)
     ax.set_xlabel("Cumulative energy drawn from batteries [Wh]")
     ax.set_ylabel("Test accuracy (moving average)")
     ax.set_title(f"Energy–accuracy trade-off — β = {beta_str(beta)} "
-                 f"(median over {ns} seeds, IQR band)")
+                 + _band_title(beta, ns))
     ax.grid(alpha=0.3)
     ax.legend(fontsize=8, ncol=2)
     fig.tight_layout()
@@ -449,14 +467,15 @@ def fig_accuracy_rounds(d, out, beta, smooth_w):
     for a in order_of(d):
         seeds = list(d[a].values())
         ns = max(ns, len(seeds))
-        R, _, med, lo, hi = _median_band(seeds, smooth_w)
-        ax.plot(R, med, label=LABEL.get(a, a), color=COLOR.get(a),
+        R, _, mean, lo, hi = _mean_band(seeds, smooth_w)
+        ax.plot(R, mean, label=LABEL.get(a, a), color=COLOR.get(a),
                 linestyle=STYLE.get(a, "-"), lw=1.8)
-        ax.fill_between(R, lo, hi, color=COLOR.get(a), alpha=0.10, lw=0)
+        if beta != ALL:
+            ax.fill_between(R, lo, hi, color=COLOR.get(a), alpha=0.10, lw=0)
     ax.set_xlabel("Communication round")
     ax.set_ylabel("Test accuracy (moving average)")
     ax.set_title(f"Accuracy per round — β = {beta_str(beta)} "
-                 f"(median over {ns} seeds, IQR band)")
+                 + _band_title(beta, ns))
     ax.grid(alpha=0.3)
     ax.legend(fontsize=8, ncol=2)
     fig.tight_layout()
