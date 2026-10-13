@@ -31,7 +31,8 @@ PORT_BASE=${PORT_BASE:-39101}
 STATE_DIR=${STATE_DIR:-$HOME/.flwr/sweep}
 CONF=${CONF:-$HOME/.flwr/config.toml}
 PROJECT=${PROJECT:-$PWD}
-WAIT_MAX=${WAIT_MAX:-300}   # wait-idle: dopo quanti secondi ferma i residui
+WAIT_MAX=${WAIT_MAX:-300}   # wait-idle: attesa massima di una run ancora attiva
+WAIT_ORPHAN=${WAIT_ORPHAN:-30}  # wait-idle: attesa di un processo senza run attiva
 
 read -ra GPU_ARR <<< "$GPUS"
 
@@ -142,28 +143,46 @@ wait-idle)
   # [B] UNA RUN ALLA VOLTA PER GPU. Il CSV di una run arriva prima che la run
   # sia davvero finita (valutazione finale, Ray che si spegne): lanciando
   # subito la successiva le due si sovrapponevano sulla GPU e le run attive
-  # crescevano a ogni run. _shard.sh chiama questo prima di ogni run; dopo
-  # WAIT_MAX secondi i residui vengono fermati.
+  # crescevano a ogni run. _shard.sh chiama questo prima di ogni run.
+  # [B] PROCESSO ORFANO. Con flwr 1.32 il processo flwr-simulation di una run
+  # resta vivo anche dopo che la run e' finita (CSV scritto, flwr ls non la
+  # elenca piu' fra le attive): sul vecchio server si accumulavano, uno per
+  # run. Due attese diverse:
+  #   run ancora attiva in flwr ls  -> fino a WAIT_MAX (300 s), poi stop;
+  #   solo il processo, run finita  -> WAIT_ORPHAN (30 s), poi lo chiudo.
   gpu="${2:?uso: bash superlinks.sh wait-idle <gpu>}"
   n=$(name_of "$gpu"); t0=$(date +%s); t=0; last=-60
   [ -n "$(sl_pid "$gpu")" ] || exit 0
   while :; do
     runs=$(active_runs "$gpu"); procs=$(sim_procs "$gpu")
-    [ "$runs" = "?" ] && runs=""          # flwr ls muto: contano i processi
+    known=1
+    [ "$runs" = "?" ] && { runs=""; known=0; }   # flwr ls muto: prudenza
     [ -z "$runs" ] && [ -z "$procs" ] && break
     t=$(( $(date +%s) - t0 ))             # tempo vero, flwr ls non e' istantaneo
+    limit=$WAIT_MAX
+    [ -z "$runs" ] && [ "$known" = "1" ] && limit=$WAIT_ORPHAN
     if [ $(( t - last )) -ge 60 ]; then   # un segno di vita al minuto
-      echo "  ${n}: aspetto la chiusura della run precedente (${t}s/${WAIT_MAX}s):" \
+      echo "  ${n}: aspetto la chiusura della run precedente (${t}s/${limit}s):" \
            "run [$(echo $runs)] processi [$(echo $procs)]"
       last=$t
     fi
-    if [ "$t" -ge "$WAIT_MAX" ]; then
-      echo "  ${n}: dopo ${t}s la fermo"
-      for id in $(run_ids "$runs"); do flwr stop "$id" "$n" >/dev/null 2>&1; done
-      sleep 5
-      for pr in $(sim_procs "$gpu"); do kill "$pr" 2>/dev/null; done
+    if [ "$t" -ge "$limit" ]; then
+      if [ -n "$runs" ]; then
+        echo "  ${n}: run ancora attiva dopo ${t}s, la fermo"
+        for id in $(run_ids "$runs"); do flwr stop "$id" "$n" >/dev/null 2>&1; done
+        sleep 5
+      else
+        echo "  ${n}: run finita ma processo ancora vivo dopo ${t}s, lo chiudo:"
+      fi
+      for pr in $(sim_procs "$gpu"); do
+        ps -o pid=,etime=,args= -p "$pr" 2>/dev/null | cut -c1-160 | sed 's/^/      /'
+        kill "$pr" 2>/dev/null
+      done
       sleep 5
       for pr in $(sim_procs "$gpu"); do kill -9 "$pr" 2>/dev/null; done
+      sleep 1
+      left=$(sim_procs "$gpu")
+      [ -n "$left" ] && echo "  ${n}: ATTENZIONE, processi ancora vivi: $(echo $left)"
       break
     fi
     sleep 5
