@@ -10,7 +10,9 @@ definizione il workload entra nel modello senza coefficienti nuovi:
     throughput disponibile = (1 - w) * macs_per_s
     potenza fra i round    = P_idle + w * (P_train - P_idle)
 
-La seconda interpola fra il consumo a riposo e quello a pieno carico.
+La seconda interpola fra il consumo a riposo e quello a pieno carico. Entrambe
+usano macs_per_s e P_train DEL TIER: w e' una frazione della capacita' di quel
+telefono.
 
 [B] TRE CATENE INVECE DI UNA. Cosi' differisce anche la persistenza, non solo
 la media: un device poco usato resta fermo a lungo, uno molto usato alterna in

@@ -209,12 +209,12 @@ def model_error_vs_linear(power_w: float, dt_s: float, profile: DeviceProfile,
 
 
 if __name__ == "__main__":
-    from device.constants import TRAIN_POWER_W
     from device.device_profile import generate_profiles
 
     p = generate_profiles(1)[0]
+    TRAIN_POWER_W = p.train_power_w
     q = p.battery_capacity_mah / 1000.0
-    print(f"cella {p.battery_capacity_mah:.0f} mAh, P_train {TRAIN_POWER_W} W\n")
+    print(f"cella {p.battery_capacity_mah:.0f} mAh, P_train {TRAIN_POWER_W} W ({p.tier})\n")
     print(f"{'SoC':>6}{'V':>8}{'I [A]':>8}{'C-rate':>8}{'Qeff/Qnom':>11}"
           f"{'dSoC/60s':>11}{'vs lineare':>12}")
     for s in (1.0, 0.8, 0.6, 0.4, 0.3, 0.2, 0.1, 0.05):

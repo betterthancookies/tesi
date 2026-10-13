@@ -66,24 +66,40 @@ recharge_available = true
 #  DEVICE
 # =====================================================================
 [device]
-# Tre tier in parti uguali. Velocita' 1x/2x/4x: rapporti standard fra fasce
-# di SoC. Ignatov et al. (AI Benchmark, ICCVW 2019) riportano fino a 20x fra
-# CPU e acceleratore dello stesso chip, quindi 4x e' conservativo.
+# Tre tier in parti uguali = i tre telefoni MISURATI in Mandheling (Xu et
+# al., MobiCom 2022, arXiv 2206.07509): training FP32 su CPU con TFLite,
+# VGG-11 su CIFAR-10, batch 64. Fig. 5 = latenza per batch, Fig. 6 = energia
+# per batch, Tab. 6 = 914 MFLOP di training per campione (= 457 MMAC, cioe'
+# 3 x 152.6 MMAC di forward: lo stesso train_macs_factor = 3 usato qui).
+#   macs_per_s    = 64 * 457e6 MAC / latenza       (velocita' di training)
+#   train_power_w = energia / latenza              (potenza del telefono)
+#   low  Redmi Note 9 Pro (Snapdragon 750G): 2.11 s, 6.3 J
+#   mid  Xiaomi 10        (Snapdragon 865):  1.10 s, 4.4 J
+#   high Xiaomi 11 Pro    (Snapdragon 888):  0.96 s, 5.9 J
+# [B] il costo per unita' di lavoro e' quasi uguale nei tre (~0.2 J/GMAC): il
+# telefono veloce finisce prima ma consuma piu' watt. Prima: 4/8/16 GMAC/s a
+# 3 W per tutti (0.75/0.38/0.19 J/GMAC), senza fonte.
+# [LIMITE] VGG-11 ha 64-512 canali, ResNet-20 16-64: su CPU ResNet-20 rende
+# probabilmente meno GMAC/s. Misure per batch (niente throttling termico).
+# Telefoni 2020-21 di fascia media e alta: manca un telefono economico.
 tiers = [
-  { name = "low",  capacity_mah = 3500.0, speed_mult = 1.0 },
-  { name = "mid",  capacity_mah = 4000.0, speed_mult = 2.0 },
-  { name = "high", capacity_mah = 4500.0, speed_mult = 4.0 },
+  { name = "low",  capacity_mah = 3500.0, macs_per_s = 13.9e9, train_power_w = 2.99 },
+  { name = "mid",  capacity_mah = 4000.0, macs_per_s = 26.6e9, train_power_w = 4.00 },
+  { name = "high", capacity_mah = 4500.0, macs_per_s = 30.5e9, train_power_w = 6.15 },
 ]
-# Usata SOLO con world.tiers = false (popolazione omogenea).
-capacity_mah_uniform = 200.0
+# Usati SOLO con world.tiers = false (popolazione omogenea delle campagne
+# precedenti): capacita', velocita' e potenza uguali per tutti.
+capacity_mah_uniform  = 200.0
+macs_per_s_uniform    = 4e9
+train_power_w_uniform = 3.0   # derivata da EAFL (Arouj & Abdelmoniem 2022)
 
-macs_per_s    = 4e9   # [ASSUNZIONE] throughput del tier base (1x)
-train_power_w = 3     # [ASSUNZIONE] derivata da EAFL (Arouj & Abdelmoniem 2022)
 idle_power_w  = 0.1   # [DERIVATO] 0.1 W di ESCS su 4000 mAh
 
 # SoC iniziale: normale troncata, spostata verso la carica piena.
 # [B] con l'uniforme il 29% dei client partiva sotto il 50%; qui il 5%.
-soc_init_mean  = 0.75   # [ASSUNZIONE]
+# Ferreira et al. (Pervasive 2011, 4035 utenti Android): batteria media 67%
+# nella giornata, massima 74% alle 5 del mattino -> 0.75 = inizio giornata.
+soc_init_mean  = 0.75
 soc_init_std   = 0.15   # [ASSUNZIONE]
 soc_init_range = [0.30, 1.00]
 
@@ -92,46 +108,64 @@ soc_init_range = [0.30, 1.00]
 v_nominal        = 3.7    # Li-Ion, tensione costante
 rated_c_rate     = 0.2    # rate a cui la capacita' nominale e' dichiarata
 dcdc_efficiency  = 1.0
-# [ASSUNZIONE] 1.15 e' nell'intervallo del piombo-acido; per il litio la
-# letteratura da' 1.01-1.10. VERIFICATO: a n=1.05 l'errore del modello
-# lineare scende da 1.26x a 1.08x e gli esaurimenti passano da 10 a 0 nella
-# cella 100 mAh / N=30 / beta=0.1. Tenuto a 1.15 come scelta dichiarata; la
-# violazione della soglia (SoC minimo 0.102 contro riserva 0.20) resta anche
-# a 1.05, ed e' l'affermazione robusta.
+# Fit di Peukert sulle capacita' del datasheet della cella del mondo _nm
+# ("Accurate Battery Model"): 2.60 / 2.50 / 2.39 Ah a 0.2C / 0.5C / 1C.
+# Minimi quadrati di ln(Q/Q_R) contro ln(I/I_R), I_R = 0.2C: n = 1.050.
+# [B] prima era 1.15 (valore da piombo-acido, senza fonte): in idle la cella
+# Peukert durava 1.63 volte quella lineare, ora 1.18.
+# [LIMITE] il fit copre 0.2C-1C; l'idle (~0.01C) e' un'estrapolazione.
 # Usato dalla batteria di Peukert (mondo _peuk). La batteria da datasheet
 # (mondo _nm) non ha esponenti: tabelle V(SoC, I) e Q(I) in battery_model.py.
-peukert_n        = 1.15
+peukert_n        = 1.05
 
 
 [compute]
-train_macs_factor = 3.0    # [ASSUNZIONE] fwd + bwd ~ 3x fwd
+# fwd + bwd ~ 3x fwd: lo stesso rapporto di Mandheling (Tab. 6) e
+# TrainDeeploy (2.85-2.97x misurato)
+train_macs_factor = 3.0
 batch_overhead_s  = 0.115  # [MISURATO su stanis, riscalato al device simulato]
-batch_size_ref    = 128    # batch a cui la potenza e' esattamente train_power_w
-power_exponent_batch = 0.3 # [ASSUNZIONE] P(B) = P0 * (B/B_ref)^gamma
-power_batch_mult_min = 0.5
-power_batch_mult_max = 3.0
+# [B] la potenza di training e' COSTANTE per tier (train_power_w dei tier):
+# non dipende piu' da B. Prima P(B) = 3 W * (B/128)^0.3, esponente senza
+# fonte. Con potenza costante l'energia di un'epoca CALA al crescere di B
+# (meno overhead per batch): non esiste un batch ottimo interno.
 
 
 [comm]
 bytes_per_param     = 4     # float32, nessuna compressione [ASSUNZIONE]
-energy_rx_j_per_mb  = 1.5   # [DAL RELATORE] 4G LTE; WiFi sarebbe ~0.1
-tx_rx_energy_ratio  = 1.5   # [ASSUNZIONE] TX piu' cara di RX
-bandwidth_mb_per_s  = 2.0   # [ASSUNZIONE]
-# Attivazione della radio LTE (macchina a stati RRC), Huang et al., "A Close
-# Examination of Performance and Power Characteristics of 4G LTE Networks",
-# MobiSys 2012, Tabella 3 e Sez. 4.1. Ogni SESSIONE radio (un trasferimento
-# isolato) paga una promozione IDLE->CONNECTED e poi resta accesa per Ttail
-# prima di tornare IDLE: ~12.6 J, qualunque sia la taglia del messaggio.
+# Smartphone su rete 4G (LTE). Potenza durante un trasferimento misurata da
+# Narayanan et al., "A Variegated Look at 5G in the Wild", SIGCOMM 2021
+# (Galaxy S20 Ultra, Verizon LTE): P = c1 * T + c2, T = throughput.
+#   c1: Tab. 8, 14.55 mW/Mbps in download, 80.21 mW/Mbps in upload;
+#   c2: fit sui dati pubblici del paper (github SIGCOMM21-5G/artifact,
+#       MN-Transfer), 2.72 W in download, 2.89 W in upload (le pendenze del
+#       fit, 15.0 e 79.5, ritrovano la Tab. 8).
+# Energia per MB = 8 * (c1 + c2 / T), con T della rete 4G italiana:
+# Opensignal, "State of Mobile Networks: Italy", maggio 2018 (gen-mar 2018,
+# 120 mila utenti): download Vodafone 33.9, TIM 28.7, 3 Italia 22.2, Wind
+# 15.7 Mbps (media 25.1); upload ~10 Mbps (Vodafone 10.5, gli altri poco
+# sotto). [B] prima 1.5 J/MB (dal relatore) e upload 1.5x senza fonte: 1.5
+# J/MB corrisponde a ~16 Mbps, cioe' all'operatore piu' lento.
+energy_dl_j_per_mb  = 0.98
+energy_ul_j_per_mb  = 2.96
+bandwidth_dl_mbps   = 25.1
+bandwidth_ul_mbps   = 10.0
+# SESSIONE radio (macchina a stati RRC): ogni trasferimento isolato paga una
+# promozione IDLE->CONNECTED e poi la radio resta accesa per Ttail prima di
+# tornare IDLE: ~2.1 J, qualunque sia la taglia del messaggio.
 # [B] e' cio' che rende NON gratuiti i messaggi di controllo (stato, proposta):
-# col solo costo per MB un heartbeat da 1 KB costerebbe ~1e-3 J. Vale per TUTTI
+# col solo costo per MB un heartbeat da 1 KB costerebbe ~2e-3 J. Vale per TUTTI
 # gli algoritmi: download e upload del modello sono due sessioni per round.
+# Narayanan et al. 2021, Verizon 4G: coda 178 mW (Tab. 2), Ttail 10.2 s e
+# promozione 265 ms (Tab. 7). La potenza di promozione non c'e': Huang et
+# al., MobiSys 2012, Tab. 3 (1210.7 mW; ~0.3 J, trascurabile).
+# [B] prima Huang 2012 per tutto: coda 1.06 W x 11.6 s = 12.6 J a sessione.
 # Metti session_tail_time_s = 0 e session_promo_time_s = 0 per tornare al
-# modello di comunicazione precedente (solo J/MB).
-session_promo_power_w = 1.2107   # LTE promotion, 1210.7 mW
-session_promo_time_s  = 0.2601   # Tpro, 260.1 ms
-session_tail_power_w  = 1.0600   # LTE tail base, 1060.0 mW
-session_tail_time_s   = 11.576   # Ttail (RRC inactivity timer), 11.576 s
-rtt_s                 = 0.0695   # RTT mediano LTE, 69.5 ms (Sez. 4.1)
+# modello di comunicazione con il solo costo per MB.
+session_promo_power_w = 1.2107   # Huang 2012, Tab. 3
+session_promo_time_s  = 0.265    # Narayanan 2021, Tab. 7 (Verizon 4G)
+session_tail_power_w  = 0.178    # Narayanan 2021, Tab. 2 (Verizon 4G)
+session_tail_time_s   = 10.2     # Narayanan 2021, Tab. 7 (UE-inactivity timer)
+rtt_s                 = 0.0695   # RTT mediano LTE, 69.5 ms (Huang 2012, Sez. 4.1)
 ctrl_payload_kb       = 1.0      # [ASSUNZIONE] messaggio di controllo, andata + ritorno
 
 
@@ -140,6 +174,9 @@ ctrl_payload_kb       = 1.0      # [ASSUNZIONE] messaggio di controllo, andata +
 # =====================================================================
 # w = frazione di calcolo occupata da ALTRE app. Entra senza coefficienti
 # nuovi:  throughput = (1-w)*macs   e   P fra i round = P_idle + w*(P_train-P_idle)
+# con macs e P_train DEL TIER: w e' una frazione della capacita' di quel
+# telefono, e a parita' di w un telefono piu' potente fa piu' lavoro e consuma
+# piu' watt (Mandheling: ~0.2 J/GMAC su tutti e tre i telefoni).
 [workload]
 # [ASSUNZIONE] utilizzazione dei tre stati: schermo spento, background,
 # uso interattivo.
@@ -157,15 +194,25 @@ chain_high   = [[0.50, 0.45, 0.05], [0.10, 0.60, 0.30], [0.00, 0.20, 0.80]]
 #  RICARICA
 # =====================================================================
 [recharge]
-# p_i = prob_base * (1 - SoC_i) per round.
-# [B] TARATURA: con 0.05 il SoC medio sale a 0.82 e gli esaurimenti vanno a
-# zero -- la ricarica appiattisce tutto. Il "<5% di client in carica" indicato
-# dal relatore e' la frazione ISTANTANEA in carica e corrisponde a ~0.005 di
-# probabilita' per round. Sensitivity: 0.05 -> 16% in carica, 0 morti;
-# 0.01 -> 7%, 7 morti; 0.005 -> 5%, 7 morti.
-prob_base = 0.005
+# Tasso ORARIO: in un round di durata dt (ore) l'utente mette in carica con
+#     p_i = 1 - exp(-rate_per_hour * (1 - SoC_i) * dt)
+# [B] prima p = 0.005 * (1 - SoC) PER ROUND: un algoritmo con round piu'
+# lunghi vedeva meno ricarica per ora di tempo reale. Ora tutti gli
+# algoritmi vedono la stessa ricarica nel tempo.
+# Ferreira et al., "Understanding Human-Smartphone Concerns: A Study of
+# Battery Life", Pervasive 2011 (4035 utenti Android, 4 settimane): una
+# sessione di carica principale al giorno (sera o notte, Fig. 5 e 7) con
+# batteria media al 67% -> rate = 1 / (24 h * (1 - 0.67)) = 0.126 / h. E' lo
+# stesso valore che riproduceva la taratura precedente (0.005 per round con
+# round da ~140 s), sotto il "<5% di client in carica" del relatore.
+# [LIMITE] gli utenti veri iniziano a caricare al 30-40% e quasi mai sotto il
+# 30%; i nostri lasciano arrivare il telefono a zero: lo scenario e'
+# pessimistico, e' quello che rende possibili gli esaurimenti.
+rate_per_hour = 0.126
 # Velocita' come C-rate, non watt: 20 W su 200 mAh sarebbero 27C.
-# 1C = carica completa in un'ora a qualunque capacita'.
+# 1C = carica completa in un'ora a qualunque capacita'. Ferreira 2011: 1-2 h
+# per una carica completa con i telefoni del 2010; i caricatori rapidi di
+# oggi stanno a ~1C.
 c_rate = 1.0
 
 

@@ -9,6 +9,10 @@
 #   bash run.sh --resume     salta i CSV gia' presenti (default: attivo)
 #   bash run.sh --force      rifa' tutto anche se i CSV ci sono
 #
+#   EXP_TOML=altro.toml bash run.sh   campagna, algoritmi e [algo] da un
+#       altro file (lo usa sweep_batch.sh). La FISICA viene sempre da
+#       experiment.toml: la legge device/constants.py nei processi Flower.
+#
 # COSA FA
 #   - controlla l'ambiente (comandi, GPU vista da torch, CIFAR-10 in cache);
 #   - avvia un SuperLink per GPU (superlinks.sh) e verifica che rispondano;
@@ -41,11 +45,13 @@ done
 
 CONDA_SH=${CONDA_SH:-$HOME/miniconda3/etc/profile.d/conda.sh}
 CONDA_ENV=${CONDA_ENV:-tesifl}
+export EXP_TOML=${EXP_TOML:-experiment.toml}
+[ -f "$EXP_TOML" ] || { echo "ERRORE: $EXP_TOML non esiste"; exit 1; }
 
 # ---- legge experiment.toml una volta sola ---------------------------
 eval "$(python3 - <<'PY'
-import tomllib, shlex
-c = tomllib.load(open("experiment.toml", "rb"))
+import os, tomllib, shlex
+c = tomllib.load(open(os.environ["EXP_TOML"], "rb"))
 cam, w, al, mo = c["campaign"], c["world"], c["algo"], c["model"]
 k = max(1, round(cam["k_fraction"] * cam["clients"]))
 out = {
@@ -230,7 +236,7 @@ for j in "${!GPU_ARR[@]}"; do
     beta="${pair%%:*}"; rot="${pair##*:}"
     btag=$(echo "$beta" | tr -d '.')
     log="log_${NAME}_b${btag}.log"
-    shards="${shards}${shards:+; }BETA=${beta} GPU=${gpu} ROT=${rot} FORCE=${FORCE} \
+    shards="${shards}${shards:+; }EXP_TOML='${EXP_TOML}' BETA=${beta} GPU=${gpu} ROT=${rot} FORCE=${FORCE} \
 RESULTS='${RESULTS}' NAME='${NAME}' ROUNDS=${ROUNDS} CLIENTS=${CLIENTS} K=${K} \
 SEEDS='${SEEDS}' ALGOS='${ALGOS}' TIMEOUT=${TIMEOUT} \
 WORLD='${WORLD}' ALGOCFG='${ALGOCFG}' bash _shard.sh 2>&1 | tee ${log}"
@@ -274,7 +280,7 @@ if [ -n "$tsvs" ]; then
   cat $tsvs | grep -v "^seed" >> "${RESULTS}/runs.tsv" 2>/dev/null
   rm -f $tsvs
 fi
-cp experiment.toml "${RESULTS}/experiment.toml"   # com'era configurata la campagna
+cp "$EXP_TOML" "${RESULTS}/experiment.toml"   # com'era configurata la campagna
 
 echo ""
 echo "=== fatto: $(ls ${RESULTS}/*_b*_seed*.csv 2>/dev/null | wc -l) CSV su ${TOTAL} ==="

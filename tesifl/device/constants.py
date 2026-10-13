@@ -40,12 +40,14 @@ def _get(section: str, key: str):
 # =====================================================================
 TIERS = {
     t["name"]: {"capacity_mah": float(t["capacity_mah"]),
-                "speed_mult": float(t["speed_mult"])}
+                "macs_per_s": float(t["macs_per_s"]),
+                "train_power_w": float(t["train_power_w"])}
     for t in _get("device", "tiers")
 }
+# popolazione omogenea (world.tiers = false)
 BATTERY_CAPACITY_MAH = float(_get("device", "capacity_mah_uniform"))
-MACS_PER_S = float(_get("device", "macs_per_s"))
-TRAIN_POWER_W = float(_get("device", "train_power_w"))
+MACS_PER_S_UNIFORM = float(_get("device", "macs_per_s_uniform"))
+TRAIN_POWER_W_UNIFORM = float(_get("device", "train_power_w_uniform"))
 IDLE_POWER_W = float(_get("device", "idle_power_w"))
 
 INITIAL_SOC_MEAN = float(_get("device", "soc_init_mean"))
@@ -72,10 +74,6 @@ LENET5_MACS_FWD_PER_SAMPLE = 352_800 + 240_000 + 48_000 + 10_080 + 840
 
 TRAIN_MACS_FACTOR = float(_get("compute", "train_macs_factor"))
 BATCH_OVERHEAD_S = float(_get("compute", "batch_overhead_s"))
-BATCH_SIZE_REF = int(_get("compute", "batch_size_ref"))
-POWER_EXPONENT_BATCH = float(_get("compute", "power_exponent_batch"))
-POWER_BATCH_MULT_MIN = float(_get("compute", "power_batch_mult_min"))
-POWER_BATCH_MULT_MAX = float(_get("compute", "power_batch_mult_max"))
 
 # =====================================================================
 # comunicazione
@@ -87,10 +85,12 @@ MODEL_MACS_FWD_PER_SAMPLE = int(_get("model", "macs_fwd_per_sample"))
 MODEL_N_PARAMS = int(_get("model", "n_params"))
 BYTES_PER_PARAM = int(_get("comm", "bytes_per_param"))
 MODEL_SIZE_MB = MODEL_N_PARAMS * BYTES_PER_PARAM / 1e6
-COMM_ENERGY_RX_J_PER_MB = float(_get("comm", "energy_rx_j_per_mb"))
-COMM_TX_RX_ENERGY_RATIO = float(_get("comm", "tx_rx_energy_ratio"))
-COMM_BANDWIDTH_MB_PER_S = float(_get("comm", "bandwidth_mb_per_s"))
-# sessione radio LTE (promozione + coda), Huang et al. MobiSys 2012
+# 4G (LTE): energia per MB e banda, separate per download e upload
+COMM_ENERGY_DL_J_PER_MB = float(_get("comm", "energy_dl_j_per_mb"))
+COMM_ENERGY_UL_J_PER_MB = float(_get("comm", "energy_ul_j_per_mb"))
+COMM_BANDWIDTH_DL_MB_PER_S = float(_get("comm", "bandwidth_dl_mbps")) / 8.0
+COMM_BANDWIDTH_UL_MB_PER_S = float(_get("comm", "bandwidth_ul_mbps")) / 8.0
+# sessione radio 4G (promozione + coda), Narayanan et al. 2021 / Huang 2012
 SESSION_PROMO_POWER_W = float(_get("comm", "session_promo_power_w"))
 SESSION_PROMO_TIME_S = float(_get("comm", "session_promo_time_s"))
 SESSION_TAIL_POWER_W = float(_get("comm", "session_tail_power_w"))
@@ -111,18 +111,19 @@ WORKLOAD_CHAINS = {
 # =====================================================================
 # ricarica
 # =====================================================================
-RECHARGE_PROB_BASE = float(_get("recharge", "prob_base"))
+RECHARGE_RATE_PER_H = float(_get("recharge", "rate_per_hour"))
 CHARGE_C_RATE = float(_get("recharge", "c_rate"))
 RECHARGE_AVAILABLE_DEFAULT = bool(CFG["world"].get("recharge_available", True))
 
 
 def describe() -> str:
     """Riassunto dei parametri caricati, per i log della run."""
-    t = " ".join(f"{k}({v['capacity_mah']:.0f}mAh,{v['speed_mult']:.0f}x)"
-                 for k, v in TIERS.items())
-    return (f"tier: {t} | P_train {TRAIN_POWER_W} W, P_idle {IDLE_POWER_W * 1000:.0f} mW "
+    t = " ".join(f"{k}({v['capacity_mah']:.0f}mAh,{v['macs_per_s'] / 1e9:.1f}GMAC/s,"
+                 f"{v['train_power_w']:.2f}W)" for k, v in TIERS.items())
+    return (f"tier: {t} | P_idle {IDLE_POWER_W * 1000:.0f} mW "
             f"| Peukert n={PEUKERT_N} | SoC0 N({INITIAL_SOC_MEAN},{INITIAL_SOC_STD}) "
-            f"| ricarica p={RECHARGE_PROB_BASE} a {CHARGE_C_RATE}C")
+            f"| 4G {COMM_ENERGY_DL_J_PER_MB}/{COMM_ENERGY_UL_J_PER_MB} J/MB "
+            f"| ricarica {RECHARGE_RATE_PER_H}/h a {CHARGE_C_RATE}C")
 
 
 if __name__ == "__main__":

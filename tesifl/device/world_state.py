@@ -16,18 +16,13 @@ from device.communication_model import (
 from device.compute_model import probe_time_s, training_time_s
 from device.constants import (
     DCDC_EFFICIENCY,
-    BATCH_SIZE_REF,
     CHARGE_C_RATE,
     IDLE_POWER_W,
     INITIAL_SOC_MEAN,
     INITIAL_SOC_RANGE,
     INITIAL_SOC_STD,
-    POWER_BATCH_MULT_MAX,
-    POWER_BATCH_MULT_MIN,
-    POWER_EXPONENT_BATCH,
     RECHARGE_AVAILABLE_DEFAULT,
-    RECHARGE_PROB_BASE,
-    TRAIN_POWER_W,
+    RECHARGE_RATE_PER_H,
     V_NOMINAL,
 )
 from device.device_profile import DeviceProfile, generate_profiles
@@ -44,15 +39,26 @@ def effective_profile(p: DeviceProfile, w: float) -> DeviceProfile:
     return DeviceProfile(
         cid=p.cid, battery_capacity_mah=p.battery_capacity_mah,
         macs_per_s=p.macs_per_s * max(1e-3, 1.0 - w),
-        peukert_n=p.peukert_n, tier=p.tier,
+        peukert_n=p.peukert_n, tier=p.tier, train_power_w=p.train_power_w,
     )
 
 
-def training_power_w(batch_size: int) -> float:
-    """P(B) = P0 * (B/B_ref)^gamma, limitata in [mult_min, mult_max] * P0."""
-    mult = (batch_size / BATCH_SIZE_REF) ** POWER_EXPONENT_BATCH
-    mult = min(max(mult, POWER_BATCH_MULT_MIN), POWER_BATCH_MULT_MAX)
-    return TRAIN_POWER_W * mult
+def training_power_w(p: DeviceProfile) -> float:
+    """Potenza del device durante il training: costante, quella del suo tier.
+
+    [B] prima P(B) = 3 W * (B/128)^0.3, uguale per tutti i tier e con un
+    esponente senza fonte. Ora la potenza e' quella MISURATA del telefono
+    del tier (Mandheling, vedi experiment.toml) e non dipende da B.
+    """
+    return p.train_power_w
+
+
+def idle_power_w(p: DeviceProfile, w: float) -> float:
+    """P_idle + w * (P_train - P_idle): interpola fra riposo e pieno carico
+    DEL TIER. w e' la frazione della capacita' di quel telefono occupata da
+    altre app: a parita' di w un telefono piu' potente fa piu' lavoro e
+    consuma piu' watt."""
+    return IDLE_POWER_W + w * (p.train_power_w - IDLE_POWER_W)
 
 
 # batterie dei device: una per mondo, vedi WorldState
@@ -104,7 +110,7 @@ class WorldState:
 
     WORKLOAD
     w e' la frazione di calcolo occupata da altre applicazioni, e agisce su due
-    grandezze senza coefficienti nuovi:
+    grandezze senza coefficienti nuovi, entrambe DEL TIER del device:
         throughput disponibile = (1 - w) * macs_per_s
         potenza fra i round    = P_idle + w * (P_train - P_idle)
     [B] il workload NON tocca la potenza di training: durante il training il
@@ -177,6 +183,8 @@ class WorldState:
         self._energy_grid_wh: dict[int, float] = {cid: 0.0 for cid in self._profiles}
         self._charging: dict[int, bool] = {cid: False for cid in self._profiles}
         self._n_recharges: dict[int, int] = {cid: 0 for cid in self._profiles}
+        # durata dell'ultimo round: la ricarica e' un tasso ORARIO
+        self._last_round_s = 0.0
 
     def _sample_initial_soc(self) -> float:
         """SoC iniziale: normale troncata, spostata verso la carica piena.
@@ -261,18 +269,23 @@ class WorldState:
     def begin_round(self) -> None:
         """Inizio round: avanza il workload e decide chi va in carica.
 
-        [B] la probabilita' cresce al calare del SoC, p = base * (1 - SoC):
-        e' il comportamento dell'utente, che mette in carica quando vede la
-        batteria bassa. Un device gia' in carica non viene riestratto: esce
-        dalla carica solo al 100%.
+        [B] la probabilita' cresce al calare del SoC: e' il comportamento
+        dell'utente, che mette in carica quando vede la batteria bassa. E' un
+        tasso ORARIO applicato alla durata dt del round appena finito,
+            p = 1 - exp(-rate_per_hour * (1 - SoC) * dt_ore),
+        cosi' algoritmi con round di durata diversa vedono la stessa ricarica
+        per ora di tempo reale (prima p era fissa per round). Al primo round
+        dt = 0: nessuno parte in carica. Un device gia' in carica non viene
+        riestratto: esce dalla carica solo al 100%.
         """
         self.workload.step()
         if not self._recharge_enabled:
             return
+        dt_h = self._last_round_s / 3600.0
         for cid in self._profiles:
             if self._failed[cid] or self._charging[cid]:
                 continue
-            p = RECHARGE_PROB_BASE * (1.0 - self._soc[cid])
+            p = 1.0 - np.exp(-RECHARGE_RATE_PER_H * (1.0 - self._soc[cid]) * dt_h)
             if self._rng.random() < p:
                 self._charging[cid] = True
                 self._n_recharges[cid] += 1
@@ -312,8 +325,9 @@ class WorldState:
     def communication_time_s(self, cid: int) -> float:
         return comm_time_s()
 
-    def training_power_w(self, cid: int, batch_size: int) -> float:
-        return training_power_w(batch_size)
+    def training_power_w(self, cid: int, batch_size: int | None = None) -> float:
+        """Costante per tier: `batch_size` accettato e ignorato."""
+        return training_power_w(self._profiles[cid])
 
     # ------------------------------------------------------------ consumo
     def _drain(self, cid: int, power_w: float, dt_s: float) -> tuple[float, float]:
@@ -368,9 +382,8 @@ class WorldState:
         return e, e_lin
 
     def idle_power_w(self, cid: int) -> float:
-        """P_idle + w * (P_train - P_idle): interpola fra riposo e pieno carico."""
-        w = self.workload.utilization(cid)
-        return IDLE_POWER_W + w * (TRAIN_POWER_W - IDLE_POWER_W)
+        """P_idle + w * (P_train - P_idle) del tier, vedi idle_power_w()."""
+        return idle_power_w(self._profiles[cid], self.workload.utilization(cid))
 
     def apply_idle(self, durations: dict[int, float]) -> tuple[float, float]:
         """Idle di fine round, modello ESCS Sez. 4.2.
@@ -388,6 +401,7 @@ class WorldState:
         t_round = max(durations.values()) if durations else 0.0
         if t_round <= 0.0:
             return 0.0, 0.0
+        self._last_round_s = t_round
         self._charge_step(t_round)
         tot_e = tot_lin = 0.0
         for cid in self._profiles:

@@ -12,9 +12,10 @@ escs_*_peuk): i device si scaricano con questa formula e muoiono quando il
 SoC di Peukert tocca zero. Gli altri mondi montano la batteria lineare e
 quella da datasheet (battery_model.py).
 [B] con n > 1 le correnti BASSE costano meno della stima lineare: a 0.1 W di
-idle su 3500 mAh il pieno dura ~1.6 volte quello lineare.
+idle su 3500 mAh il pieno dura ~1.2 volte quello lineare (era ~1.6 con
+n = 1.15).
 
-[B] esponente n = PEUKERT_N di experiment.toml (1.15), capacita' nominale
+[B] esponente n = PEUKERT_N di experiment.toml (1.05), capacita' nominale
 alla corrente di riferimento R = RATED_R_HOURS (rated_c_rate = 0.2C, 5 h).
 Funzioni identiche al modello Peukert usato nelle campagne precedenti.
 """
@@ -65,10 +66,10 @@ def c_rate(current_a: float, profile: DeviceProfile) -> float:
 
 
 if __name__ == "__main__":
-    from device.constants import TRAIN_POWER_W
     from device.device_profile import generate_profiles
 
     p = generate_profiles(1)[0]
+    TRAIN_POWER_W = p.train_power_w
     i = load_power_to_battery_current(TRAIN_POWER_W)
     print(f"batteria {p.battery_capacity_mah:.0f} mAh, n={p.peukert_n}")
     print(f"P={TRAIN_POWER_W} W -> I={i:.3f} A ({c_rate(i, p):.2f}C)")

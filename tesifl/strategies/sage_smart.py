@@ -10,12 +10,13 @@ from flwr.common import log
 
 from device.battery_model import energy_wh_linear
 from device.communication_model import comm_power_w, comm_time_s
-from device.compute_model import optimal_batch_size, probe_time_s, training_time_s
+from device.compute_model import probe_time_s, training_time_s
 from device.communication_model import ctrl_latency_s
-from device.constants import IDLE_POWER_W, TRAIN_POWER_W, V_NOMINAL, WORKLOAD_STATES
+from device.constants import V_NOMINAL, WORKLOAD_STATES
 from device.fuel_gauge import DeviceReading
 from device.world_state import (
-    BATTERY_NAMES, battery_delta_soc, effective_profile, training_power_w,
+    BATTERY_NAMES, battery_delta_soc, effective_profile, idle_power_w,
+    training_power_w,
 )
 from strategies.sage_ablation import PhysicalSAGEAblation
 from tesiFL.client_policy import Envelope
@@ -102,8 +103,12 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         energia:  E * dSoC_epoca <= SoC_noto - soc_min - dSoC_upload
                   con dSoC stimato LINEARMENTE (P*t/capacita') e corretto da
                   un fattore k_i appreso dai consumi che il client riporta.
-      B: il batch ottimo del device (compute_model.optimal_batch_size) e i
-      due adiacenti nella lista delle taglie ammesse.
+      B: lo stesso batch delle baseline (batch_size). [B] con la potenza
+      costante per tier l'energia di un'epoca cala sempre al crescere di B,
+      quindi non c'e' un batch ottimo da negoziare; e con B diverso dalle
+      baseline SAGE-smart farebbe piu' (o meno) passi di SGD a parita' di
+      epoche, mescolando l'effetto della negoziazione con quello di B. Prima:
+      B in {32, 64} dal minimo di P(B) * t(B) con P(B) ~ B^0.3.
       [B] e' una stima volutamente LASCA: il server non conosce il workload
       attuale ne' la curva vera della batteria. Il compito di essere precisi
       e' del client.
@@ -155,8 +160,9 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
     PARAMETRI
       stale_weight, stale_max  peso (c) e scala dell'anzianita'
       soc_min        riserva che il CLIENT protegge (vincolo 2e di SAGE)
-      epochs_min     E_lo dell'envelope; E_hi al massimo epochs_cap_mult*E
-      batch_choices  taglie di batch ammesse
+      epochs_min     E_lo dell'envelope
+      epochs_cap_mult  E_hi al massimo epochs_cap_mult * E delle baseline
+                     (2 * 5 = 10): al massimo il doppio del lavoro standard
       deadline_mult  scala della deadline sulla mediana nominale
       probe_samples  campioni per stimare la loss prima di decidere
       max_waves      ondate di proposte per round (1 = nessun rimpiazzo)
@@ -170,7 +176,6 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         stale_weight: float = 0.3,
         stale_max: int = 25,
         soc_min: float = 0.20,
-        batch_choices: tuple[int, ...] = (32, 64, 128, 256),
         epochs_cap_mult: int = 2,
         epochs_min: int = 2,
         partition_sizes: dict[int, int] | None = None,
@@ -185,7 +190,6 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         self.stale_w = float(stale_weight)
         self.stale_max = int(stale_max)
         self.soc_min = float(soc_min)
-        self.batch_choices = tuple(int(b) for b in batch_choices)
         self.epochs_cap = int(epochs_cap_mult) * int(self.epochs)
         self.epochs_min = int(epochs_min)
         self.deadline_mult = float(deadline_mult)
@@ -203,7 +207,6 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
 
         self._last_seen: dict[int, int] = {}       # cid -> ultimo round scelto
         self._plan: dict[int, Envelope] = {}       # cid -> envelope del round
-        self._batch_of: dict[int, int] = {}
 
         # stato che il server tiene per ogni client: l'ultimo REPORT (cosa il
         # client ha detto e quando) e lo stato NOTO (stima o report fresco)
@@ -298,8 +301,8 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         if dt <= 0.0:
             return float(soc)
         w = self._w_rep.get(cid, self.w_busy)
-        p_idle = IDLE_POWER_W + w * (TRAIN_POWER_W - IDLE_POWER_W)
         prof = self.world.profile(cid)
+        p_idle = idle_power_w(prof, w)
         n = max(1, math.ceil(dt / _ESTIMATE_STEP_S))
         for _ in range(n):
             soc = max(0.0, soc + battery_delta_soc(self.world.battery, p_idle,
@@ -376,14 +379,9 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         return int(np.median(list(self._n.values()))) if self._n else None
 
     def _batch_for(self, cid: int) -> int:
-        """Batch ottimo del device, calcolato una volta sola: dipende dal
-        profilo hardware, che non cambia durante la run. [B] e' il minimo
-        analitico del costo di un'epoca (compute_model.optimal_batch_size)."""
-        if cid not in self._batch_of:
-            b = optimal_batch_size(self.world.profile(cid))
-            self._batch_of[cid] = min(self.batch_choices,
-                                      key=lambda x: abs(x - b))
-        return self._batch_of[cid]
+        """Lo stesso batch delle baseline (batch_size), per tutti i device:
+        vedi FASE 4 nella docstring della classe."""
+        return int(self.batch_size)
 
     def _staleness(self, cid: int, server_round: int) -> float:
         """Round dall'ultima selezione, normalizzati su stale_max.
@@ -507,10 +505,8 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
 
     # ============================================================ Fase 4
     def _batches_for(self, cid: int) -> tuple[int, ...]:
-        """Batch ottimo del device e i due adiacenti fra le taglie ammesse."""
-        ch = self.batch_choices
-        i = ch.index(self._batch_for(cid))
-        return tuple(ch[max(0, i - 1): i + 2])
+        """Taglie di batch dell'envelope: una sola, quella delle baseline."""
+        return (self._batch_for(cid),)
 
     def _assign_work(self, cid: int) -> Envelope:
         prof = self.world.profile(cid)          # statico: dalla Fase 0
@@ -532,7 +528,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
             cap_wh = prof.battery_capacity_mah / 1000.0 * V_NOMINAL
             k = self._k_cal.get(cid, 1.0)
             d_ep = k * energy_wh_linear(
-                training_power_w(b_ref), training_time_s(peff, 1, n, b_ref)
+                training_power_w(prof), training_time_s(peff, 1, n, b_ref)
             ) / cap_wh
             d_up = k * energy_wh_linear(comm_power_w(), comm_time_s()) / cap_wh
             spare = self._resource(cid) - self.soc_min - d_up
@@ -671,7 +667,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
             e_eff = steps / math.ceil(n_ex / b)
             t = training_time_s(peff, e_eff, n_ex, b) + probe_time_s(peff, probe)
             cap_wh = prof.battery_capacity_mah / 1000.0 * V_NOMINAL
-            lin = (energy_wh_linear(training_power_w(b), t)
+            lin = (energy_wh_linear(training_power_w(prof), t)
                    + energy_wh_linear(comm_power_w(), comm_time_s())) / cap_wh
             drop = soc0 - soc1
             if lin > 0 and drop > 0:

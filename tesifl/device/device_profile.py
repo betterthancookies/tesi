@@ -1,7 +1,8 @@
 """Popolazione di client: tre tier hardware in parti uguali.
 
-Ogni tier differisce per due sole grandezze, capacita' di batteria e velocita'
-di calcolo, prese da constants.TIERS. Con `tiers_enabled=False` la popolazione
+Ogni tier differisce per tre grandezze, capacita' di batteria, velocita' di
+calcolo e potenza di training, prese da constants.TIERS (i tre telefoni di
+Mandheling, vedi experiment.toml). Con `tiers_enabled=False` la popolazione
 torna omogenea e identica a prima: e' l'ablazione che separa l'effetto
 dell'eterogeneita' hardware da quello della politica di selezione.
 
@@ -21,9 +22,10 @@ import numpy as np
 
 from device.constants import (
     BATTERY_CAPACITY_MAH,
-    MACS_PER_S,
+    MACS_PER_S_UNIFORM,
     PEUKERT_N,
     TIERS,
+    TRAIN_POWER_W_UNIFORM,
 )
 
 TIER_NAMES = list(TIERS)
@@ -36,6 +38,8 @@ class DeviceProfile:
     macs_per_s: float
     peukert_n: float
     tier: str = "uniform"
+    # potenza del telefono durante il training, costante (non dipende da B)
+    train_power_w: float = TRAIN_POWER_W_UNIFORM
 
 
 def generate_profiles(
@@ -56,8 +60,8 @@ def generate_profiles(
         cap = BATTERY_CAPACITY_MAH if capacity_mah is None else float(capacity_mah)
         return [
             DeviceProfile(cid=cid, battery_capacity_mah=cap,
-                          macs_per_s=MACS_PER_S, peukert_n=PEUKERT_N,
-                          tier="uniform")
+                          macs_per_s=MACS_PER_S_UNIFORM, peukert_n=PEUKERT_N,
+                          tier="uniform", train_power_w=TRAIN_POWER_W_UNIFORM)
             for cid in range(n_clients)
         ]
 
@@ -76,9 +80,10 @@ def generate_profiles(
             # consumo (round piu' corto = meno energia) sia nella durata del
             # round, che il modello di idle definisce come il training del
             # selezionato piu' lento: un tier lento penalizza anche gli altri.
-            macs_per_s=MACS_PER_S * float(t["speed_mult"]),
+            macs_per_s=float(t["macs_per_s"]),
             peukert_n=PEUKERT_N,
             tier=tier_of[cid],
+            train_power_w=float(t["train_power_w"]),
         ))
     return profiles
 
@@ -103,7 +108,7 @@ if __name__ == "__main__":
     for name in TIER_NAMES:
         p = next(x for x in profs if x.tier == name)
         print(f"  {name:>5}: {p.battery_capacity_mah:.0f} mAh, "
-              f"{p.macs_per_s / 1e9:.2f} GMAC/s")
+              f"{p.macs_per_s / 1e9:.2f} GMAC/s, {p.train_power_w:.2f} W")
     print("\nprimi 12 cid:", [(p.cid, p.tier) for p in profs[:12]])
     print("\nablazione (tiers_enabled=False):",
           generate_profiles(3, seed=2026, tiers_enabled=False)[0])

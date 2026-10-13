@@ -69,6 +69,7 @@ class DeviceReading:
             "cid": int(p.cid),
             "capacity-mah": float(p.battery_capacity_mah),
             "macs-per-s": float(p.macs_per_s),
+            "train-power-w": float(p.train_power_w),
             "peukert-n": float(p.peukert_n),
             "tier": str(p.tier),
         }
@@ -86,6 +87,7 @@ class DeviceReading:
                 macs_per_s=float(rec["macs-per-s"]),
                 peukert_n=float(rec["peukert-n"]),
                 tier=str(rec["tier"]),
+                train_power_w=float(rec["train-power-w"]),
             ),
             model={v: k for k, v in _NAMES.items()}[str(rec["battery-model"])],
         )
@@ -105,10 +107,12 @@ class DeviceReading:
 
     def soc_after(self, dt_s: float, batch_size: int) -> tuple[float, float]:
         """(SoC dopo il training, SoC dopo l'upload) secondo la batteria del
-        device. In carica la batteria non scende: e' collegato alla rete."""
+        device. In carica la batteria non scende: e' collegato alla rete.
+        La potenza di training e' quella del tier: `batch_size` cambia solo la
+        durata (gia' dentro dt_s), non la potenza."""
         if self.charging:
             return self.soc, self.soc
-        s1 = self._drain(self.soc, training_power_w(batch_size), dt_s)
+        s1 = self._drain(self.soc, training_power_w(self.profile), dt_s)
         if s1 <= 0.0:
             # il mondo marca il device come morto e non addebita l'upload
             return 0.0, 0.0

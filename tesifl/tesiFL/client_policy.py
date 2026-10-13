@@ -34,12 +34,11 @@ LA REGOLA, in quattro passi
    si dichiara. Se nemmeno E_lo e' sostenibile per la batteria, il client si
    ritira dal round (opt-out) senza toccare la riserva.
 
-[B] PERCHE' IL WORKLOAD SPOSTA B. Col throughput ridotto da altre app il
-calcolo per campione dura di piu', il costo fisso per batch pesa meno e il
-batch energeticamente ottimo si sposta. Quando invece e' la deadline a
-mordere, conviene il batch piu' grande (meno passi, meno overhead): e'
-l'indicazione della proposta "high workload -> larger B", che qui emerge dai
-vincoli invece di essere scritta come regola.
+[B] B NELL'ENVELOPE. Oggi il server propone un solo batch, quello delle
+baseline (vedi strategies/sage_smart.py, FASE 4): con la potenza di training
+costante per tier il batch piu' grande e' sempre il piu' economico, quindi non
+c'e' nulla da scegliere e il client decide solo E. La logica qui sotto resta
+generale (scorre tutti i batch dell'envelope) per lo sweep su B.
 """
 
 from __future__ import annotations

@@ -20,11 +20,11 @@ n=${#ALGO_ARR[@]}
 off=$(( ROT % n ))
 ALGO_ARR=( "${ALGO_ARR[@]:$off}" "${ALGO_ARR[@]:0:$off}" )
 
-# pesi di SAGE per beta, letti da experiment.toml
-read -r SA SB SC QA QB <<< "$(python3 - "$BETA" <<'PY'
+# pesi di SAGE per beta, letti da experiment.toml (o da EXP_TOML, vedi run.sh)
+read -r SA SB SC QA QB <<< "$(python3 - "$BETA" "${EXP_TOML:-experiment.toml}" <<'PY'
 import sys, tomllib
 b = sys.argv[1]
-c = tomllib.load(open("experiment.toml", "rb"))["algo"]
+c = tomllib.load(open(sys.argv[2], "rb"))["algo"]
 abc = c["sage_abc"].get(b, [0.5, 0.2, 0.3])
 ab = c["sage_ab"].get(b, [0.5, 0.5])
 print(*abc, *ab)
