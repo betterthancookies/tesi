@@ -123,7 +123,18 @@ peukert_n        = 1.05
 # fwd + bwd ~ 3x fwd: lo stesso rapporto di Mandheling (Tab. 6) e
 # TrainDeeploy (2.85-2.97x misurato)
 train_macs_factor = 3.0
-batch_overhead_s  = 0.115  # [MISURATO su stanis, riscalato al device simulato]
+# Costo fisso per batch (passo dell'ottimizzatore, chiamate del framework).
+# Mandheling, Fig. 7(a,c): tempo per batch contro B (4..128) su Xiaomi 11 Pro,
+# TFLite FP32, coordinate estratte dal PDF vettoriale e tarate sui valori a
+# B=64 di Fig. 5. Costo fisso = t(4) - 4 * t(128)/128:
+#   VGG16       0.12 s - 4 * 16.2 ms = 0.055 s
+#   InceptionV3 0.22 s - 4 * 40.4 ms = 0.058 s
+# [B] prima 0.115 s, "misurato su stanis (server GPU), riscalato": senza una
+# derivazione scritta e non misurato su un telefono. Il valore conta: e'
+# l'unico modo in cui B entra nel costo (vedi [compute] qui sotto).
+# [LIMITE] un solo telefono (il top di gamma) e modelli piu' pesanti di
+# ResNet-20; MNN dava ~0.02-0.03 s.
+batch_overhead_s  = 0.057
 # [B] la potenza di training e' COSTANTE per tier (train_power_w dei tier):
 # non dipende piu' da B. Prima P(B) = 3 W * (B/128)^0.3, esponente senza
 # fonte. Con potenza costante l'energia di un'epoca CALA al crescere di B

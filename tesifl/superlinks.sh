@@ -45,10 +45,20 @@ descendants() { local c; for c in $(pgrep -P "$1"); do echo "$c"; descendants "$
 
 # processi flwr-simulation discendenti del SuperLink della GPU $1: uno per
 # run in corso. Solo i SUOI, non quelli di altri SuperLink o di altri utenti.
+# [B] ZOMBIE ESCLUSI. Finita la run, flwr-simulation termina ma il SuperLink
+# (flwr 1.32) non ne raccoglie lo stato di uscita: resta "<defunct>", uno per
+# run, finche' il SuperLink non si riavvia. Sono i "task che aumentano a ogni
+# run" del vecchio server. Uno zombie non usa CPU, memoria ne' GPU e non si
+# puo' uccidere: non va aspettato. sim_procs="zombie" li elenca a parte.
 sim_procs() {
-  local root p; root=$(sl_pid "$1"); [ -n "$root" ] || return 0
+  local root p st; root=$(sl_pid "$1"); [ -n "$root" ] || return 0
   for p in $(descendants "$root"); do
-    ps -o args= -p "$p" 2>/dev/null | grep -q "flwr-simulation" && echo "$p"
+    ps -o args= -p "$p" 2>/dev/null | grep -q "flwr-simulation" || continue
+    st=$(ps -o stat= -p "$p" 2>/dev/null)
+    case "$st" in
+      Z*) [ "${2:-}" = "zombie" ] && echo "$p" ;;
+      *)  [ "${2:-}" = "zombie" ] || echo "$p" ;;
+    esac
   done
 }
 
@@ -131,7 +141,8 @@ status)
     pid=$(sl_pid "$gpu")
     if [ -n "$pid" ]; then
       echo "  ${n}  GPU ${gpu}  porta ${p}  pid ${pid}  run attive: $(count "$(active_runs "$gpu")")" \
-           " processi di simulazione: $(count "$(sim_procs "$gpu")")"
+           " processi di simulazione: $(count "$(sim_procs "$gpu")")" \
+           " (zombie innocui: $(count "$(sim_procs "$gpu" zombie)"))"
     else
       echo "  ${n}  GPU ${gpu}  porta ${p}  NON ATTIVO"
     fi
@@ -144,12 +155,11 @@ wait-idle)
   # sia davvero finita (valutazione finale, Ray che si spegne): lanciando
   # subito la successiva le due si sovrapponevano sulla GPU e le run attive
   # crescevano a ogni run. _shard.sh chiama questo prima di ogni run.
-  # [B] PROCESSO ORFANO. Con flwr 1.32 il processo flwr-simulation di una run
-  # resta vivo anche dopo che la run e' finita (CSV scritto, flwr ls non la
-  # elenca piu' fra le attive): sul vecchio server si accumulavano, uno per
-  # run. Due attese diverse:
+  # [B] Due attese diverse:
   #   run ancora attiva in flwr ls  -> fino a WAIT_MAX (300 s), poi stop;
   #   solo il processo, run finita  -> WAIT_ORPHAN (30 s), poi lo chiudo.
+  # Gli zombie (vedi sim_procs) non contano: il 13/10 lo sweep aspettava 300 s
+  # a ogni run un "[flwr-simulation] <defunct>", gia' terminato.
   gpu="${2:?uso: bash superlinks.sh wait-idle <gpu>}"
   n=$(name_of "$gpu"); t0=$(date +%s); t=0; last=-60
   [ -n "$(sl_pid "$gpu")" ] || exit 0
