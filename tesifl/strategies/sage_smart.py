@@ -854,8 +854,13 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         out = [g.copy() for g in glob]
         for j in range(len(keys)):
             if is_bn[j]:
-                out[j] = sum(pi * w[j].astype(np.float64)
-                             for pi, (_, _, w) in zip(p, rows))
+                # [B] np.asarray + reshape: num_batches_tracked e' un array a 0
+                # dimensioni, e sum() lo degraderebbe a scalare numpy, che
+                # flwr.app.Array rifiuta (crash del fastTest del 14/10)
+                out[j] = np.asarray(
+                    sum(pi * w[j].astype(np.float64) for pi, (_, _, w) in zip(p, rows)),
+                    dtype=np.float64,
+                ).reshape(glob[j].shape)
         # parametri allenabili: FedNova
         for pi, (_, tau, w) in zip(p, rows):
             for j, wj in enumerate(w):
