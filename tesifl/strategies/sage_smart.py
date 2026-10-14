@@ -103,7 +103,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         energia:  E * dSoC_epoca <= SoC_noto - soc_min - dSoC_upload
                   con dSoC stimato LINEARMENTE (P*t/capacita') e corretto da
                   un fattore k_i appreso dai consumi che il client riporta.
-      B: le potenze di 2 fra batch_min e batch_max (16..256). Il client
+      B: le potenze di 2 fra batch_min e batch_max (16..64). Il client
       sceglie il B "piu' economico per passo di SGD": il piu' piccolo,
       riducendo prima E, e sale solo se a quel B non ci sta nemmeno E_lo
       (vedi client_policy.decide). Il vincolo di energia su E_hi e' stimato
@@ -194,7 +194,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         query_timeout_s: float = 600.0,
         calib_alpha: float = 0.3,
         batch_min: int = 16,
-        batch_max: int = 256,
+        batch_max: int = 64,
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -795,6 +795,15 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
 
         [B] tau_i e' quello DICHIARATO dal client, non ricostruito da E e B:
         con l'early stopping (Fase 6) il client puo' fermarsi a meta' epoca.
+
+        [B] BATCHNORM FUORI DA FEDNOVA. running_mean, running_var e
+        num_batches_tracked non sono passi di gradiente: normalizzarli per
+        tau e rimoltiplicarli per tau_eff li ESTRAPOLA (la somma dei fattori
+        tau_eff * sum_i p_i / tau_i e' > 1 appena i tau differiscono) oltre i
+        valori di qualsiasi client. Il 14/10, col B dinamico 16-256 (spread
+        15-16), il fastTest di SAGE-smart e' collassato dal round 1: accuracy
+        0.10, loss 9-11. Le statistiche si mediano come in FedAvg (pesi p_i);
+        FedNova resta sui soli parametri allenabili.
         """
         arrays, metrics = super().aggregate_train(server_round, replies)
         # il server sa quanto e' durato il round: ha aspettato le risposte
@@ -839,10 +848,19 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         p = [n / tot for n, _, _ in rows]
         tau_eff = sum(pi * tau for pi, (_, tau, _) in zip(p, rows))
 
+        # statistiche di BatchNorm: media pesata per i dati, come FedAvg
+        is_bn = [k.endswith(("running_mean", "running_var", "num_batches_tracked"))
+                 for k in keys]
         out = [g.copy() for g in glob]
+        for j in range(len(keys)):
+            if is_bn[j]:
+                out[j] = sum(pi * w[j].astype(np.float64)
+                             for pi, (_, _, w) in zip(p, rows))
+        # parametri allenabili: FedNova
         for pi, (_, tau, w) in zip(p, rows):
             for j, wj in enumerate(w):
-                out[j] += tau_eff * pi * (wj.astype(np.float64) - glob[j]) / tau
+                if not is_bn[j]:
+                    out[j] += tau_eff * pi * (wj.astype(np.float64) - glob[j]) / tau
 
         taus = [tau for _, tau, _ in rows]
         self._round_stats.setdefault(int(server_round), {}).update({

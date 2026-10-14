@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import csv
 import math
+import tomllib
 from pathlib import Path
 
 COLS = ("round", "accuracy", "loss", "total_energy_wh", "energy_train_wh",
@@ -119,10 +120,19 @@ def main() -> int:
               if math.isfinite(x)]
         me = [x for x in (float(r["mean_epochs"]) for r in rows if r.get("mean_epochs"))
               if math.isfinite(x)]
-        check("B medio scelto dai client dentro l'envelope (16-256)",
-              bool(mb) and all(16 <= b <= 256 for b in mb),
+        al = tomllib.load(open("experiment.toml", "rb"))["algo"]
+        b_lo, b_hi = int(al["smart_batch_min"]), int(al["smart_batch_max"])
+        check(f"B medio scelto dai client dentro l'envelope ({b_lo}-{b_hi})",
+              bool(mb) and all(b_lo <= b <= b_hi for b in mb),
               "B " + " ".join(f"{b:.0f}" for b in mb)
               + ("  E " + " ".join(f"{e:.1f}" for e in me) if me else ""))
+        # [B] FedNova amplifica di tau_eff/tau_i chi fa pochi passi: sopra ~8
+        # un solo update domina (collasso del 14/10 con spread 15-16)
+        sp = [x for x in (float(r["tau_spread"]) for r in rows if r.get("tau_spread"))
+              if math.isfinite(x)]
+        if sp:
+            check("spread dei passi FedNova contenuto (max tau / min tau <= 8)",
+                  max(sp) <= 8.0, " ".join(f"{x:.1f}" for x in sp))
 
     # --- batterie ----------------------------------------------------------
     soc_ok = all(0.0 <= lo <= m <= hi <= 1.0 for lo, m, hi in

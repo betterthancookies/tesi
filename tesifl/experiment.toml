@@ -272,8 +272,14 @@ smart_max_waves      = 2      # ondate di proposte per round (1 = nessun rimpiaz
 #   SoC   0.500  0.543  0.575  0.574  0.578  0.576
 # l'accuracy cresce sempre al calare di B; il SoC e' piatto da 32 in su e
 # cala sotto. 16 e' il punto piu' vicino all'ideale (acc e SoC massimi).
+# [B] TETTO A 64, non 256. SAGE-smart aggrega con FedNova, che amplifica
+# l'update di chi fa pochi passi di tau_eff/tau_i. Col range 16-256 un client
+# fuori deadline ripiegava su B=256 e faceva ~18 passi contro ~290: spread
+# 15-16 (soglia ~6-8) e modello collassato nel fastTest del 14/10. A 64 lo
+# stesso client fa ~70 passi. Le partizioni grandi salgono a 32/64 e fanno
+# comunque un numero di passi simile ai client a 16 (3000/32 ~ 1666/16).
 smart_batch_min      = 16
-smart_batch_max      = 256
+smart_batch_max      = 64
 
 # ESCS
 escs_min_battery       = 0.20   # B_LVL_min, Table 4 del paper
