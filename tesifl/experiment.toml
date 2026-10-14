@@ -10,7 +10,9 @@ gpus        = [2]            # un SuperLink per GPU; beta i -> GPU (i mod n_gpu)
                              # i beta della stessa GPU girano IN SEQUENZA.
                              # [1, 2, 3] sul vecchio server, [2] sul nuovo.
 stagger_s   = 180            # ritardo fra l'avvio di una GPU e la successiva
-timeout_s   = 7200           # una run oltre questo tempo e' considerata persa
+timeout_s   = 14400          # una run oltre questo tempo e' considerata persa
+                             # [B] 4 h: con batch piccoli (B = 8, sweep) la
+                             # GPU fa 16x i passi di B = 128 e 2 h non bastano
 
 # Algoritmi da eseguire. Commenta le righe che non ti servono.
 # Il suffisso dell'etichetta e' la BATTERIA DEI DEVICE, cioe' la batteria
@@ -259,6 +261,19 @@ smart_probe_samples  = 256    # campioni locali per stimare la loss prima di dec
 # relatore, opzione 3 con l'opzione 2): il server ordina i client con una
 # stima del SoC, propone l'envelope ai candidati, chi rifiuta viene sostituito.
 smart_max_waves      = 2      # ondate di proposte per round (1 = nessun rimpiazzo)
+# B di SAGE-smart (le baseline usano batch_size = 128). L'envelope propone le
+# potenze di 2 fra smart_batch_min e smart_batch_max; il client sceglie il
+# B "piu' economico per passo di SGD": il piu' piccolo, riducendo prima E, e
+# sale al successivo solo se a quel B non ci sta nemmeno E_lo (batteria o
+# deadline). Vedi tesiFL/client_policy.py.
+# [B] B_min = 16 dallo sweep (results_sweepB*, SAGE-smart nm, 3 beta, B fisso):
+#   B     8      16     32     64     128    256
+#   acc   0.702  0.667  0.632  0.608  0.586  0.531
+#   SoC   0.500  0.543  0.575  0.574  0.578  0.576
+# l'accuracy cresce sempre al calare di B; il SoC e' piatto da 32 in su e
+# cala sotto. 16 e' il punto piu' vicino all'ideale (acc e SoC massimi).
+smart_batch_min      = 16
+smart_batch_max      = 256
 
 # ESCS
 escs_min_battery       = 0.20   # B_LVL_min, Table 4 del paper

@@ -103,12 +103,20 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         energia:  E * dSoC_epoca <= SoC_noto - soc_min - dSoC_upload
                   con dSoC stimato LINEARMENTE (P*t/capacita') e corretto da
                   un fattore k_i appreso dai consumi che il client riporta.
-      B: lo stesso batch delle baseline (batch_size). [B] con la potenza
-      costante per tier l'energia di un'epoca cala sempre al crescere di B,
-      quindi non c'e' un batch ottimo da negoziare; e con B diverso dalle
-      baseline SAGE-smart farebbe piu' (o meno) passi di SGD a parita' di
-      epoche, mescolando l'effetto della negoziazione con quello di B. Prima:
-      B in {32, 64} dal minimo di P(B) * t(B) con P(B) ~ B^0.3.
+      B: le potenze di 2 fra batch_min e batch_max (16..256). Il client
+      sceglie il B "piu' economico per passo di SGD": il piu' piccolo,
+      riducendo prima E, e sale solo se a quel B non ci sta nemmeno E_lo
+      (vedi client_policy.decide). Il vincolo di energia su E_hi e' stimato
+      a batch_min (il B preferito, il piu' caro per epoca), quello di
+      deadline col B piu' veloce dell'envelope.
+      [B] con la potenza costante per tier l'energia per CAMPIONE cala al
+      crescere di B, quella per PASSO di SGD cresce: con la stessa energia
+      B = 16 fa molti piu' passi di B = 256. Lo sweep (experiment.toml,
+      smart_batch_min) premia i B piccoli in accuracy; il SoC cala sotto 32.
+      [B] le baseline restano a batch_size = 128: parte del vantaggio di
+      SAGE-smart in accuracy viene da B, non dalla negoziazione. L'ablazione
+      e' FedAvg con B piccolo (results_sweepB*). Prima: B in {32, 64} dal
+      minimo di P(B) * t(B) con P(B) ~ B^0.3, poi B = 128 fisso.
       [B] e' una stima volutamente LASCA: il server non conosce il workload
       attuale ne' la curva vera della batteria. Il compito di essere precisi
       e' del client.
@@ -163,6 +171,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
       epochs_min     E_lo dell'envelope
       epochs_cap_mult  E_hi al massimo epochs_cap_mult * E delle baseline
                      (2 * 5 = 10): al massimo il doppio del lavoro standard
+      batch_min, batch_max  B dell'envelope: potenze di 2 fra i due
       deadline_mult  scala della deadline sulla mediana nominale
       probe_samples  campioni per stimare la loss prima di decidere
       max_waves      ondate di proposte per round (1 = nessun rimpiazzo)
@@ -184,12 +193,21 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         max_waves: int = 2,
         query_timeout_s: float = 600.0,
         calib_alpha: float = 0.3,
+        batch_min: int = 16,
+        batch_max: int = 256,
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
         self.stale_w = float(stale_weight)
         self.stale_max = int(stale_max)
         self.soc_min = float(soc_min)
+        if not 1 <= int(batch_min) <= int(batch_max):
+            raise ValueError(f"batch: serve 1 <= min <= max, non {batch_min}, {batch_max}")
+        choices, b = [], int(batch_min)
+        while b <= int(batch_max):
+            choices.append(b)
+            b *= 2
+        self.batch_choices = tuple(choices)
         self.epochs_cap = int(epochs_cap_mult) * int(self.epochs)
         self.epochs_min = int(epochs_min)
         self.deadline_mult = float(deadline_mult)
@@ -379,9 +397,9 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         return int(np.median(list(self._n.values()))) if self._n else None
 
     def _batch_for(self, cid: int) -> int:
-        """Lo stesso batch delle baseline (batch_size), per tutti i device:
-        vedi FASE 4 nella docstring della classe."""
-        return int(self.batch_size)
+        """B preferito: il piu' piccolo dell'envelope (FASE 4 nella docstring
+        della classe). Il B effettivo lo sceglie il client e lo dichiara."""
+        return int(self.batch_choices[0])
 
     def _staleness(self, cid: int, server_round: int) -> float:
         """Round dall'ultima selezione, normalizzati su stale_max.
@@ -505,8 +523,8 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
 
     # ============================================================ Fase 4
     def _batches_for(self, cid: int) -> tuple[int, ...]:
-        """Taglie di batch dell'envelope: una sola, quella delle baseline."""
-        return (self._batch_for(cid),)
+        """Taglie di batch dell'envelope, dalla piu' piccola (preferita)."""
+        return self.batch_choices
 
     def _assign_work(self, cid: int) -> Envelope:
         prof = self.world.profile(cid)          # statico: dalla Fase 0

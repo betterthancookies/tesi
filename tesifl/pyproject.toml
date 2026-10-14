@@ -63,6 +63,8 @@ smart-epochs-min = 2         # E_lo dell'envelope
 smart-deadline-mult = 1.0    # deadline = mult * mediana dei tempi nominali
 smart-probe-samples = 256    # campioni per stimare la loss locale
 smart-max-waves = 2          # ondate di proposte per round (1 = nessun rimpiazzo)
+smart-batch-min = 16         # B piu' piccolo (preferito) dell'envelope
+smart-batch-max = 256        # B piu' grande, se il piccolo non ci sta
 # --- batteria dei device (la batteria FISICA del mondo, per tutti gli
 # algoritmi): "lin" (lineare) | "peuk" (Peukert) | "nm" (datasheet).
 # _shard.sh la ricava dal suffisso dell'etichetta.

@@ -27,18 +27,21 @@ LA REGOLA, in quattro passi
 4. Vincoli, verificati sulla TRAIETTORIA, non sullo stato attuale:
    - energia:  SoC previsto A FINE ROUND (training + upload) >= soc_min
    - deadline: durata prevista col workload ATTUALE <= deadline del server
-   Si scende da E* verso E_lo finche' un batch dell'envelope li rispetta
-   entrambi; a parita' di E si sceglie il B che lascia piu' carica (in
-   carica: il piu' veloce).
-   Se solo la deadline non e' rispettabile si fa E_lo col B piu' veloce e lo
-   si dichiara. Se nemmeno E_lo e' sostenibile per la batteria, il client si
-   ritira dal round (opt-out) senza toccare la riserva.
+   B "piu' economico per passo di SGD": si parte dal B piu' piccolo
+   dell'envelope e si scende da E* verso E_lo finche' i vincoli sono
+   rispettati; solo se a quel B non ci sta nemmeno E_lo si passa al B
+   successivo (piu' grande: epoca piu' corta e meno cara).
+   Se a nessun B la deadline e' rispettabile si fa E_lo col B piu' veloce e
+   lo si dichiara. Se nemmeno E_lo e' sostenibile per la batteria, il client
+   si ritira dal round (opt-out) senza toccare la riserva.
 
-[B] B NELL'ENVELOPE. Oggi il server propone un solo batch, quello delle
-baseline (vedi strategies/sage_smart.py, FASE 4): con la potenza di training
-costante per tier il batch piu' grande e' sempre il piu' economico, quindi non
-c'e' nulla da scegliere e il client decide solo E. La logica qui sotto resta
-generale (scorre tutti i batch dell'envelope) per lo sweep su B.
+[B] PERCHE' IL B PIU' PICCOLO. Con la potenza di training costante per tier
+l'energia per CAMPIONE cala al crescere di B (meno costo fisso per batch), ma
+quella per PASSO di SGD cresce: con la stessa energia un B piccolo fa molti
+piu' passi. Lo sweep su B (experiment.toml, smart_batch_min) mostra
+l'accuracy crescere al calare di B; il B minimo dell'envelope (16) e' il
+compromesso con il SoC finale. Il client riduce prima E e poi sale di B:
+cosi' B varia davvero solo per i client lenti, occupati o scarichi.
 """
 
 from __future__ import annotations
@@ -165,13 +168,14 @@ def decide(reading: DeviceReading, env: Envelope, n_samples: int,
                 out.append((b, t, soc_end))
         return out
 
-    for e in range(e_target, env.e_lo - 1, -1):
-        on_time = [o for o in options(e) if o[1] <= env.deadline_s]
-        if on_time:
-            # piu' carica residua; in carica sono tutte uguali -> il piu' veloce
-            b, t, soc_end = max(on_time, key=lambda o: (o[2], -o[1]))
-            return Plan(False, e, b, t, soc_end, True, u, e_target,
-                        "target" if e == e_target else "ridotto")
+    # B dal piu' piccolo: dentro ogni B si riduce E, e si sale di B solo se
+    # a quel B non ci sta nemmeno E_lo
+    for b in sorted(env.batches):
+        for e in range(e_target, env.e_lo - 1, -1):
+            t, soc_end = reading.predict(e, b, n_samples, p)
+            if _energy_ok(reading, soc_end, env.soc_min) and t <= env.deadline_s:
+                return Plan(False, e, b, t, soc_end, True, u, e_target,
+                            "target" if e == e_target else "ridotto")
 
     # nessun E rispetta la deadline: E_lo col batch piu' veloce, se la
     # batteria lo regge. La deadline e' un vincolo di comparabilita', la

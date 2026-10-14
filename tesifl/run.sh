@@ -5,6 +5,8 @@
 #   bash run.sh --fastTest   run minuscola (FedAvg, beta 0.5, 3 round) che
 #                            verifica ambiente, GPU, dataset e valori; scrive
 #                            in results_fasttest/, non tocca la campagna
+#   FT_ALGO=sage_smart_nm bash run.sh --fastTest   la stessa con un'altra
+#                            etichetta (es. per vedere i B scelti da SAGE-smart)
 #   bash run.sh --dry        stampa cosa farebbe e si ferma
 #   bash run.sh --resume     salta i CSV gia' presenti (default: attivo)
 #   bash run.sh --force      rifa' tutto anche se i CSV ci sono
@@ -78,6 +80,8 @@ out = {
                 f"smart-deadline-mult={al['smart_deadline_mult']} "
                 f"smart-probe-samples={al['smart_probe_samples']} "
                 f"smart-max-waves={al['smart_max_waves']} "
+                f"smart-batch-min={al['smart_batch_min']} "
+                f"smart-batch-max={al['smart_batch_max']} "
                 f"escs-min-battery={al['escs_min_battery']} "
                 f"escs-min-nq={al['escs_min_nq']} "
                 f"escs-first-round-all={str(al['escs_first_round_all']).lower()} "
@@ -171,8 +175,9 @@ start_superlinks() {
 # ---- fastTest -------------------------------------------------------
 if [ "$FAST" = "1" ]; then
   FT_RESULTS="results_fasttest"; FT_ROUNDS=3; FT_BETA=0.5; FT_TIMEOUT=1800
+  FT_ALGO=${FT_ALGO:-fedavg}
   gpu="${GPU_ARR[0]}"; seed="${SEEDS%% *}"
-  echo "=== fastTest: fedavg, beta ${FT_BETA}, seed ${seed}, ${FT_ROUNDS} round, ${CLIENTS} client (k=${K}), GPU ${gpu} ==="
+  echo "=== fastTest: ${FT_ALGO}, beta ${FT_BETA}, seed ${seed}, ${FT_ROUNDS} round, ${CLIENTS} client (k=${K}), GPU ${gpu} ==="
   python3 -c "import sys;sys.path.insert(0,'.');from device.constants import describe;print('    fisica:',describe())"
   echo ""
   preflight || { echo "=== PROBLEMI nell'ambiente: NON procedere ==="; exit 1; }
@@ -182,12 +187,13 @@ if [ "$FAST" = "1" ]; then
   rm -rf "$FT_RESULTS"; mkdir -p "$FT_RESULTS"
   t0=$(date +%s)
   BETA=${FT_BETA} GPU=${gpu} ROT=0 FORCE=1 RESULTS="${FT_RESULTS}" NAME=fasttest \
-  ROUNDS=${FT_ROUNDS} CLIENTS=${CLIENTS} K=${K} SEEDS="${seed}" ALGOS=fedavg \
+  ROUNDS=${FT_ROUNDS} CLIENTS=${CLIENTS} K=${K} SEEDS="${seed}" ALGOS="${FT_ALGO}" \
   TIMEOUT=${FT_TIMEOUT} WORLD="${WORLD}" ALGOCFG="${ALGOCFG}" \
     bash _shard.sh 2>&1 | tee "${FT_RESULTS}/fasttest.log"
   dt=$(( $(date +%s) - t0 ))
   btag=$(echo "$FT_BETA" | tr -d '.')
-  python3 check_fasttest.py --csv "${FT_RESULTS}/fedavg_b${btag}_seed${seed}.csv" \
+  python3 check_fasttest.py --csv "${FT_RESULTS}/${FT_ALGO}_b${btag}_seed${seed}.csv" \
+    --label "$FT_ALGO" \
     --rounds "$FT_ROUNDS" --clients "$CLIENTS" --seconds "$dt" --warn "$WARN"
   rc=$?
   [ "$rc" = "0" ] || echo "  log: ${FT_RESULTS}/fasttest.log  e  /tmp/superlink_gpu${gpu}.log"

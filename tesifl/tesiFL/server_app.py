@@ -161,6 +161,8 @@ def main(grid: Grid, context: Context) -> None:
             deadline_mult=float(context.run_config["smart-deadline-mult"]),
             probe_samples=int(context.run_config["smart-probe-samples"]),
             max_waves=int(context.run_config["smart-max-waves"]),
+            batch_min=int(context.run_config["smart-batch-min"]),
+            batch_max=int(context.run_config["smart-batch-max"]),
             **common,
         )
         print(
@@ -171,7 +173,8 @@ def main(grid: Grid, context: Context) -> None:
             f"(E,B) decisi dal client | "
             f"soc_min={strategy.soc_min} E_lo={strategy.epochs_min} "
             f"deadline x{strategy.deadline_mult} probe={strategy.probe_samples} "
-            f"negoziazione max {strategy.max_waves} ondate"
+            f"negoziazione max {strategy.max_waves} ondate | "
+            f"B in {strategy.batch_choices}"
         )
 
     elif algorithm == "sage_soc":

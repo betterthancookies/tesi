@@ -2,10 +2,11 @@
 """Controlla il CSV della run minuscola di `bash run.sh --fastTest`.
 
     python check_fasttest.py --csv results_fasttest/fedavg_b05_seed2026.csv \
-        --rounds 3 --clients 30 [--seconds 140] [--warn "..."]
+        --rounds 3 --clients 30 [--label fedavg] [--seconds 140] [--warn "..."]
 
-FedAvg gira nel mondo a batteria LINEARE, quindi qui valgono identita'
-esatte (carica della batteria = energia del carico = somma delle voci).
+In ogni mondo la carica spesa dalla batteria e' la somma delle sue voci
+(training + comunicazione + idle + controllo). Nel mondo LINEARE (etichette
+senza suffisso _peuk/_nm, come fedavg) e' anche uguale all'energia del carico.
 Gli intervalli sono larghi (circa 10x attorno ai valori della campagna
 rechargeONdeviceON_ResNet20_batterie, beta 0.5, 3 round: accuracy 0.38,
 training ~0.6 Wh/round, comunicazione ~0.05 Wh/round per 6 client): devono
@@ -30,6 +31,7 @@ def main() -> int:
     ap.add_argument("--csv", required=True)
     ap.add_argument("--rounds", type=int, required=True)
     ap.add_argument("--clients", type=int, required=True)
+    ap.add_argument("--label", default="fedavg")
     ap.add_argument("--seconds", type=int, default=0)
     ap.add_argument("--warn", default="", help="avvisi dai controlli d'ambiente")
     args = ap.parse_args()
@@ -100,15 +102,27 @@ def main() -> int:
     check("idle in aumento", all(b > a for a, b in
                                  zip(v["energy_idle_wh"], v["energy_idle_wh"][1:])))
 
-    # --- contabilita' dell'energia (mondo lineare) -----------------------
+    # --- contabilita' dell'energia ----------------------------------------
     parts = [t + c + i + k for t, c, i, k in zip(v["energy_train_wh"], v["energy_comm_wh"],
                                                   v["energy_idle_wh"], v["energy_ctrl_wh"])]
-    err_sum = max(abs(p - e) / e for p, e in zip(parts, v["energy_lin_wh"]))
-    err_lin = max(abs(t - e) / e for t, e in zip(v["total_energy_wh"], v["energy_lin_wh"]))
-    check("carico = training + comunicazione + idle + controllo", err_sum < 1e-3,
+    err_sum = max(abs(p - e) / e for p, e in zip(parts, v["total_energy_wh"]))
+    check("carica = training + comunicazione + idle + controllo", err_sum < 1e-3,
           f"errore relativo {err_sum:.1e}")
-    check("batteria lineare: carica della batteria = energia del carico", err_lin < 1e-3,
-          f"errore relativo {err_lin:.1e}")
+    if not args.label.endswith(("_peuk", "_nm")):
+        err_lin = max(abs(t - e) / e for t, e in zip(v["total_energy_wh"], v["energy_lin_wh"]))
+        check("batteria lineare: carica della batteria = energia del carico", err_lin < 1e-3,
+              f"errore relativo {err_lin:.1e}")
+
+    # --- SAGE-smart: B ed E scelti dai client --------------------------------
+    if args.label.startswith("sage_smart") and "mean_batch" in rows[0]:
+        mb = [x for x in (float(r["mean_batch"]) for r in rows if r.get("mean_batch"))
+              if math.isfinite(x)]
+        me = [x for x in (float(r["mean_epochs"]) for r in rows if r.get("mean_epochs"))
+              if math.isfinite(x)]
+        check("B medio scelto dai client dentro l'envelope (16-256)",
+              bool(mb) and all(16 <= b <= 256 for b in mb),
+              "B " + " ".join(f"{b:.0f}" for b in mb)
+              + ("  E " + " ".join(f"{e:.1f}" for e in me) if me else ""))
 
     # --- batterie ----------------------------------------------------------
     soc_ok = all(0.0 <= lo <= m <= hi <= 1.0 for lo, m, hi in
