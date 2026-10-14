@@ -1,5 +1,7 @@
 [campaign]
-name        = "rechargeONdeviceON_ResNet20_batterie"        # -> risultati in results_<name>/
+name        = "rechargeONdeviceON_ResNet20_fisica2"        # -> risultati in results_<name>/
+                             # fisica2 = Mandheling, 4G, Peukert 1.05, ricarica
+                             # oraria, overhead 0.057 s, SAGE-smart B 16-64
 rounds      = 250
 seeds       = [2026]         # [2026, 7, 13] per tre seed
 betas       = [0.1, 0.5, 1.0]
