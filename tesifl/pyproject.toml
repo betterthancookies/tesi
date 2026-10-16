@@ -65,11 +65,17 @@ smart-probe-samples = 256    # campioni per stimare la loss locale
 smart-max-waves = 2          # ondate di proposte per round (1 = nessun rimpiazzo)
 smart-batch-min = 16         # B piu' piccolo (preferito) dell'envelope
 smart-batch-max = 64         # B piu' grande, se il piccolo non ci sta
+# --- broadcast dello stato a inizio round (SAGE, ESCS, SAGE-smart)
+broadcast = false            # run.sh lo prende da experiment.toml
+broadcast-nonresp = 0.10     # frazione di client che non risponde
+broadcast-timeout-s = 1.0    # attesa delle risposte mancanti
+broadcast-top-m = 0          # 0 = tutti; M = primi M per stima (solo SAGE-smart)
 # --- batteria dei device (la batteria FISICA del mondo, per tutti gli
 # algoritmi): "lin" (lineare) | "peuk" (Peukert) | "nm" (datasheet).
 # _shard.sh la ricava dal suffisso dell'etichetta.
 world-battery = "nm"
-model-name = "resnet20"
+model-name = "resnet20"      # "resnet20" | "resnet18" (experiment.toml, [model])
+dataset = "cifar10"          # "cifar10" | "cifar100"
 recharge-enabled = true
 recharge-available = true
 fraction-evaluate = 1.0

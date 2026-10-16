@@ -16,7 +16,7 @@
 #       experiment.toml: la legge device/constants.py nei processi Flower.
 #
 # COSA FA
-#   - controlla l'ambiente (comandi, GPU vista da torch, CIFAR-10 in cache);
+#   - controlla l'ambiente (comandi, GPU vista da torch, dataset in cache);
 #   - avvia un SuperLink per GPU (superlinks.sh) e verifica che rispondano;
 #   - assegna i beta alle GPU a giro (beta i -> GPU i mod n_gpu): con una GPU
 #     per beta girano in parallelo, sfalsati e con l'ordine degli algoritmi
@@ -63,12 +63,14 @@ out = {
     "BETAS": " ".join(str(b) for b in cam["betas"]),
     "GPUS": " ".join(str(g) for g in cam["gpus"]),
     "ALGOS": " ".join(cam["algorithms"]),
-    "WORLD": (f"tiers-enabled={str(w['tiers']).lower()} "
+    "HF_DATASET": {"cifar10": "uoft-cs/cifar10",
+                   "cifar100": "uoft-cs/cifar100"}[mo["dataset"]],
+    "WORLD":(f"tiers-enabled={str(w['tiers']).lower()} "
               f"workload-enabled={str(w['workload']).lower()} "
               f"idle-enabled={str(w['idle']).lower()} "
               f"recharge-enabled={str(w['recharge']).lower()} "
               f"recharge-available={str(w['recharge_available']).lower()}"),
-        "ALGOCFG": (f'model-name="{mo["name"]}" '
+        "ALGOCFG": (f'model-name="{mo["name"]}" dataset="{mo["dataset"]}" '
                 f"local-epochs={al['local_epochs']} batch-size={al['batch_size']} "
                 f"learning-rate={al['learning_rate']} "
                 f"fraction-evaluate={al['fraction_evaluate']} "
@@ -82,6 +84,10 @@ out = {
                 f"smart-max-waves={al['smart_max_waves']} "
                 f"smart-batch-min={al['smart_batch_min']} "
                 f"smart-batch-max={al['smart_batch_max']} "
+                f"broadcast={str(al['broadcast']).lower()} "
+                f"broadcast-nonresp={al['broadcast_nonresp']} "
+                f"broadcast-timeout-s={al['broadcast_timeout_s']} "
+                f"broadcast-top-m={al['broadcast_top_m']} "
                 f"escs-min-battery={al['escs_min_battery']} "
                 f"escs-min-nq={al['escs_min_nq']} "
                 f"escs-first-round-all={str(al['escs_first_round_all']).lower()} "
@@ -144,13 +150,13 @@ preflight() {
     echo "         torch compilato per una CUDA piu' nuova del driver? (nvidia-smi)"; ok=0
   fi
   if HF_HUB_OFFLINE=1 python3 -c \
-      "from datasets import load_dataset; load_dataset('uoft-cs/cifar10', split='test')" \
+      "from datasets import load_dataset; load_dataset('${HF_DATASET}', split='test')" \
       >/dev/null 2>&1; then
-    echo "  [OK]   CIFAR-10 in cache"
+    echo "  [OK]   ${HF_DATASET} in cache"
   else
-    echo "  [FAIL] CIFAR-10 non in cache (i SuperLink girano con HF_HUB_OFFLINE=1)."
+    echo "  [FAIL] ${HF_DATASET} non in cache (i SuperLink girano con HF_HUB_OFFLINE=1)."
     echo "         Scaricalo una volta:"
-    echo "         python -c \"from datasets import load_dataset; load_dataset('uoft-cs/cifar10')\""
+    echo "         python -c \"from datasets import load_dataset; load_dataset('${HF_DATASET}')\""
     ok=0
   fi
   echo ""

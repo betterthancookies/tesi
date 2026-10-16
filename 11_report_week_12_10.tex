@@ -1,0 +1,695 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{siunitx}
+\usepackage{multirow}
+\usepackage{float}
+\usepackage[autostyle]{csquotes}
+\usepackage[hidelinks]{hyperref}
+\usepackage{graphicx}
+
+\sisetup{detect-weight=true}
+
+\title{\bfseries Marocco FL thesis --- week 12/10 update}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\vspace{-3.2em}
+\begin{center}
+\emph{Client-Driven Local Work Assignment in Battery-Constrained Federated Learning}
+\end{center}
+\vspace{1em}
+
+%======================================================================
+\section*{Summary}
+
+\begin{itemize}
+  \item This week every physical parameter of the simulator was checked and,
+        where possible, \textbf{tied to a published measurement}. Table~\ref{tab:overview}
+        lists every value that changed, with its source.
+  \item The three device tiers are now three \textbf{real phones} measured
+        while training (Mandheling, MobiCom 2022): speed \emph{and} power come
+        from the same measurement. The made-up power law
+        $P(B)=\SI{3}{\watt}\,(B/128)^{0.3}$ is gone: the training power is
+        constant per tier.
+  \item Communication is now a \textbf{4G (LTE)} smartphone measured in 2021
+        (Narayanan et al., SIGCOMM 2021) on Italian 4G speeds (Opensignal):
+        0.98~J/MB down, 2.96~J/MB up, \SI{2.1}{\joule} per radio
+        session. One round of model exchange costs \SI{8.5}{\joule} instead of
+        \SI{29.2}{\joule}.
+  \item Peukert exponent $n=1.05$ (fit on the datasheet capacities, was 1.15);
+        recharge is now an \textbf{hourly} rate, $0.126$/h, derived from a
+        study of 4035 users (Ferreira et al., Pervasive 2011).
+  \item A \textbf{batch-size sweep} ($B$ from 8 to 256) shows that a smaller
+        batch always gives more accuracy. SAGE-smart, which adapts the number
+        of epochs, gets it for free in battery; FedAvg pays for it with
+        depleted devices. SAGE-smart now chooses $B$ itself (16--64); the
+        baselines stay at $B=128$.
+  \item Making $B$ vary across clients broke the FedNova aggregation of
+        SAGE-smart (it also extrapolated the BatchNorm statistics). Fixed.
+  \item The full campaign with the new physics (33 runs) is running;
+        results will be added in Section~\ref{sec:results}.
+\end{itemize}
+
+%======================================================================
+\section{Overview: what changed}
+
+\begin{table}[H]
+\centering
+\small
+\caption{Every physical value that changed this week. ``Before'' is the
+value used in the campaign of the 05/10 report.}
+\label{tab:overview}
+\begin{tabular}{p{3.4cm}p{3.2cm}p{3.6cm}p{4.2cm}}
+\toprule
+parameter & before & now & source \\
+\midrule
+tier speed (low/mid/high) & 4 / 8 / 16 GMAC/s, no source & 13.9 / 26.6 / 30.5 GMAC/s & Mandheling, Fig.~5 + Tab.~6 \\
+training power & $3\,\mathrm{W}\,(B/128)^{0.3}$, same for all & 2.99 / 4.00 / 6.15 W, constant & Mandheling, Fig.~5--6 \\
+power between rounds & $0.1 + w\,(3 - 0.1)$ W & $0.1 + w\,(P_\text{tier} - 0.1)$ W & consistency with the tier \\
+fixed cost per batch & \SI{0.115}{\second}, undocumented & \SI{0.057}{\second} & Mandheling, Fig.~7 \\
+training / forward MACs & 3, assumed & 3, now with a source & Mandheling Tab.~6; TrainDeeploy \\
+Peukert exponent $n$ & 1.15 (lead-acid value) & 1.05 & fit on the datasheet capacities \\
+4G download & 1.5 J/MB (supervisor) & 0.98 J/MB & Narayanan 2021 + Opensignal 2018 \\
+4G upload & $1.5\times$ download, assumed & 2.96 J/MB & Narayanan 2021 + Opensignal 2018 \\
+bandwidth & 2 MB/s both ways & 25.1 / 10 Mbit/s down / up & Opensignal 2018 \\
+radio tail & 1.06 W $\times$ 11.6 s & 0.178 W $\times$ 10.2 s & Narayanan 2021, Tab.~2 and 7 \\
+radio promotion & 1.21 W $\times$ 0.260 s & 1.21 W $\times$ 0.265 s & Huang 2012 / Narayanan 2021 \\
+recharge & $p=0.005\,(1-\mathrm{SoC})$ per round & $p=1-e^{-0.126\,(1-\mathrm{SoC})\,\Delta t}$, $\Delta t$ in hours & Ferreira 2011 \\
+SAGE-smart batch & $\{32, 64\}$ from the $P(B)$ optimum & chosen by the client in $\{16, 32, 64\}$ & batch sweep (Sec.~\ref{sec:batch}) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Values that did \emph{not} change but now have an explicit source:
+battery capacities 3500 / 4000 / 4500 mAh (a subset of the ``common smartphone
+capacities'' used by ESCS), idle power \SI{0.1}{\watt} (ESCS), mean initial SoC
+0.75 (Ferreira: average battery 74\,\% at 5 a.m., i.e.\ at the start of the
+day), charge rate 1C (Ferreira: 1--2\,h for a full charge on 2010 phones,
+faster today), reserve 0.2 (SAGE constraint 2e, ESCS \texttt{B\_LVL\_min} $=20\,\%$).
+Still assumptions: the workload levels (0 / 0.1 / 0.3) and their Markov
+chains, the standard deviation 0.15 of the initial SoC, the 1~KB control
+message.
+
+%======================================================================
+\section{Device tiers: three real phones}
+
+\paragraph{Source.} Mandheling (Xu et al., MobiCom 2022) trains CNNs in FP32 on
+the CPU of three smartphones and reports, for a batch of 64 samples, both the
+\emph{time} (Fig.~5) and the \emph{energy} (Fig.~6) of one training step. We
+use TensorFlow Lite on VGG-11 / CIFAR-10, the same input size as ours.
+Table~6 of the paper gives 914 MFLOP of training per sample, i.e.\
+457~MMAC $= 3 	imes 152.6$~MMAC of forward pass: the same
+training/forward ratio of 3 that we use.
+
+\paragraph{How.}
+\[
+\text{speed} = \frac{64 \times 457\cdot 10^{6}\ \text{MAC}}{\text{time per batch}},
+\qquad
+\text{power} = \frac{\text{energy per batch}}{\text{time per batch}} .
+\]
+
+\begin{table}[H]
+\centering
+\caption{The three tiers. J/GMAC = energy per unit of work.}
+\begin{tabular}{llrrrrr}
+\toprule
+tier & phone (SoC) & time [s] & energy [J] & GMAC/s & power [W] & J/GMAC \\
+\midrule
+low  & Redmi Note 9 Pro (Snapdragon 750G) & 2.11 & 6.3 & 13.9 & 2.99 & 0.215 \\
+mid  & Xiaomi 10 (Snapdragon 865)         & 1.10 & 4.4 & 26.6 & 4.00 & 0.150 \\
+high & Xiaomi 11 Pro (Snapdragon 888)     & 0.96 & 5.9 & 30.5 & 6.15 & 0.202 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Cross-check: ResNet-18 on the same phones gives 16.6 / 22.0 / 26.2 GMAC/s at
+2.98 / 4.11 / 6.16~W, i.e.\ the same power and a similar speed.
+
+\paragraph{What it means.} The energy per unit of work is almost the same on
+the three phones ($\approx 0.2$~J/GMAC): the fast phone finishes earlier but
+draws more watts. Before, the low tier cost 0.75~J/GMAC and the high tier
+0.19, a factor 4 with no source. For one epoch of ResNet-20 on 1666 samples
+at $B=128$:
+
+\begin{center}
+\begin{tabular}{lrrrr}
+\toprule
+tier & before [J] & now [J] & now [s] & ratio \\
+\midrule
+low  & 156.5 & 45.8 & 15.3 & $3.4\times$ cheaper \\
+mid  &  80.5 & 33.4 &  8.4 & $2.4\times$ cheaper \\
+high &  42.5 & 45.4 &  7.4 & about the same \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Training power is constant per tier.} Mandheling gives one power
+value per phone. During training the CPU runs at full load whatever the batch
+size; $B$ changes how long the work lasts, not how many watts the phone draws.
+The old law $P(B)\propto B^{0.3}$ had no source and has been removed.
+
+\paragraph{Limits.} VGG-11 has 64--512 channels, ResNet-20 only 16--64: on a
+CPU ResNet-20 probably reaches fewer GMAC/s. The measurements are per batch,
+so they do not include thermal throttling over a long training. The three
+phones are 2020--21 mid- and high-end; there is no budget phone.
+
+%======================================================================
+\section{Cost of a training step}
+
+\paragraph{Training / forward ratio = 3.} Now with two sources: Mandheling
+Table~6 ($914/2/152.6 = 3.0$) and the TrainDeeploy measurements on GAP9
+(2.85--2.97).
+
+\paragraph{Fixed cost per batch = \SI{0.057}{\second}.} The old value
+(\SI{0.115}{\second}, ``measured on the GPU server and rescaled'') had no
+written derivation and was not measured on a phone. It matters: it is the
+only way $B$ enters the energy. Mandheling Fig.~7 plots the time of one
+training batch against $B$ (4 to 128) on the Xiaomi 11 Pro, TFLite FP32. The
+figure is vector graphics: we extracted the exact coordinates of the curves
+from the PDF and calibrated the axis on the values at $B=64$ printed in
+Fig.~5.
+
+\begin{center}
+\begin{tabular}{lrrrrrrr}
+\toprule
+$B$ & 4 & 8 & 16 & 32 & 64 & 96 & 128 \\
+\midrule
+VGG-16 [s]      & 0.12 & 0.18 & 0.31 & 0.54 & 1.39 & 1.57 & 2.07 \\
+InceptionV3 [s] & 0.22 & 0.36 & 0.65 & 1.70 & 3.18 & 4.08 & 5.17 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The time is almost proportional to $B$. The fixed part is what remains at the
+smallest batch once the computation of 4 samples is removed:
+\[
+t_\text{ov} = t(4) - 4\,\frac{t(128)}{128}:\qquad
+0.12 - 4\times 0.0162 = \SI{0.055}{\second},\qquad
+0.22 - 4\times 0.0404 = \SI{0.058}{\second}.
+\]
+Two very different models give the same value; we use \SI{0.057}{\second}.
+(MNN on the same phone gives 0.02--0.03~s.)
+
+\paragraph{Effect.} With constant power, energy per sample $=P\,(c + t_\text{ov}/B)$,
+with $c$ the compute time per sample. A smaller batch costs more per sample:
+
+\begin{center}
+\begin{tabular}{lrrrrrr}
+\toprule
+& \multicolumn{4}{c}{mJ per sample, now} & \multicolumn{2}{c}{$B=32$ vs $B=128$} \\
+\cmidrule(lr){2-5}\cmidrule(lr){6-7}
+tier & $B=16$ & $B=32$ & $B=64$ & $B=128$ & now & with \SI{0.115}{\second} \\
+\midrule
+low  & 36.8 & 31.5 & 28.8 & 27.5 & $+15\,\%$ & $+28\,\%$ \\
+mid  & 32.5 & 25.4 & 21.9 & 20.1 & $+27\,\%$ & $+49\,\%$ \\
+high & 46.4 & 35.5 & 30.0 & 27.3 & $+30\,\%$ & $+55\,\%$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%======================================================================
+\section{Power between rounds}
+
+Between rounds a phone draws
+$P = P_\text{idle} + w\,(P_\text{train} - P_\text{idle})$, where
+$P_\text{idle}=\SI{0.1}{\watt}$ (ESCS) and $w$ is the share of the CPU taken by
+the user's other apps (0 screen off, 0.1 background, 0.3 interactive). $w$ is
+a fraction of the capacity \emph{of that phone} (it already reduces the
+training speed as $(1-w)\times$ speed), so $P_\text{train}$ is now the one of
+the tier instead of \SI{3}{\watt} for everybody:
+
+\begin{center}
+\begin{tabular}{lrrr}
+\toprule
+& low & mid & high \\
+\midrule
+$w=0.1$ & 0.39 W & 0.49 W & 0.71 W \\
+$w=0.3$ & 0.97 W & 1.27 W & 1.92 W \\
+average $w=0.118$ & 0.44 W & 0.56 W & 0.82 W \\
+full battery lasts (no FL) & 29 h & 26 h & 20 h \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+A full battery lasting about a day with normal use is realistic, and it is
+consistent with the one charge per day used for recharging (Sec.~\ref{sec:recharge}).
+
+%======================================================================
+\section{Battery: Peukert exponent}
+
+The datasheet of the cell used in the datasheet world (``Accurate Battery
+Model'') gives three capacities: 2.60 / 2.50 / 2.39~Ah at 0.2C / 0.5C / 1C.
+Peukert's law gives $Q(I) = Q_R\,(I_R/I)^{\,n-1}$ with $I_R = 0.2$C (the rate at
+which the nominal capacity is declared). A least-squares fit of
+$\ln(Q/Q_R)$ against $\ln(I/I_R)$ through the rated point gives
+\textbf{$n = 1.050$} (1.052 without the constraint).
+
+The old 1.15 is a lead-acid value; for lithium cells the literature gives
+1.01--1.10. Effect: with \SI{0.1}{\watt} of idle on 3500~mAh, a full Peukert
+battery lasted 1.63 times the linear one; now 1.18 times. Limit: the fit
+covers 0.2C--1C, while idle (about 0.01C) is an extrapolation.
+
+The datasheet tables $V(\mathrm{SoC}, I)$ and $Q(I)$ are unchanged from the
+05/10 report.
+
+%======================================================================
+\section{Communication: 4G}
+
+\paragraph{Energy per MB.} Narayanan et al.\ (SIGCOMM 2021) measure with a
+Monsoon power meter the power of a Galaxy S20 Ultra transferring data on
+Verizon 4G/LTE. Power grows linearly with throughput $T$:
+$P = c_1 T + c_2$.
+\begin{itemize}
+  \item $c_1$ from their Table~8: 14.55~mW per Mbit/s download,
+        80.21~mW per Mbit/s upload (upload grows 2.2--5.9$\times$ faster
+        than download, as they write).
+  \item $c_2$ is not printed in the paper. We fitted it on their public
+        dataset (GitHub \texttt{SIGCOMM21-5G/artifact}, \texttt{MN-Transfer}):
+        2.72~W download, 2.89~W upload. The slopes of our fit (15.0 and 79.5)
+        reproduce their Table~8, so we are using the right data.
+\end{itemize}
+Energy per MB $= 8\,(c_1 + c_2/T)$, so it depends on the throughput. We take
+the average Italian 4G throughput from Opensignal (``State of Mobile Networks:
+Italy'', May 2018, 120{,}106 users, 1.34 billion measurements, Jan--Mar 2018):
+
+\begin{center}
+\begin{tabular}{lrrrr|r}
+\toprule
+4G & Vodafone & TIM & 3 Italia & Wind & used \\
+\midrule
+download [Mbit/s] & 33.9 & 28.7 & 22.2 & 15.7 & 25.1 \\
+upload [Mbit/s]   & 10.5 & \multicolumn{3}{c|}{``just below 10''} & 10 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Result: \textbf{0.98~J/MB download, 2.96~J/MB upload} (ratio 3.0, inside the
+2.2--5.9 of the paper). For comparison, the 1.5~J/MB we used before
+corresponds to about 16~Mbit/s, i.e.\ the slowest operator. The same
+throughputs are used for the transfer \emph{times}, so time and energy are
+consistent.
+
+A value of 80~J/MB found in a survey on wireless geophone networks was
+discarded: at a typical upload power of 2--4~W it implies about 0.3~Mbit/s,
+an IoT modem rather than a 4G smartphone.
+
+\paragraph{Radio session: promotion and tail.} The 4G radio of a phone is
+managed by a state machine (RRC, Radio Resource Control) with two main states:
+\begin{itemize}
+  \item \textbf{IDLE}: the radio is almost off and only wakes up now and then
+        to check whether the network is looking for it. Very low power, but
+        the phone \emph{cannot transmit}.
+  \item \textbf{CONNECTED}: the cell has assigned radio resources to the
+        phone, which can send and receive data. Much higher power.
+\end{itemize}
+\emph{Promotion} is the transition IDLE $\to$ CONNECTED: before sending or
+receiving anything, the phone has to negotiate radio resources with the cell.
+It costs time and energy even if a single byte follows. \emph{Tail} is what
+happens after the last packet: the radio does \emph{not} go back to IDLE at
+once, but stays CONNECTED for a fixed inactivity timer, in case more data
+arrives (this avoids paying another promotion). During the tail the phone
+transmits nothing but still consumes energy; modern modems sleep most of the
+time and wake up only periodically (discontinuous reception, DRX).
+\[
+\text{IDLE}\ \xrightarrow{\ \text{promotion}\ }\ \text{CONNECTED (data)}\
+\xrightarrow{\ \text{tail}\ }\ \text{IDLE}
+\]
+
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+& Huang et al.\ 2012 (LTE, 2011 modem) & Narayanan et al.\ 2021 (Verizon 4G) \\
+\midrule
+promotion & \SI{1.21}{\watt} $\times$ \SI{0.260}{\second} & \SI{0.265}{\second} (power not given) \\
+tail      & \SI{1.06}{\watt} $\times$ \SI{11.6}{\second}  & \SI{0.178}{\watt} $\times$ \SI{10.2}{\second} (Tab.~2, Tab.~7) \\
+one session & \SI{12.6}{\joule} & \SI{2.14}{\joule} \\
+\bottomrule
+\end{tabular}
+\end{center}
+We use Narayanan for the tail and the promotion time, and keep Huang for the
+promotion power (about \SI{0.3}{\joule}, negligible). Modern modems spend much
+less in the tail than the 2012 one.
+
+\paragraph{Why it matters for us.} Promotion and tail give every
+\emph{isolated} transfer a fixed cost, independent of its size (in the
+literature this is known as \emph{tail energy}):
+\begin{itemize}
+  \item \textbf{Control messages.} A SAGE-smart proposal is about 1~KB: as
+        payload alone it would cost about \SI{0.002}{\joule}, i.e.\ nothing.
+        With the session it costs about \SI{2.1}{\joule}. Without this term,
+        querying clients would look free and the negotiation would have no
+        cost to balance.
+  \item \textbf{Model exchange.} Download and upload are \emph{two} sessions
+        per round: training sits in between and lasts longer than the tail,
+        so the radio goes back to IDLE before the client has finished.
+  \item \textbf{Accepted proposal.} It is immediately followed by the model
+        download, so it travels in the same session and pays only its
+        payload. This is why in \texttt{fisica2}, where nobody refused, the
+        whole negotiation cost \SI{0.001}{\watt\hour} per run.
+\end{itemize}
+
+\paragraph{Effect.}
+\begin{center}
+\begin{tabular}{lrr}
+\toprule
+& before & now \\
+\midrule
+model exchange (1.08 MB down + up, two sessions) & \SI{29.2}{\joule} & \SI{8.5}{\joule} \\
+\quad of which payload & \SI{4.0}{\joule} & \SI{4.3}{\joule} \\
+\quad of which sessions & \SI{25.2}{\joule} & \SI{4.3}{\joule} \\
+isolated control message (1 KB) & \SI{12.6}{\joule} & \SI{2.1}{\joule} \\
+\bottomrule
+\end{tabular}
+\end{center}
+Communication is now about 3 times cheaper, and the negotiation of SAGE-smart
+(control messages) costs less.
+
+%======================================================================
+\section{Recharge}
+\label{sec:recharge}
+
+\paragraph{Per hour, not per round.} Before, a device started charging with
+probability $0.005\,(1-\mathrm{SoC})$ \emph{per round}: an algorithm with
+longer rounds saw less charging per hour of real time. Now it is a rate per
+hour, applied to the duration $\Delta t$ (hours) of the round:
+\[
+p = 1 - \exp\!\big(-\lambda\,(1-\mathrm{SoC})\,\Delta t\big).
+\]
+
+\paragraph{Source for $\lambda$.} Ferreira et al.\ (Pervasive 2011) followed
+the battery of 4035 Android users for four weeks:
+\begin{itemize}
+  \item charging starts mostly at about 40\,\% (6--8 p.m.) and about 30\,\%
+        (1--2 a.m.), plus top-ups at about 80\,\% (8 a.m.);
+  \item the daily minimum is 30\,\% on average: users avoid going lower;
+  \item the average battery level over the day is 67\,\% (65--74\,\%);
+  \item a full charge takes 1--2 hours; sessions are bimodal (many under
+        30 minutes, many overnight), 3\,h 54\,min on average.
+\end{itemize}
+The paper does not give the number of charges per day. From the daily
+schedule we infer about \textbf{one main charge per day} per user. With the
+average SoC of 0.67 our rate gives one charge per day when
+$\lambda\,(1-0.67) = 1/24$, i.e.\ $\lambda = 0.126$/h. This is also the value
+that reproduced the old calibration ($0.005$ per round with rounds of about
+140~s gives 0.129/h), and it keeps the share of devices charging below the
+5\,\% indicated by the supervisor.
+
+\paragraph{Limit: our users are pessimistic.} Real users start charging at
+30--40\,\% and almost never go below 30\,\%; ours let the phone reach zero.
+Modelling Ferreira's users faithfully would leave almost no depleted device
+with any algorithm. Our scenario is therefore a worst case: users that do not
+react to a low battery.
+
+%======================================================================
+\section{Batch size}
+\label{sec:batch}
+
+\paragraph{Why a sweep.} With constant power the physics no longer has an
+optimal batch: the energy per sample always decreases with $B$. But a smaller
+batch makes more SGD steps per epoch, which can improve accuracy (and, with
+non-IID data, increase client drift). The simulator cannot predict which
+effect wins, because the training is real. We measured it: FedAvg (linear
+battery) and SAGE-smart (datasheet battery) with a \emph{fixed} $B$, three
+$\beta$, one seed (the 05/10 report showed that the battery world moves the
+results much less than the algorithm).
+Accuracy is the mean of the last 20 rounds, SoC the final mean SoC.
+
+\begin{table}[H]
+\centering
+\caption{Batch sweep, mean over the three $\beta$ (accuracy / final SoC /
+depleted devices / Wh spent).}
+\label{tab:sweep}
+\begin{tabular}{rcc}
+\toprule
+$B$ & FedAvg & SAGE-smart \\
+\midrule
+8   & 0.678 / 0.312 / 12.0 / 294 & \textbf{0.702} / 0.500 / 0 / 132 \\
+16  & 0.651 / 0.353 / 4.3 / 242  & 0.667 / 0.543 / 0 / 102 \\
+32  & 0.631 / 0.376 / 3.3 / 209  & 0.632 / 0.575 / 0 / 87 \\
+64  & 0.600 / 0.430 / 0.7 / 191  & 0.608 / 0.574 / 0 / 80 \\
+128 & 0.576 / 0.457 / 0.7 / 180  & 0.586 / \textbf{0.578} / 0 / 77 \\
+256 & ---                        & 0.531 / 0.576 / 0 / 78 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{itemize}
+  \item \textbf{A smaller batch always gives more accuracy}, for both
+        algorithms and all three $\beta$: FedAvg goes from 0.576 to 0.678,
+        SAGE-smart from 0.531 to 0.702.
+  \item \textbf{At the same $B$ the accuracy of the two algorithms is about the
+        same} (difference 0--2.4 points). The difference is in the battery:
+        FedAvg always does 5 epochs and pays the small batches with depleted
+        devices (12 at $B=8$, 16 at $\beta=0.1$); SAGE-smart adapts the number
+        of epochs and keeps 0 depleted devices, a final SoC of 0.50--0.58 and
+        less than half the energy.
+  \item On the accuracy--SoC plane, SAGE-smart at $B=8$ dominates
+        \emph{every} FedAvg configuration. \emph{SAGE-smart can afford small
+        batches because it adapts $E$; FedAvg cannot.}
+  \item \textbf{Ablation for the thesis}: part of the accuracy advantage of
+        SAGE-smart over FedAvg at $B=128$ comes from the batch, not from the
+        negotiation. The FedAvg runs at small $B$ measure how much.
+\end{itemize}
+
+\paragraph{The choice.} The baselines stay at $B=128$ (as in the SAGE paper);
+only SAGE-smart chooses $B$. For SAGE-smart the SoC is flat from 32 upwards
+and drops below 32. $B=16$ is the point closest to the ideal (maximum accuracy
+and maximum SoC together): distance 0.050, against 0.078 for $B=8$ and 0.070
+for $B=32$.
+
+\paragraph{The rule.} The server proposes $B\in\{16, 32, 64\}$ in the envelope.
+The client picks the batch that is \emph{cheapest per SGD step}: it keeps the
+smallest $B$ and reduces the epochs first, and moves to the next $B$ only if
+not even $E_{lo}=2$ epochs fit in its battery or in the deadline. In practice
+a fast or charged client trains at $B=16$, a client with a large partition or
+a busy phone goes to 32 or 64. The epoch cap stays at 10, now written as twice
+the standard work ($2\times E$ of the baselines).
+
+%======================================================================
+\section{A bug found on the way: FedNova with different batches}
+
+SAGE-smart aggregates with FedNova: the update of client $i$ is divided by
+its number of steps $\tau_i$ and multiplied by
+$\tau_\text{eff}=\sum_i p_i \tau_i$. A client that made few steps is amplified
+by $\tau_\text{eff}/\tau_i$. With $B$ ranging from 16 to 256, a client that
+missed the deadline fell back to $B=256$ and made about 18 steps against
+about 290 of the others (spread 15--16). In the 3-round test the model
+collapsed at the first round: accuracy 0.10, loss 9--11.
+
+Two causes and two fixes:
+\begin{enumerate}
+  \item The amplification was also applied to the \textbf{BatchNorm
+        statistics} (running mean and variance) of ResNet-20, which are not
+        gradient steps: they were extrapolated beyond the values of any
+        client. Now they are averaged as in FedAvg (weights $p_i$), and
+        FedNova is applied only to the trainable parameters.
+  \item The \textbf{batch range is capped at 64}: the fallback client now
+        makes about 70 steps. Over all combinations of tier, partition size,
+        battery and workload, the worst-case spread goes from 22.5 to 5.8.
+\end{enumerate}
+After the fix the same test gives accuracy 0.20 $\to$ 0.29 $\to$ 0.34, mean
+$B$ 40 / 32 / 28, spread 4.1--4.4. The quick test now also fails if the
+spread exceeds 8. The sweep is not affected: there $B$ was the same for all
+clients.
+
+%======================================================================
+\section{Results}
+\label{sec:results}
+
+\emph{To be added.} Campaign \texttt{rechargeONdeviceON\_ResNet20\_fisica2}:
+11 labels (FedAvg, FedProx, SAGE and ESCS-SD in the three battery worlds,
+SAGE-smart in the three battery worlds) $\times$ 3 $\beta$, one seed, 250
+rounds, 30 clients, 6 per round.
+
+What we expect from the sweep: far fewer depleted devices than in the 05/10
+campaign (FedAvg at $B=128$: 0.7 instead of about 15), because training is
+2.4--3.4 times cheaper on the low and mid tiers and communication 3 times
+cheaper. Whether to restore some pressure on the battery (more rounds, lower
+initial SoC) is to be decided after seeing the full campaign.
+
+\subsection{SAGE-smart: how the negotiation went}
+
+Counts summed over the 250 rounds of each run. \emph{Proposals}: envelopes
+sent to candidates (all waves). \emph{Refused}: proposals refused or not
+answered. \emph{2nd waves}: rounds in which refused candidates had to be
+replaced. \emph{Opt-outs}: clients that accepted but withdrew at training time.
+\emph{Late}: participations that missed the deadline (in \% of the
+participations).
+
+\begin{table}[H]
+\centering
+\caption{Negotiation of SAGE-smart, campaign \texttt{fisica2}, seed 2026.}
+\label{tab:negotiation}
+\begin{tabular}{llrrrrr}
+\toprule
+$\beta$ & battery & proposals & refused & 2nd waves & opt-outs & late \\
+\midrule
+\multirow{3}{*}{0.1} & linear    & 1490 & 0 & 0 & 0 & 424 (28.5\,\%) \\
+                     & Peukert   & 1490 & 0 & 0 & 0 & 423 (28.4\,\%) \\
+                     & datasheet & 1490 & 0 & 0 & 0 & 417 (28.0\,\%) \\
+\midrule
+\multirow{3}{*}{0.5} & linear    & 1490 & 0 & 0 & 0 & 102 (6.8\,\%) \\
+                     & Peukert   & 1490 & 0 & 0 & 0 & 102 (6.8\,\%) \\
+                     & datasheet & 1490 & 0 & 0 & 0 &  99 (6.6\,\%) \\
+\midrule
+\multirow{3}{*}{1.0} & linear    & 1490 & 0 & 0 & 0 &  14 (0.9\,\%) \\
+                     & Peukert   & 1490 & 0 & 0 & 0 &  12 (0.8\,\%) \\
+                     & datasheet & 1490 & 0 & 0 & 0 &  14 (0.9\,\%) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{itemize}
+  \item \textbf{No client ever refused.} 1490 proposals are exactly the
+        selected clients ($2+3+4+5$ in the first rounds, then 6 per round):
+        every proposal was accepted at the first wave, and nobody withdrew at
+        training time. With the new physics no battery gets close to the
+        \SI{20}{\percent} reserve (the most depleted device of SAGE-smart ends
+        above 0.34), so the minimum work is always affordable. The
+        accept/refuse mechanism is never exercised in this scenario.
+  \item \textbf{The negotiation is almost free}: an accepted proposal travels
+        in the same radio session as the model download that follows, so it
+        costs only its payload. The control energy of a whole run is
+        \SI{0.001}{\watt\hour}; the added latency is \SI{0.335}{\second} per
+        round, \SI{84}{\second} over the run.
+  \item \textbf{Deadline misses depend on $\beta$}: 28\,\% of the
+        participations at $\beta=0.1$, 7\,\% at 0.5, 1\,\% at 1.0. At low
+        $\beta$ the Dirichlet partitions are much more unequal in size, and
+        the clients with the largest partitions cannot fit two epochs in the
+        deadline even at $B=64$: they train anyway and declare the delay.
+  \item The battery world does not change the negotiation: the three
+        batteries give the same counts within a few late participations.
+\end{itemize}
+
+%======================================================================
+\section{Limits}
+
+\begin{itemize}
+  \item \textbf{One seed}, as before.
+  \item \textbf{Phones}: one phone per tier, 2020--21, mid and high end only;
+        VGG-11 instead of ResNet-20 for the speed; no thermal throttling.
+  \item \textbf{4G}: one phone and one operator for the power, Italian speeds
+        from 2018.
+  \item \textbf{Users}: Ferreira's study is from 2011 (Android 1.6--2.2,
+        1500~mAh batteries, users who installed a battery app). Our users let
+        the phone reach zero (worst case).
+  \item \textbf{Rounds back to back}: as in the SAGE and ESCS papers, rounds
+        follow each other with no pause, and the server's information is
+        never more than a few minutes old. A scenario with pauses between
+        rounds (and really stale information) would make the client-driven
+        decision more valuable, but changes the energy balance and the
+        information model of all algorithms. Postponed.
+  \item \textbf{Differences from the papers to declare}: SAGE without the
+        malfunctions (temporary and permanent drop-outs) and without the stop
+        at target accuracy 0.4 + 20 rounds; ESCS with a fixed network quality
+        per client and no failed transmissions (the paper redraws it every
+        round).
+\end{itemize}
+
+%======================================================================
+\section{Next steps: which part of SAGE-smart brings the advantage?}
+\label{sec:next}
+
+\emph{Reply to Alessio's e-mail}: below is a proposal on how to isolate the
+contributions of SAGE-smart, to discuss in the next call.
+
+\paragraph{What has to be explained.} Against FedAvg ($B=128$, $E=5$),
+averaged over the three $\beta$, SAGE-smart gains about +5 accuracy points,
+uses about half the energy, ends with a mean SoC about 0.1 higher and keeps
+its most depleted device above 0.34. SAGE-smart is the SAGE ablation
+($a\cdot\mathrm{SoC} + b\cdot D$) plus nine additions. Each can be switched off
+on its own:
+
+\begin{table}[H]
+\centering
+\small
+\caption{Components of SAGE-smart that can be isolated. ``Config'' = one
+value in \texttt{experiment.toml}; ``code'' = a small switch to add.}
+\label{tab:ablations}
+\begin{tabular}{p{0.3cm}p{3.1cm}p{4.2cm}p{3.0cm}p{4.0cm}}
+\toprule
+& component & what it does & how to switch it off & evidence so far \\
+\midrule
+1 & staleness term $c$ in the score & gives priority to clients that have not trained for a while: spreads participation & config: \texttt{smart\_stale\_weight = 0} & earlier measurement: without it 4/30 clients were never selected and one 228 times out of 250 (Gini 0.62 vs 0.19 of FedAvg); SAGE, which has no such term, drops to 0.30 at $\beta=0.1$ (datasheet) \\
+2 & server-side SoC estimate (option 2) & ranks with the SoC extrapolated from the last report & code: last report as is, or the true SoC (upper bound) & rounds back to back: the estimate is almost exact, small effect expected \\
+3 & negotiation (option 3) & proposal, accept / refuse, replacement of refusals & config: \texttt{smart\_max\_waves = 1}; code: no proposal at all & 0 refusals in \texttt{fisica2}: no effect expected in this scenario \\
+4 & adaptive local epochs & each client chooses $E\in[2,10]$ from the loss of the global model on its data ($u$) and from its battery ($h$) & code: $E=5$ fixed as the baselines; variants with only $u$ or only $h$ & at $\beta=0.1$ SAGE-smart trains 3.4 epochs on average instead of 5: likely the main source of the energy saving \\
+5 & late binding (the client decides) & $(E,B)$ chosen by the client with its \emph{current} state instead of by the server with its estimate & code: server-driven variant, the client only executes & core of the thesis; small difference expected while the server's information is fresh \\
+6 & smaller batch & $B\in\{16,32,64\}$ instead of 128 & config: \texttt{smart\_batch\_min = smart\_batch\_max = 128} & sweep: FedAvg at $B=16$ gains 7.5 points over $B=128$: part of the accuracy advantage comes from $B$ \\
+7 & deadline & caps the round time and the straggler & config: \texttt{smart\_deadline\_mult} very large; variant: deadline at $B=16$ & at $\beta=0.1$ the 38~s deadline pushes clients from $B=16$ to $B\approx 31$: 0.48 instead of 0.58 \\
+8 & reserve and energy guard & the client never goes below 20\,\%, stops early if needed & config: \texttt{smart\_soc\_min = 0} & never binding now: no device gets close to 20\,\% \\
+9 & FedNova aggregation & normalises each update by its number of steps (BatchNorm averaged) & code: plain data-weighted average & needed with different $(E,B)$: the model collapsed with a step spread of 15--16 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Proposed plan.}
+\begin{enumerate}
+  \item \textbf{Leave-one-out}: full SAGE-smart minus one component at a time,
+        datasheet battery only (the battery world changes the results by about
+        1.5 points), three $\beta$. Nine variants $\times$ 3 $\beta$ = 27 runs,
+        about 18 hours per seed on our single GPU. Components 1, 3, 6, 7, 8 need
+        only a configuration value; 2, 4, 5, 9 need a small switch in the code.
+  \item \textbf{Cumulative ladder} for the thesis narrative: SAGE ablation
+        $\to$ + staleness $\to$ + adaptive $E$ decided by the server $\to$ +
+        late binding $\to$ + negotiation $\to$ + small $B$. The two ends already
+        exist (SAGE ablation and full SAGE-smart in \texttt{fisica2}); the
+        batch step is partly covered by the sweep.
+  \item \textbf{Scenario under pressure.} Components 3 (negotiation) and 8
+        (reserve) can show their value only when batteries are low; in the
+        current scenario they are never used. They should be measured also in
+        a ``stress'' scenario: lower initial SoC, or a pause between rounds.
+        A first estimate with the physics alone: with 2--5 minutes between
+        rounds FedAvg causes about 6--7 more depleted devices than a run with
+        no training at all, so a no-training reference run is needed to
+        separate the effect of FL from the phone's own use.
+\end{enumerate}
+
+\paragraph{Other decisions for the call.}
+\begin{itemize}
+  \item \textbf{Seeds}: run 2026, 7 and 13, so that differences of a few
+        points can be tested.
+  \item \textbf{Battery metric}: with the new physics almost no device is
+        depleted. We propose to count the devices that end \emph{below
+        \SI{20}{\percent}} (battery-saver level). A first estimate gives 7 for
+        FedAvg against 0.3 with no training. The new figure (fig10) is ready,
+        but the column is not in the \texttt{fisica2} runs: it needs new runs.
+  \item \textbf{Deadline of SAGE-smart}: computed on the baselines' batch
+        (128, now) or on SAGE-smart's preferred batch (16, longer deadline,
+        about +0.1 accuracy at $\beta=0.1$ in the sweep)?
+\end{itemize}
+
+%======================================================================
+\section*{References}
+
+\begin{itemize}
+  \item D.~Xu et al., ``Mandheling: Mixed-Precision On-Device DNN Training
+        with DSP Offloading'', ACM MobiCom 2022 (arXiv 2206.07509).
+  \item A.~Narayanan et al., ``A Variegated Look at 5G in the Wild:
+        Performance, Power, and QoE Implications'', ACM SIGCOMM 2021; dataset
+        \url{https://github.com/SIGCOMM21-5G/artifact}.
+  \item Opensignal, ``State of Mobile Networks: Italy'', May 2018.
+  \item J.~Huang et al., ``A Close Examination of Performance and Power
+        Characteristics of 4G LTE Networks'', ACM MobiSys 2012.
+  \item D.~Ferreira, A.~K.~Dey, V.~Kostakos, ``Understanding Human-Smartphone
+        Concerns: A Study of Battery Life'', Pervasive 2011, LNCS 6696,
+        pp.~19--33.
+  \item F.~Maciel et al., ``Federated learning energy saving through client
+        selection'' (ESCS), Pervasive and Mobile Computing 103 (2024) 101948.
+  \item M.~Savoia et al., ``SAGE: Sustainable and green energy-aware client
+        selection for federated learning'', Applied Energy 410 (2026) 127568.
+  \item J.~Wang et al., ``Tackling the Objective Inconsistency Problem in
+        Heterogeneous Federated Optimization'' (FedNova), NeurIPS 2020.
+  \item TrainDeeploy (on-device training on GAP9) --- full reference to be
+        added.
+  \item ``Accurate Battery Model'', datasheet document provided by the
+        supervisor.
+\end{itemize}
+
+\end{document}

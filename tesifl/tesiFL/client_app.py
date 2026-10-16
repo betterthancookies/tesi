@@ -12,7 +12,7 @@ from device.fuel_gauge import DeviceReading
 from tesiFL.client_policy import (
     Envelope, accepts_proposal, affordable_steps, can_afford_minimum, decide,
 )
-from tesiFL.data.partition import load_data
+from tesiFL.data.partition import load_data, num_classes
 from tesiFL.data.model import build_model
 from tesiFL.task import test as test_fn
 from tesiFL.task import train as train_fn
@@ -25,8 +25,12 @@ app = ClientApp()
 def train(msg: Message, context: Context):
     """Train the model on local data."""
 
+    # dataset e numero di classi della run (experiment.toml, [model])
+    dataset = str(context.run_config["dataset"])
+    n_cls = num_classes(dataset)
+
     # Load the model and initialize it with the received weights
-    model = build_model(str(context.run_config["model-name"]), 10)
+    model = build_model(str(context.run_config["model-name"]), n_cls)
     model.load_state_dict(msg.content["arrays"].to_torch_state_dict())
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model.to(device)
@@ -62,9 +66,11 @@ def train(msg: Message, context: Context):
     # sage_smart: il server ha mandato una PROPOSTA, non un'assegnazione
     if Envelope.present_in(config):
         return _train_client_driven(msg, model, device, config, partition_id,
-                                    num_partitions, beta, seed, proximal_mu)
+                                    num_partitions, beta, seed, proximal_mu,
+                                    dataset_name=dataset)
 
-    trainloader, _ = load_data(partition_id, num_partitions, batch_size, beta, seed)
+    trainloader, _ = load_data(partition_id, num_partitions, batch_size, beta, seed,
+                               dataset=dataset)
 
     # Call the training function
     train_loss, loss_sq_sum, loss_n = train_fn(
@@ -81,7 +87,7 @@ def train(msg: Message, context: Context):
     metrics = {
         "train_loss": train_loss,
         "num-examples": len(trainloader.dataset),
-        "class-dist": _class_counts(trainloader),
+        "class-dist": _class_counts(trainloader, n_cls),
         # ingredienti della statistical utility di Oort; ignorati dalle altre
         # strategie, che leggono solo train_loss e num-examples
         "loss-sq-sum": loss_sq_sum,
@@ -132,7 +138,7 @@ def _probe_loss(model, dataset, n_probe: int, device, generator) -> float:
 
 def _train_client_driven(msg: Message, model, device, config, partition_id: int,
                          num_partitions: int, beta: float, seed: int,
-                         proximal_mu: float) -> Message:
+                         proximal_mu: float, dataset_name: str = "cifar10") -> Message:
     """sage_smart: il client decide (E, B) dentro l'envelope del server.
 
     Fasi 5-7 della proposta:
@@ -156,8 +162,9 @@ def _train_client_driven(msg: Message, model, device, config, partition_id: int,
     env = Envelope.from_config(config)
     server_round = int(config["server-round"])
 
+    n_cls = num_classes(dataset_name)
     trainloader, _ = load_data(partition_id, num_partitions, env.batches[0],
-                               beta, seed)
+                               beta, seed, dataset=dataset_name)
     dataset = trainloader.dataset
     n = len(dataset)
     env = dataclasses.replace(env, probe_samples=min(env.probe_samples, n))
@@ -205,7 +212,7 @@ def _train_client_driven(msg: Message, model, device, config, partition_id: int,
     loss_pre = _probe_loss(model, dataset, env.probe_samples, device, gen)
 
     # 5c. decisione
-    plan = decide(reading, env, n, loss_pre)
+    plan = decide(reading, env, n, loss_pre, n_classes=n_cls)
     if plan.optout:
         return optout(probe=env.probe_samples, loss_pre=loss_pre,
                       e_target=plan.e_target)
@@ -230,7 +237,7 @@ def _train_client_driven(msg: Message, model, device, config, partition_id: int,
         **base,
         "train_loss": train_loss,
         "num-examples": n,
-        "class-dist": _class_counts(loader),
+        "class-dist": _class_counts(loader, n_cls),
         "loss-sq-sum": loss_sq_sum,
         "loss-n": loss_n,
         "smart-optout": 0,
@@ -286,8 +293,10 @@ def query(msg: Message, context: Context):
 def evaluate(msg: Message, context: Context):
     """Evaluate the model on local data."""
 
+    dataset = str(context.run_config["dataset"])
+
     # Load the model and initialize it with the received weights
-    model = build_model(str(context.run_config["model-name"]), 10)
+    model = build_model(str(context.run_config["model-name"]), num_classes(dataset))
     model.load_state_dict(msg.content["arrays"].to_torch_state_dict())
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model.to(device)
@@ -304,7 +313,8 @@ def evaluate(msg: Message, context: Context):
     beta = context.run_config["beta"]
     seed = context.run_config["seed"]
     torch.manual_seed(seed)
-    _, valloader = load_data(partition_id, num_partitions, batch_size, beta, seed)
+    _, valloader = load_data(partition_id, num_partitions, batch_size, beta, seed,
+                             dataset=dataset)
 
     # Call the evaluation function
     eval_loss, eval_acc = test_fn(

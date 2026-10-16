@@ -1,7 +1,9 @@
 [campaign]
-name        = "rechargeONdeviceON_ResNet20_fisica2"        # -> risultati in results_<name>/
+name        = "rechargeONdeviceON_ResNet20_bcast"        # -> risultati in results_<name>/
                              # fisica2 = Mandheling, 4G, Peukert 1.05, ricarica
-                             # oraria, overhead 0.057 s, SAGE-smart B 16-64
+                             # oraria, overhead 0.057 s, SAGE-smart B 16-64;
+                             # bcast = fisica2 + broadcast dello stato per
+                             # SAGE/ESCS/SAGE-smart + colonna n_soc_low (fig10)
 rounds      = 250
 seeds       = [2026]         # [2026, 7, 13] per tre seed
 betas       = [0.1, 0.5, 1.0]
@@ -98,6 +100,14 @@ macs_per_s_uniform    = 4e9
 train_power_w_uniform = 3.0   # derivata da EAFL (Arouj & Abdelmoniem 2022)
 
 idle_power_w  = 0.1   # [DERIVATO] 0.1 W di ESCS su 4000 mAh
+
+# Soglia di RISPARMIO ENERGETICO: un device sotto questo SoC e' contato come
+# "in battery saver" (colonna n_soc_low del CSV, fig10). 20% e' la riserva di
+# SAGE (vincolo 2e) e di ESCS (B_LVL_min); Android avvisa a 15% e gli utenti
+# di Ferreira 2011 non scendono quasi mai sotto il 30%.
+# [B] con la fisica nuova i device ESAURITI sono quasi zero (campagna
+# fisica2): la metrica utile per l'utente e' quanti ne spingiamo sotto il 20%.
+low_battery_soc = 0.20
 
 # SoC iniziale: normale troncata, spostata verso la carica piena.
 # [B] con l'uniforme il 29% dei client partiva sotto il 50%; qui il 5%.
@@ -283,6 +293,21 @@ smart_max_waves      = 2      # ondate di proposte per round (1 = nessun rimpiaz
 smart_batch_min      = 16
 smart_batch_max      = 64
 
+# BROADCAST DELLO STATO a inizio round (opzione 1 del "Client Server
+# Protocol" del relatore, call del 16/10) per le strategie che selezionano
+# sullo stato: SAGE, ESCS, SAGE-smart (non FedAvg/FedProx, che scelgono a
+# caso). Nel simulatore non cambia l'informazione (SAGE/ESCS leggono il SoC
+# del mondo, SAGE-smart la sua stima, errore < 1 punto di SoC): serve a
+# CONTARNE IL COSTO, perche' dichiariamo di avere un SoC fidato a inizio
+# round. Chi risponde paga uno scambio di controllo (sessione 4G intera,
+# ~2.1 J, se non viene selezionato; il solo payload se viene selezionato);
+# chi non risponde e' escluso dal round; il round si allunga della latenza
+# o del timeout. Stima: ~3 Wh di broadcast + ~1 Wh di attesa su 250 round.
+broadcast            = true
+broadcast_nonresp    = 0.10   # client che non rispondono (indicazione del relatore)
+broadcast_timeout_s  = 1.0    # [ASSUNZIONE] attesa delle risposte mancanti (~3x promozione + RTT)
+broadcast_top_m      = 0      # 0 = tutti; M > 0 = solo i primi M per stima (nota 3, solo SAGE-smart)
+
 # ESCS
 escs_min_battery       = 0.20   # B_LVL_min, Table 4 del paper
 escs_min_nq            = 0.20   # NQ_min, Table 4
@@ -290,9 +315,51 @@ escs_first_round_all   = true   # Alg. 1 righe 5-6
 escs_cap_probabilistic = false
 
 [model]
-name = "resnet20"          # "lenet5" | "resnet20"
+name    = "resnet20"       # "resnet20" | "resnet18"
+dataset = "cifar10"        # "cifar10" | "cifar100" (Hugging Face uoft-cs/...)
 # ResNet-20 per CIFAR (He et al. 2016, n=3): 40.55 MMAC/campione, 62x LeNet-5.
-# [B] il cambio serve perche' con batterie realistiche LeNet consumava cosi'
-# poco da richiedere decine di migliaia di round per il primo esaurimento.
+# [B] il cambio da LeNet serve perche' con batterie realistiche LeNet
+# consumava cosi' poco da richiedere decine di migliaia di round per il primo
+# esaurimento.
+# ResNet-18 (variante CIFAR: conv 3x3 iniziale, niente max-pool) con
+# CIFAR-100: 555 MMAC/campione (13.7x ResNet-20) e 44.9 MB di modello (41x):
+# training e comunicazione molto piu' cari, vedi lo SCENARIO qui sotto.
+#
+# MAC di forward per immagine e parametri allenabili per ogni combinazione,
+# CONTATI sul modello (hook su Conv2d e Linear, 15/10/2026). La fisica usa la
+# voce "<name>_<dataset>"; il server si ferma se la run usa un altro modello.
+[model.specs.resnet20_cifar10]
 macs_fwd_per_sample = 40551040
-n_params = 269722
+n_params            = 269722
+[model.specs.resnet20_cifar100]
+macs_fwd_per_sample = 40556800
+n_params            = 275572
+[model.specs.resnet18_cifar10]
+macs_fwd_per_sample = 555422720
+n_params            = 11173962
+[model.specs.resnet18_cifar100]
+macs_fwd_per_sample = 555468800
+n_params            = 11220132
+
+# =====================================================================
+#  SCENARIO "ResNet-18 su CIFAR-100" (richiesta del relatore)
+# =====================================================================
+# Si attiva cambiando SOLO questi valori (il resto resta com'e'):
+#   [model]     name = "resnet18"     dataset = "cifar100"
+#   [campaign]  clients = 100         k_fraction = 0.2   (20 per round)
+#               name = "<nuovo nome>" timeout_s = 28800 (8 h: run molto piu' lunghe)
+#   [algo]      smart_batch_max = 128 (SAGE-smart E 2-10, B 16-128;
+#               baseline E = 5, B = 128 come ora)
+#               fraction_evaluate = 0.2 consigliato: con 100 client la
+#               valutazione lato client manderebbe il modello da 45 MB a tutti
+#               e 100 a ogni round. L'accuracy e' quella del server (test set
+#               centrale); la loss lato client serve solo a ESCS, che per i
+#               client non valutati usa la loss massima (esplorazione).
+# Se le run sono troppo lunghe: clients = 30, k_fraction = 0.2 (6 per round).
+# [B] attenzione: con 30 client il training per round NON cala (6 x 1333
+# campioni = 20 x 400) e ogni partecipazione costa 3.5-5.5% di batteria invece
+# di 1.3-1.9%: si risparmia solo sui messaggi, non sulla GPU.
+# Sul server CIFAR-100 va scaricato una volta (HF_HUB_OFFLINE=1 nei SuperLink):
+#   python -c "from datasets import load_dataset; load_dataset('uoft-cs/cifar100')"
+# [B] B fino a 128 in SAGE-smart riapre il rischio FedNova (spread dei passi,
+# vedi smart_batch_max): il fastTest controlla che resti <= 8.

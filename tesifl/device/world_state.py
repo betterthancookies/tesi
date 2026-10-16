@@ -21,6 +21,7 @@ from device.constants import (
     INITIAL_SOC_MEAN,
     INITIAL_SOC_RANGE,
     INITIAL_SOC_STD,
+    LOW_BATTERY_SOC,
     RECHARGE_AVAILABLE_DEFAULT,
     RECHARGE_RATE_PER_H,
     V_NOMINAL,
@@ -479,6 +480,10 @@ class WorldState:
             "p25_soc": float(np.percentile(soc_all, 25)),
             "p75_soc": float(np.percentile(soc_all, 75)),
             "n_soc_zero": int(sum(1 for v in soc_all if v <= 0.0)),
+            # [B] device in risparmio energetico (SoC < low_battery_soc, morti
+            # inclusi): con la fisica nuova gli esauriti sono quasi zero, e
+            # questa e' la metrica che conta per l'utente (fig10)
+            "n_soc_low": int(sum(1 for v in soc_all if v < LOW_BATTERY_SOC)),
             "n_clients": len(soc_all),
             # [B] SoC medio e morti PER TIER: senza queste colonne non si puo'
             # verificare che l'eterogeneita' produca davvero un effetto.

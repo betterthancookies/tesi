@@ -49,6 +49,8 @@ BATTERY_CAPACITY_MAH = float(_get("device", "capacity_mah_uniform"))
 MACS_PER_S_UNIFORM = float(_get("device", "macs_per_s_uniform"))
 TRAIN_POWER_W_UNIFORM = float(_get("device", "train_power_w_uniform"))
 IDLE_POWER_W = float(_get("device", "idle_power_w"))
+# soglia di risparmio energetico (colonna n_soc_low, fig10)
+LOW_BATTERY_SOC = float(_get("device", "low_battery_soc"))
 
 INITIAL_SOC_MEAN = float(_get("device", "soc_init_mean"))
 INITIAL_SOC_STD = float(_get("device", "soc_init_std"))
@@ -81,8 +83,16 @@ BATCH_OVERHEAD_S = float(_get("compute", "batch_overhead_s"))
 # [ASSUNZIONE] payload SIMMETRICO: il server manda il modello intero, il
 # client rimanda un update della stessa taglia.
 #   conv1: 456   conv2: 2_416   fc1: 48_120   fc2: 10_164   fc3: 850
-MODEL_MACS_FWD_PER_SAMPLE = int(_get("model", "macs_fwd_per_sample"))
-MODEL_N_PARAMS = int(_get("model", "n_params"))
+MODEL_NAME = str(_get("model", "name"))
+MODEL_DATASET = str(_get("model", "dataset"))
+_SPEC_KEY = f"{MODEL_NAME}_{MODEL_DATASET}"
+try:
+    _SPEC = CFG["model"]["specs"][_SPEC_KEY]
+except KeyError as exc:
+    raise KeyError(f"experiment.toml: manca [model.specs.{_SPEC_KEY}] "
+                   "(MAC e parametri di questo modello)") from exc
+MODEL_MACS_FWD_PER_SAMPLE = int(_SPEC["macs_fwd_per_sample"])
+MODEL_N_PARAMS = int(_SPEC["n_params"])
 BYTES_PER_PARAM = int(_get("comm", "bytes_per_param"))
 MODEL_SIZE_MB = MODEL_N_PARAMS * BYTES_PER_PARAM / 1e6
 # 4G (LTE): energia per MB e banda, separate per download e upload
@@ -120,7 +130,8 @@ def describe() -> str:
     """Riassunto dei parametri caricati, per i log della run."""
     t = " ".join(f"{k}({v['capacity_mah']:.0f}mAh,{v['macs_per_s'] / 1e9:.1f}GMAC/s,"
                  f"{v['train_power_w']:.2f}W)" for k, v in TIERS.items())
-    return (f"tier: {t} | P_idle {IDLE_POWER_W * 1000:.0f} mW "
+    return (f"modello {MODEL_NAME}/{MODEL_DATASET} ({MODEL_MACS_FWD_PER_SAMPLE / 1e6:.1f} MMAC, "
+            f"{MODEL_SIZE_MB:.1f} MB) | tier: {t} | P_idle {IDLE_POWER_W * 1000:.0f} mW "
             f"| Peukert n={PEUKERT_N} | SoC0 N({INITIAL_SOC_MEAN},{INITIAL_SOC_STD}) "
             f"| 4G {COMM_ENERGY_DL_J_PER_MB}/{COMM_ENERGY_UL_J_PER_MB} J/MB "
             f"| ricarica {RECHARGE_RATE_PER_H}/h a {CHARGE_C_RATE}C")

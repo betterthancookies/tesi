@@ -89,8 +89,13 @@ class PhysicalSAGEAblation(PhysicalFedAvg):
         # da `available`, perche' il world state li marca failed.
         pool = available
         m = len(pool)
-        # (2a) k + r con r 0-indicizzato, e tetto sulla frazione del POOL
-        hi = min(self.k + server_round - 1, int(np.floor(self.max_frac * m)))
+        # (2a) k + r con r 0-indicizzato, e tetto sulla frazione del POOL dei
+        # VIVI (_n_alive): chi non risponde al broadcast e' irraggiungibile in
+        # questo round, ma non deve abbassare il tetto. Senza broadcast
+        # _n_alive == m. Il terzo termine evita di chiedere piu' client di
+        # quelli raggiungibili.
+        hi = min(self.k + server_round - 1,
+                 int(np.floor(self.max_frac * max(m, self._n_alive))), m)
         lo = self.k   # non si clampa: se lo > hi l'ILP e' infeasible, ed e' voluto
 
         score = {

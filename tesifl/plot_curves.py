@@ -20,6 +20,11 @@ Produce in results/, UNA SERIE PER OGNI BETA (suffisso _b01, _b05, _b10):
                                piano (morti, accuracy).
   fig9_reserve_b*.png          SoC del client piu' scarico e morti CUMULATI,
                                round per round: mostra se la riserva tiene.
+  fig10_lowbat_b*.png          come fig4, ma il pannello in basso conta i
+                               device in RISPARMIO ENERGETICO (SoC < 20%,
+                               morti inclusi) invece dei soli morti. Serve la
+                               colonna n_soc_low: c'e' solo nelle run fatte
+                               dopo il 15/10, senza la figura viene saltata.
 
 RAGGRUPPAMENTO DELLE VARIANTI
 Il suffisso di ogni etichetta e' la batteria dei device (lin, peuk, nm:
@@ -516,14 +521,23 @@ def fig_pareto(d, out, beta):
     plt.close(fig)
 
 
-def fig_soc(results_dir, out, beta):
-    """SoC finale per algoritmo, dai CSV per-round del beta richiesto."""
+def fig_soc(results_dir, out, beta, count_key="n_soc_zero",
+            count_ylabel="Depleted clients",
+            count_title="Devices depleted by end of run", count_color="#d62728"):
+    """SoC finale per algoritmo, dai CSV per-round del beta richiesto.
+
+    Il pannello in basso conta i device per la colonna `count_key`: i morti
+    (n_soc_zero, fig4) o quelli in risparmio energetico (n_soc_low, fig10).
+    Se una run non ha la colonna la figura non viene prodotta.
+    """
     by_lab = _rows_by_beta(results_dir, beta)
     if not by_lab:
         return False
+    if any(not rows[-1].get(count_key) for runs in by_lab.values() for rows in runs):
+        return False
     stats = {
         lab: [(float(rows[-1]["mean_soc"]), float(rows[-1]["median_soc"]),
-               float(rows[-1]["n_soc_zero"])) for rows in runs]
+               float(rows[-1][count_key])) for rows in runs]
         for lab, runs in by_lab.items()
     }
     labs = order_of(stats)
@@ -542,9 +556,9 @@ def fig_soc(results_dir, out, beta):
     ax1.set_title(f"Final state of charge — β = {beta_str(beta)} (dead clients counted as 0)")
     ax1.grid(alpha=0.3, axis="y")
     ax1.legend(fontsize=9)
-    ax2.bar(x, dead, 0.5, color="#d62728")
-    ax2.set_ylabel("Depleted clients")
-    ax2.set_title("Devices depleted by end of run")
+    ax2.bar(x, dead, 0.5, color=count_color)
+    ax2.set_ylabel(count_ylabel)
+    ax2.set_title(count_title)
     ax2.grid(alpha=0.3, axis="y")
     ax2.set_xticks(x)
     ax2.set_xticklabels([LABEL.get(a, a) for a in labs], rotation=35, ha="right")
@@ -782,6 +796,9 @@ def main():
                     help="soglia di accuracy per fig7")
     ap.add_argument("--reserve", type=float, default=0.20,
                     help="soglia di riserva del SoC, per fig9")
+    ap.add_argument("--low-battery", type=float, default=0.20,
+                    help="soglia di risparmio energetico nell'etichetta di fig10 "
+                         "(il conteggio e' quello della colonna n_soc_low)")
     ap.add_argument("--no-group", action="store_true",
                     help="non raggruppare le varianti ESCS")
     args = ap.parse_args()
@@ -810,6 +827,7 @@ def main():
         f7 = os.path.join(args.dir, f"fig7_thr_soc_b{t}.png")
         f8 = os.path.join(args.dir, f"fig8_accounting_b{t}.png")
         f9 = os.path.join(args.dir, f"fig9_reserve_b{t}.png")
+        f10 = os.path.join(args.dir, f"fig10_lowbat_b{t}.png")
         fig_energy_accuracy(data[beta], f1, beta, args.smooth)
         fig_accuracy_rounds(data[beta], f2, beta, args.smooth)
         fig_pareto(data[beta], f3, beta)
@@ -826,6 +844,16 @@ def main():
             print(f"  {f8}")
         if fig_reserve(args.dir, f9, beta, args.reserve):
             print(f"  {f9}")
+        pct = f"{args.low_battery * 100:.0f}%"
+        if fig_soc(args.dir, f10, beta, count_key="n_soc_low",
+                   count_ylabel=f"Clients below {pct} SoC",
+                   count_title=f"Devices in battery-saver mode (SoC < {pct}) "
+                               "by end of run, depleted included",
+                   count_color="#ff7f0e"):
+            print(f"  {f10}")
+        else:
+            print(f"  (fig10 saltata: nei CSV manca la colonna n_soc_low, "
+                  f"run fatte prima del 15/10)")
 
 
 if __name__ == "__main__":

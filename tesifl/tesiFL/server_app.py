@@ -20,7 +20,7 @@ from strategies.sage import PhysicalSAGE
 from strategies.sage_ablation import PhysicalSAGEAblation
 from strategies.sage_smart import PhysicalSAGESmart
 from strategies.escs import PhysicalESCS
-from tesiFL.data.partition import load_centralized_dataset, partition_sizes
+from tesiFL.data.partition import load_centralized_dataset, num_classes, partition_sizes
 from tesiFL.task import test
 from tesiFL.data.model import build_model
 
@@ -31,6 +31,7 @@ app = ServerApp()
 # Quest'ultima e' passata come callback a strategy.start() e non riceve il
 # Context, quindi non puo' leggere run_config da se'.
 _MODEL_NAME = "resnet20"
+_DATASET = "cifar10"
 
 
 @app.main()
@@ -46,8 +47,18 @@ def main(grid: Grid, context: Context) -> None:
     seed: int = context.run_config["seed"]
     algorithm: str = str(context.run_config["algorithm"]).lower()
     proximal_mu: float = context.run_config["proximal-mu"]
-    global _MODEL_NAME
+    global _MODEL_NAME, _DATASET
     _MODEL_NAME = str(context.run_config["model-name"])
+    _DATASET = str(context.run_config["dataset"])
+    # [B] le costanti fisiche (MAC per campione, taglia del modello) le legge
+    # device/constants.py da experiment.toml: se il modello della run e'
+    # un altro, energia e tempi sarebbero calcolati per il modello sbagliato
+    # senza alcun errore visibile. Meglio fermarsi.
+    from device.constants import MODEL_DATASET, MODEL_NAME
+    if (_MODEL_NAME, _DATASET) != (MODEL_NAME, MODEL_DATASET):
+        raise ValueError(
+            f"run con {_MODEL_NAME}/{_DATASET} ma la fisica (experiment.toml, "
+            f"[model]) e' per {MODEL_NAME}/{MODEL_DATASET}: cambia [model] li'")
 
     # [B] senza questo l'init del modello e' casuale a ogni run e i confronti
     # tra algoritmi non sono validi (accuracy iniziale diversa a round 0)
@@ -61,7 +72,7 @@ def main(grid: Grid, context: Context) -> None:
     # Load global model
     # [B] costruito DOPO manual_seed: l'inizializzazione dei pesi consuma la
     # RNG di torch, quindi farlo prima renderebbe il seed inefficace.
-    global_model = build_model(_MODEL_NAME, 10)
+    global_model = build_model(_MODEL_NAME, num_classes(_DATASET))
     arrays = ArrayRecord(global_model.state_dict())
 
     # Mondo fisico: stesso seed -> stessa popolazione (confronto equo tra
@@ -103,6 +114,18 @@ def main(grid: Grid, context: Context) -> None:
         selection_seed=seed,
         fraction_evaluate=fraction_evaluate,
     )
+    # broadcast dello stato a inizio round: solo per chi seleziona sullo
+    # stato (SAGE, ESCS, SAGE-smart). FedAvg e FedProx scelgono a caso.
+    bcast = dict(
+        broadcast=bool(context.run_config["broadcast"]),
+        broadcast_nonresp=float(context.run_config["broadcast-nonresp"]),
+        broadcast_timeout_s=float(context.run_config["broadcast-timeout-s"]),
+        broadcast_top_m=int(context.run_config["broadcast-top-m"]),
+    )
+    if bcast["broadcast"] and not algorithm.startswith(("fedavg", "fedprox")):
+        print(f"[strategy] broadcast dello stato: {bcast['broadcast_nonresp']:.0%} "
+              f"non risponde, timeout {bcast['broadcast_timeout_s']} s, "
+              f"{'tutti' if bcast['broadcast_top_m'] <= 0 else 'primi ' + str(bcast['broadcast_top_m'])}")
     if algorithm.startswith("escs"):
         # escs, escs-sd, escs-sp, escs-md, escs-mp
         suffix = algorithm.split("-")[-1] if "-" in algorithm else "sd"
@@ -119,6 +142,7 @@ def main(grid: Grid, context: Context) -> None:
             num_partitions=n_clients,
             beta=float(context.run_config["beta"]),
             seed=seed,
+            dataset=_DATASET,
         )
         strategy = PhysicalESCS(
             utility_mode=suffix[0], selection_mode=suffix[1],
@@ -127,7 +151,7 @@ def main(grid: Grid, context: Context) -> None:
             cap_probabilistic=bool(context.run_config["escs-cap-probabilistic"]),
             min_battery=float(context.run_config["escs-min-battery"]),
             min_network_quality=float(context.run_config["escs-min-nq"]),
-            **common,
+            **common, **bcast,
         )
         print(f"[strategy] PhysicalESCS ({strategy.variant})")
     elif algorithm == "sage":
@@ -135,7 +159,7 @@ def main(grid: Grid, context: Context) -> None:
             sage_a=float(context.run_config["sage-a"]),
             sage_b=float(context.run_config["sage-b"]),
             sage_c=float(context.run_config["sage-c"]),
-            **common,
+            **common, **bcast,
         )
         print(
             f"[strategy] PhysicalSAGE (a={context.run_config['sage-a']}, "
@@ -149,6 +173,7 @@ def main(grid: Grid, context: Context) -> None:
             num_partitions=n_clients,
             beta=float(context.run_config["beta"]),
             seed=seed,
+            dataset=_DATASET,
         )
         strategy = PhysicalSAGESmart(
             sage_a=float(context.run_config["sage-a"]),
@@ -163,7 +188,7 @@ def main(grid: Grid, context: Context) -> None:
             max_waves=int(context.run_config["smart-max-waves"]),
             batch_min=int(context.run_config["smart-batch-min"]),
             batch_max=int(context.run_config["smart-batch-max"]),
-            **common,
+            **common, **bcast,
         )
         print(
             f"[strategy] PhysicalSAGESmart ({strategy.variant}) "
@@ -184,7 +209,7 @@ def main(grid: Grid, context: Context) -> None:
         strategy = PhysicalSAGEAblation(
             sage_a=float(context.run_config["sage-a"]),
             sage_b=float(context.run_config["sage-b"]),
-            **common,
+            **common, **bcast,
         )
         print(
             f"[strategy] PhysicalSAGEAblation (a={context.run_config['sage-a']}, "
@@ -322,13 +347,13 @@ def global_evaluate(server_round: int, arrays: ArrayRecord) -> MetricRecord:
     """Evaluate model on central data."""
 
     # Load the model and initialize it with the received weights
-    model = build_model(_MODEL_NAME, 10)
+    model = build_model(_MODEL_NAME, num_classes(_DATASET))
     model.load_state_dict(arrays.to_torch_state_dict())
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model.to(device)
 
     # Load entire test set
-    test_dataloader = load_centralized_dataset()
+    test_dataloader = load_centralized_dataset(_DATASET)
 
     # Evaluate the global model on the test set
     test_loss, test_acc = test(model, test_dataloader, device)

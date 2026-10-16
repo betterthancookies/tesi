@@ -263,7 +263,26 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         return super().configure_train(server_round, arrays, config, grid)
 
     def _round_overhead_s(self) -> float:
-        return self._overhead_s
+        # negoziazione + broadcast dello stato (se attivo, vedi PhysicalFedAvg)
+        return self._overhead_s + super()._round_overhead_s()
+
+    def _broadcast_targets(self, available: list[int], server_round: int) -> list[int]:
+        """Nota 3 del documento: col broadcast limitato (broadcast_top_m > 0)
+        si chiede lo stato ai soli primi M per punteggio, calcolato con la
+        stima del server (Fase 2a). M >= k, altrimenti non si riempie il
+        round."""
+        if self.bcast_top_m <= 0 or self.bcast_top_m >= len(available):
+            return list(available)
+        self._refresh_state(available)
+        cid_of = self._node_to_cid
+        score = {
+            n: self.a * self._resource(cid_of[n])
+            + self.b * self._divergence(cid_of[n])
+            + self.stale_w * self._staleness(cid_of[n], server_round)
+            for n in available
+        }
+        m = max(self.bcast_top_m, self.k_per_round)
+        return sorted(available, key=lambda n: -score[n])[:m]
 
     # ===================================================== Fase 0 e Fase 2
     def _sensor_soc(self, cid: int) -> float:
@@ -385,7 +404,11 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         """
         sel = set(selected)
         for n in self._queried:
-            self.world.apply_control(self._node_to_cid[n], merged=n in sel)
+            # [B] col broadcast attivo ogni candidato ha appena risposto alla
+            # richiesta di stato: la sessione radio e' gia' aperta e la
+            # proposta paga il solo payload, anche se viene rifiutata
+            self.world.apply_control(self._node_to_cid[n],
+                                     merged=(n in sel) or self.broadcast)
 
     def _resource(self, cid: int) -> float:
         """SoC usato nello score: quello NOTO al server, non quello vero."""
@@ -431,7 +454,10 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         cid_of = self._node_to_cid
         pool = available
         m = len(pool)
-        hi = min(self.k + server_round - 1, int(np.floor(self.max_frac * m)))
+        # tetto sui VIVI, non sui soli raggiunti dal broadcast (vedi
+        # PhysicalSAGEAblation._select_clients)
+        hi = min(self.k + server_round - 1,
+                 int(np.floor(self.max_frac * max(m, self._n_alive))), m)
         lo = self.k
 
         score = {

@@ -134,6 +134,19 @@ def main() -> int:
             check("spread dei passi FedNova contenuto (max tau / min tau <= 8)",
                   max(sp) <= 8.0, " ".join(f"{x:.1f}" for x in sp))
 
+    # --- broadcast dello stato (solo strategie che selezionano sullo stato) --
+    if rows[0].get("bcast_targets") not in (None, ""):
+        tg = [int(float(r["bcast_targets"])) for r in rows]
+        rs = [int(float(r["bcast_resp"])) for r in rows]
+        eb = [float(r["energy_bcast_wh"]) for r in rows]
+        share = 1.0 - sum(rs) / max(1, sum(tg))
+        check("broadcast: risposte <= richieste, energia in aumento",
+              all(a <= b for a, b in zip(rs, tg)) and all(y >= x for x, y in zip(eb, eb[1:])),
+              f"risposte {' '.join(map(str, rs))} su {' '.join(map(str, tg))}, "
+              f"{eb[-1] * 1000:.1f} mWh")
+        if not 0.0 <= share <= 0.4:
+            warns.append(f"broadcast: non risponde il {share:.0%}, atteso ~10%")
+
     # --- batterie ----------------------------------------------------------
     soc_ok = all(0.0 <= lo <= m <= hi <= 1.0 for lo, m, hi in
                  zip(v["min_soc"], v["mean_soc"], v["max_soc"]))
@@ -144,6 +157,13 @@ def main() -> int:
     check("workload medio in [0, 1]", all(0.0 <= w <= 1.0 for w in v["mean_workload"]))
     dead = int(v["n_soc_zero"][-1])
     check("device scarichi fra 0 e N", 0 <= dead <= args.clients, f"{dead}")
+    if rows[0].get("n_soc_low") not in (None, ""):
+        low = [int(float(r["n_soc_low"])) for r in rows]
+        check("device sotto il 20% (colonna n_soc_low) >= device scarichi",
+              all(lo >= int(z) for lo, z in zip(low, v["n_soc_zero"])),
+              " ".join(str(x) for x in low))
+    else:
+        warns.append("manca la colonna n_soc_low (fig10): codice vecchio sul server?")
     if dead > 0:
         warns.append(f"{dead} device scarichi dopo {args.rounds} round: insolito, controlla")
 
