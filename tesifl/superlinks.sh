@@ -114,13 +114,17 @@ start)
       mv -f "$db" "${db}.prev"; rm -f "${db}-wal" "${db}-shm"
       echo "  ${n}: coda vecchia spostata in ${db}.prev"
     fi
+    # [B] 16/10: senza "exec" la subshell in background restava viva come
+    # genitore del SuperLink, con lo stdout del chiamante aperto: con
+    # "bash run.sh --fastTest | tee ..." il tee non riceveva mai EOF e il
+    # comando non tornava piu', pur avendo finito.
     ( cd "$PROJECT" && \
       export CUDA_VISIBLE_DEVICES="$gpu" HF_HUB_OFFLINE=1 RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO=0 && \
-      nohup flower-superlink --insecure --simulation --isolation subprocess \
+      exec nohup flower-superlink --insecure --simulation --isolation subprocess \
         --control-api-address "127.0.0.1:${p}" \
         --serverappio-api-address "127.0.0.1:0" \
         --database "$db" \
-        > "/tmp/superlink_${n}.log" 2>&1 & )
+        > "/tmp/superlink_${n}.log" 2>&1 < /dev/null & )
     sleep 4
     if [ -n "$(sl_pid "$gpu")" ]; then
       echo "  ${n}: avviato su GPU ${gpu}, porta ${p}"

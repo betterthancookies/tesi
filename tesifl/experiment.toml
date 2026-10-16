@@ -1,5 +1,8 @@
 [campaign]
-name        = "rechargeONdeviceON_ResNet20_bcast"        # -> risultati in results_<name>/
+name        = "rechargeONdeviceON_ResNet18_C100_bcast"   # -> risultati in results_<name>/
+                             # ResNet18_C100 = scenario ResNet-18 su CIFAR-100,
+                             # 100 client (vedi SCENARIO in [model]); la
+                             # campagna ResNet-20 era ..._ResNet20_bcast
                              # fisica2 = Mandheling, 4G, Peukert 1.05, ricarica
                              # oraria, overhead 0.057 s, SAGE-smart B 16-64;
                              # bcast = fisica2 + broadcast dello stato per
@@ -7,14 +10,15 @@ name        = "rechargeONdeviceON_ResNet20_bcast"        # -> risultati in resul
 rounds      = 250
 seeds       = [2026]         # [2026, 7, 13] per tre seed
 betas       = [0.1, 0.5, 1.0]
-clients     = 30             # numero di SuperNode
+clients     = 100            # numero di SuperNode (30 per ResNet-20)
 k_fraction  = 0.2            # client per round = round(k_fraction * clients)
 gpus        = [2]            # un SuperLink per GPU; beta i -> GPU (i mod n_gpu).
                              # Tante GPU quanti beta: in parallelo. Meno GPU:
                              # i beta della stessa GPU girano IN SEQUENZA.
                              # [1, 2, 3] sul vecchio server, [2] sul nuovo.
 stagger_s   = 180            # ritardo fra l'avvio di una GPU e la successiva
-timeout_s   = 14400          # una run oltre questo tempo e' considerata persa
+timeout_s   = 28800          # una run oltre questo tempo e' considerata persa
+                             # 8 h per ResNet-18 (14400 per ResNet-20)
                              # [B] 4 h: con batch piccoli (B = 8, sweep) la
                              # GPU fa 16x i passi di B = 128 e 2 h non bastano
 
@@ -248,7 +252,7 @@ c_rate = 1.0
 local_epochs      = 5
 batch_size        = 128
 learning_rate     = 0.01   # paper SAGE
-fraction_evaluate = 1.0
+fraction_evaluate = 0.2    # 1.0 per ResNet-20; 0.2 con 100 client (SCENARIO)
 proximal_mu       = 0.1    # FedProx
 
 # SAGE del paper (sage_lin): pesi (a,b,c) per beta, ottimi di Table 1.
@@ -291,7 +295,7 @@ smart_max_waves      = 2      # ondate di proposte per round (1 = nessun rimpiaz
 # stesso client fa ~70 passi. Le partizioni grandi salgono a 32/64 e fanno
 # comunque un numero di passi simile ai client a 16 (3000/32 ~ 1666/16).
 smart_batch_min      = 16
-smart_batch_max      = 64
+smart_batch_max      = 128    # 64 per ResNet-20; 128 richiesto per ResNet-18 (SCENARIO)
 
 # BROADCAST DELLO STATO a inizio round (opzione 1 del "Client Server
 # Protocol" del relatore, call del 16/10) per le strategie che selezionano
@@ -315,8 +319,8 @@ escs_first_round_all   = true   # Alg. 1 righe 5-6
 escs_cap_probabilistic = false
 
 [model]
-name    = "resnet20"       # "resnet20" | "resnet18"
-dataset = "cifar10"        # "cifar10" | "cifar100" (Hugging Face uoft-cs/...)
+name    = "resnet18"       # "resnet20" | "resnet18"
+dataset = "cifar100"       # "cifar10" | "cifar100" (Hugging Face uoft-cs/...)
 # ResNet-20 per CIFAR (He et al. 2016, n=3): 40.55 MMAC/campione, 62x LeNet-5.
 # [B] il cambio da LeNet serve perche' con batterie realistiche LeNet
 # consumava cosi' poco da richiedere decine di migliaia di round per il primo
