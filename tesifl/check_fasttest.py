@@ -29,22 +29,31 @@ COLS = ("round", "accuracy", "loss", "total_energy_wh", "energy_train_wh",
         "mean_soc", "min_soc", "max_soc", "n_soc_zero", "n_clients",
         "mean_workload")
 
-# campagna di riferimento delle soglie: ResNet-20 su CIFAR-10, 6 client per round
-REF_MACS, REF_PARAMS, REF_K_FRACTION, REF_K = 40551040, 269722, 0.2, 6
+# campagna di riferimento delle soglie: ResNet-20 su CIFAR-10, 30 client, 6 per round
+REF_MACS, REF_PARAMS, REF_CLIENTS, REF_K_FRACTION, REF_K = 40551040, 269722, 30, 0.2, 6
 N_CLASSES = {"cifar10": 10, "cifar100": 100}
 
 
-def scales(clients: int) -> tuple[str, int, float, float]:
-    """(modello, classi, scala del training, scala della comunicazione)."""
+def scales(clients: int) -> tuple[str, int, tuple[float, float], tuple[float, float]]:
+    """(modello, classi, scale (min, max) del training, della comunicazione).
+
+    [B] 16/10: il MINIMO scala con il costo di UN client, il massimo con i
+    client per round. SAGE nei primi round ne seleziona 2, 3, 4 (k + r - 1)
+    qualunque sia N: con 100 client e il minimo scalato su 20 per round il
+    fastTest dava FAIL su valori esatti.
+    """
     cfg = tomllib.load(open("experiment.toml", "rb"))
     name, ds = cfg["model"]["name"], cfg["model"]["dataset"]
     spec = cfg["model"]["specs"][f"{name}_{ds}"]
     kf = float(cfg["campaign"]["k_fraction"])
     k = max(1, round(kf * clients))
-    # training per round ~ MAC x campioni dei selezionati (50k x k_fraction)
-    s_train = max(1.0, spec["macs_fwd_per_sample"] / REF_MACS * kf / REF_K_FRACTION)
-    # comunicazione per round ~ MB del modello x client per round
-    s_comm = max(1.0, spec["n_params"] / REF_PARAMS * k / REF_K)
+    macs = spec["macs_fwd_per_sample"] / REF_MACS
+    params = spec["n_params"] / REF_PARAMS
+    # training: un client ~ MAC x campioni per client (50k / N); un round ~
+    # MAC x campioni dei selezionati (50k x k_fraction)
+    s_train = (macs * REF_CLIENTS / clients, max(1.0, macs * kf / REF_K_FRACTION))
+    # comunicazione: un client ~ MB del modello; un round ~ MB x client per round
+    s_comm = (params, max(1.0, params * k / REF_K))
     return f"{name}/{ds}", N_CLASSES.get(ds, 10), s_train, s_comm
 
 
@@ -101,7 +110,8 @@ def main() -> int:
         return verdict(fails, warns)
 
     model, n_cls, s_train, s_comm = scales(args.clients)
-    print(f"  (modello {model}: soglie training x{s_train:.1f}, comunicazione x{s_comm:.1f})")
+    print(f"  (modello {model}: soglie training x{s_train[0]:.1f}/x{s_train[1]:.1f}, "
+          f"comunicazione x{s_comm[0]:.1f}/x{s_comm[1]:.1f})")
 
     # --- modello: impara qualcosa ---------------------------------------
     acc = v["accuracy"]
@@ -121,8 +131,8 @@ def main() -> int:
                                      zip(v["energy_comm_wh"], v["energy_comm_wh"][1:])]
     check("training in ogni round (energia di training sempre in aumento)",
           all(d > 0 for d in tr), " ".join(f"{d:.3f}" for d in tr) + " Wh")
-    t_lo, t_hi = 0.05 * s_train, 5.0 * s_train
-    c_lo, c_hi = 0.001 * s_comm, 0.5 * s_comm
+    t_lo, t_hi = 0.05 * s_train[0], 5.0 * s_train[1]
+    c_lo, c_hi = 0.001 * s_comm[0], 0.5 * s_comm[1]
     check(f"training per round plausibile ({t_lo:.2g}-{t_hi:.2g} Wh)",
           all(t_lo <= d <= t_hi for d in tr))
     check(f"comunicazione per round plausibile ({c_lo:.2g}-{c_hi:.2g} Wh)",
