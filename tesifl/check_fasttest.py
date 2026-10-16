@@ -11,6 +11,9 @@ Gli intervalli sono larghi (circa 10x attorno ai valori della campagna
 rechargeONdeviceON_ResNet20_batterie, beta 0.5, 3 round: accuracy 0.38,
 training ~0.6 Wh/round, comunicazione ~0.05 Wh/round per 6 client): devono
 scattare per un errore vero, non per una variazione della fisica.
+Con un altro modello o dataset ([model] di experiment.toml) le soglie si
+scalano: accuracy con il numero di classi, training con i MAC per campione e
+la frazione di client, comunicazione con i MB del modello e i client per round.
 Exit code 0 se tutto ok, 1 altrimenti.
 """
 from __future__ import annotations
@@ -25,6 +28,24 @@ COLS = ("round", "accuracy", "loss", "total_energy_wh", "energy_train_wh",
         "energy_comm_wh", "energy_idle_wh", "energy_ctrl_wh", "energy_lin_wh",
         "mean_soc", "min_soc", "max_soc", "n_soc_zero", "n_clients",
         "mean_workload")
+
+# campagna di riferimento delle soglie: ResNet-20 su CIFAR-10, 6 client per round
+REF_MACS, REF_PARAMS, REF_K_FRACTION, REF_K = 40551040, 269722, 0.2, 6
+N_CLASSES = {"cifar10": 10, "cifar100": 100}
+
+
+def scales(clients: int) -> tuple[str, int, float, float]:
+    """(modello, classi, scala del training, scala della comunicazione)."""
+    cfg = tomllib.load(open("experiment.toml", "rb"))
+    name, ds = cfg["model"]["name"], cfg["model"]["dataset"]
+    spec = cfg["model"]["specs"][f"{name}_{ds}"]
+    kf = float(cfg["campaign"]["k_fraction"])
+    k = max(1, round(kf * clients))
+    # training per round ~ MAC x campioni dei selezionati (50k x k_fraction)
+    s_train = max(1.0, spec["macs_fwd_per_sample"] / REF_MACS * kf / REF_K_FRACTION)
+    # comunicazione per round ~ MB del modello x client per round
+    s_comm = max(1.0, spec["n_params"] / REF_PARAMS * k / REF_K)
+    return f"{name}/{ds}", N_CLASSES.get(ds, 10), s_train, s_comm
 
 
 def main() -> int:
@@ -79,11 +100,15 @@ def main() -> int:
     if fails:
         return verdict(fails, warns)
 
+    model, n_cls, s_train, s_comm = scales(args.clients)
+    print(f"  (modello {model}: soglie training x{s_train:.1f}, comunicazione x{s_comm:.1f})")
+
     # --- modello: impara qualcosa ---------------------------------------
     acc = v["accuracy"]
+    acc_min = 1.5 / n_cls
     check("accuracy fra 0 e 1", all(0.0 <= a <= 1.0 for a in acc))
-    check("il modello impara (accuracy finale > 0.15, caso = 0.10)",
-          acc[-1] > 0.15, f"{' -> '.join(f'{a:.3f}' for a in acc)}")
+    check(f"il modello impara (accuracy finale > {acc_min:.3f}, caso = {1 / n_cls:.2f})",
+          acc[-1] > acc_min, f"{' -> '.join(f'{a:.3f}' for a in acc)}")
     check("loss finita e positiva", all(x > 0 for x in v["loss"]),
           f"{' -> '.join(f'{x:.3f}' for x in v['loss'])}")
 
@@ -96,10 +121,12 @@ def main() -> int:
                                      zip(v["energy_comm_wh"], v["energy_comm_wh"][1:])]
     check("training in ogni round (energia di training sempre in aumento)",
           all(d > 0 for d in tr), " ".join(f"{d:.3f}" for d in tr) + " Wh")
-    check("training per round plausibile (0.05-5 Wh)",
-          all(0.05 <= d <= 5.0 for d in tr))
-    check("comunicazione per round plausibile (0.001-0.5 Wh)",
-          all(0.001 <= d <= 0.5 for d in cm), " ".join(f"{d:.4f}" for d in cm) + " Wh")
+    t_lo, t_hi = 0.05 * s_train, 5.0 * s_train
+    c_lo, c_hi = 0.001 * s_comm, 0.5 * s_comm
+    check(f"training per round plausibile ({t_lo:.2g}-{t_hi:.2g} Wh)",
+          all(t_lo <= d <= t_hi for d in tr))
+    check(f"comunicazione per round plausibile ({c_lo:.2g}-{c_hi:.2g} Wh)",
+          all(c_lo <= d <= c_hi for d in cm), " ".join(f"{d:.4f}" for d in cm) + " Wh")
     check("idle in aumento", all(b > a for a, b in
                                  zip(v["energy_idle_wh"], v["energy_idle_wh"][1:])))
 
