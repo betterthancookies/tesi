@@ -71,6 +71,7 @@ out = {
               f"recharge-enabled={str(w['recharge']).lower()} "
               f"recharge-available={str(w['recharge_available']).lower()}"),
         "ALGOCFG": (f'model-name="{mo["name"]}" dataset="{mo["dataset"]}" '
+                f"augment={str(mo.get('augment', False)).lower()} "
                 f"local-epochs={al['local_epochs']} batch-size={al['batch_size']} "
                 f"learning-rate={al['learning_rate']} "
                 f"fraction-evaluate={al['fraction_evaluate']} "

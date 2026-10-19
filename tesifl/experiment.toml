@@ -1,8 +1,10 @@
 [campaign]
-name        = "rechargeONdeviceON_ResNet18_C100_bcast"   # -> risultati in results_<name>/
+name        = "rechargeONdeviceON_ResNet18_C100_bcast_cap_aug"   # -> results_<name>/
                              # ResNet18_C100 = scenario ResNet-18 su CIFAR-100,
                              # 100 client (vedi SCENARIO in [model]); la
-                             # campagna ResNet-20 era ..._ResNet20_bcast
+                             # campagna ResNet-20 era ..._ResNet20_bcast.
+                             # cap_aug (19/10) = ..._ResNet18_C100_bcast con
+                             # batterie vere 4820/4780/5000 e augmentation
                              # fisica2 = Mandheling, 4G, Peukert 1.05, ricarica
                              # oraria, overhead 0.057 s, SAGE-smart B 16-64;
                              # bcast = fisica2 + broadcast dello stato per
@@ -92,10 +94,16 @@ recharge_available = true
 # [LIMITE] VGG-11 ha 64-512 canali, ResNet-20 16-64: su CPU ResNet-20 rende
 # probabilmente meno GMAC/s. Misure per batch (niente throttling termico).
 # Telefoni 2020-21 di fascia media e alta: manca un telefono economico.
+# Capacita' = batteria DEGLI STESSI tre telefoni (schede tecniche del
+# produttore; GSMArena, Notebookcheck, mi.com):
+#   low  Redmi Note 9 Pro 5G 4820 mAh | mid Xiaomi Mi 10 4780 mAh |
+#   high Xiaomi Mi 11 Pro    5000 mAh
+# [B] 19/10: prima 3500/4000/4500, senza fonte (campagne fino a
+# ResNet18_C100_bcast compresa). Il mid ha 40 mAh meno del low: e' il dato vero.
 tiers = [
-  { name = "low",  capacity_mah = 3500.0, macs_per_s = 13.9e9, train_power_w = 2.99 },
-  { name = "mid",  capacity_mah = 4000.0, macs_per_s = 26.6e9, train_power_w = 4.00 },
-  { name = "high", capacity_mah = 4500.0, macs_per_s = 30.5e9, train_power_w = 6.15 },
+  { name = "low",  capacity_mah = 4820.0, macs_per_s = 13.9e9, train_power_w = 2.99 },
+  { name = "mid",  capacity_mah = 4780.0, macs_per_s = 26.6e9, train_power_w = 4.00 },
+  { name = "high", capacity_mah = 5000.0, macs_per_s = 30.5e9, train_power_w = 6.15 },
 ]
 # Usati SOLO con world.tiers = false (popolazione omogenea delle campagne
 # precedenti): capacita', velocita' e potenza uguali per tutti.
@@ -321,6 +329,15 @@ escs_cap_probabilistic = false
 [model]
 name    = "resnet18"       # "resnet20" | "resnet18"
 dataset = "cifar100"       # "cifar10" | "cifar100" (Hugging Face uoft-cs/...)
+# Data augmentation sul TRAIN dei client: crop 32x32 con padding 4 e flip
+# orizzontale (He et al. 2016, standard su CIFAR). Test locale e centrale
+# senza. Non cambia la fisica: stessi MAC per campione; il costo di crop e
+# flip sul telefono e' trascurabile rispetto al training [ASSUNZIONE].
+# [B] 19/10: senza augmentation ResNet-18 memorizzava il train entro il round
+# ~100 (loss locale 0.002, test 37%) e SAGE-smart scendeva a E_lo per questo:
+# parte del risparmio veniva dall'overfitting. false = campagne fino a
+# ResNet18_C100_bcast compresa.
+augment = true
 # ResNet-20 per CIFAR (He et al. 2016, n=3): 40.55 MMAC/campione, 62x LeNet-5.
 # [B] il cambio da LeNet serve perche' con batterie realistiche LeNet
 # consumava cosi' poco da richiedere decine di migliaia di round per il primo

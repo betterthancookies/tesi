@@ -28,6 +28,8 @@ def train(msg: Message, context: Context):
     # dataset e numero di classi della run (experiment.toml, [model])
     dataset = str(context.run_config["dataset"])
     n_cls = num_classes(dataset)
+    # crop e flip sul train locale ([model].augment di experiment.toml)
+    augment = bool(context.run_config["augment"])
 
     # Load the model and initialize it with the received weights
     model = build_model(str(context.run_config["model-name"]), n_cls)
@@ -67,10 +69,10 @@ def train(msg: Message, context: Context):
     if Envelope.present_in(config):
         return _train_client_driven(msg, model, device, config, partition_id,
                                     num_partitions, beta, seed, proximal_mu,
-                                    dataset_name=dataset)
+                                    dataset_name=dataset, augment=augment)
 
     trainloader, _ = load_data(partition_id, num_partitions, batch_size, beta, seed,
-                               dataset=dataset)
+                               dataset=dataset, augment=augment)
 
     # Call the training function
     train_loss, loss_sq_sum, loss_n = train_fn(
@@ -138,7 +140,8 @@ def _probe_loss(model, dataset, n_probe: int, device, generator) -> float:
 
 def _train_client_driven(msg: Message, model, device, config, partition_id: int,
                          num_partitions: int, beta: float, seed: int,
-                         proximal_mu: float, dataset_name: str = "cifar10") -> Message:
+                         proximal_mu: float, dataset_name: str = "cifar10",
+                         augment: bool = False) -> Message:
     """sage_smart: il client decide (E, B) dentro l'envelope del server.
 
     Fasi 5-7 della proposta:
@@ -163,8 +166,11 @@ def _train_client_driven(msg: Message, model, device, config, partition_id: int,
     server_round = int(config["server-round"])
 
     n_cls = num_classes(dataset_name)
+    # [B] con augment la stima della loss (5b) vede immagini aumentate come
+    # il training: misura quanto resta da imparare sull'obiettivo vero, che
+    # con l'augmentation non va a zero per memorizzazione
     trainloader, _ = load_data(partition_id, num_partitions, env.batches[0],
-                               beta, seed, dataset=dataset_name)
+                               beta, seed, dataset=dataset_name, augment=augment)
     dataset = trainloader.dataset
     n = len(dataset)
     env = dataclasses.replace(env, probe_samples=min(env.probe_samples, n))

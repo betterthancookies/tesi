@@ -14,7 +14,8 @@ from datasets import load_dataset
 from flwr_datasets import FederatedDataset
 from flwr_datasets.partitioner import DirichletPartitioner
 from torch.utils.data import DataLoader
-from torchvision.transforms import Compose, Normalize, ToTensor
+from torchvision.transforms import (Compose, Normalize, RandomCrop,
+                                    RandomHorizontalFlip, ToTensor)
 
 # nome -> (dataset Hugging Face, colonna dell'etichetta, numero di classi)
 DATASETS = {
@@ -25,6 +26,14 @@ DATASETS = {
 fds = None  # Cache FederatedDataset
 
 pytorch_transforms = Compose([ToTensor(), Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+# [B] 19/10: data augmentation standard per CIFAR (He et al. 2016): crop
+# 32x32 da un'immagine con 4 pixel di padding e flip orizzontale. Solo sul
+# TRAIN dei client (augment = true in [model]); test locale e test centrale
+# restano senza. Motivo: senza augmentation ResNet-18 su CIFAR-100 memorizzava
+# i dati di training entro il round ~100 (loss locale 0.002 con accuracy di
+# test al 37%, campagna ResNet18_C100_bcast).
+train_transforms = Compose([RandomCrop(32, padding=4), RandomHorizontalFlip(),
+                            ToTensor(), Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
 
 
 def num_classes(dataset: str = "cifar10") -> int:
@@ -50,9 +59,19 @@ def apply_transforms(batch):
     return batch
 
 
+def apply_train_transforms(batch):
+    """Come apply_transforms, con crop e flip casuali (RNG globale di torch,
+    quindi riproducibile col seed per (client, round) di client_app)."""
+    batch["img"] = [train_transforms(img) for img in batch["img"]]
+    return batch
+
+
 def load_data(partition_id: int, num_partitions: int, batch_size: int, beta: float = 0.5,
-              seed: int = 42, dataset: str = "cifar10"):
-    """Load partition data with Dirichlet non-IID partitioning."""
+              seed: int = 42, dataset: str = "cifar10", augment: bool = False):
+    """Load partition data with Dirichlet non-IID partitioning.
+
+    augment=True: crop e flip casuali sul solo split di train.
+    """
     global fds
     hf_name, label_col, _ = _spec(dataset)
     if fds is None:
@@ -68,9 +87,11 @@ def load_data(partition_id: int, num_partitions: int, batch_size: int, beta: flo
         )
     partition = _uniform(fds.load_partition(partition_id), label_col)
     partition_train_test = partition.train_test_split(test_size=0.2, seed=seed)
-    partition_train_test = partition_train_test.with_transform(apply_transforms)
-    trainloader = DataLoader(partition_train_test["train"], batch_size=batch_size, shuffle=True)
-    testloader = DataLoader(partition_train_test["test"], batch_size=batch_size)
+    train = partition_train_test["train"].with_transform(
+        apply_train_transforms if augment else apply_transforms)
+    test = partition_train_test["test"].with_transform(apply_transforms)
+    trainloader = DataLoader(train, batch_size=batch_size, shuffle=True)
+    testloader = DataLoader(test, batch_size=batch_size)
     return trainloader, testloader
 
 

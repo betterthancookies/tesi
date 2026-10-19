@@ -76,6 +76,7 @@ broadcast-top-m = 0          # 0 = tutti; M = primi M per stima (solo SAGE-smart
 world-battery = "nm"
 model-name = "resnet20"      # "resnet20" | "resnet18" (experiment.toml, [model])
 dataset = "cifar10"          # "cifar10" | "cifar100"
+augment = false              # crop + flip sul train dei client ([model].augment)
 recharge-enabled = true
 recharge-available = true
 fraction-evaluate = 1.0

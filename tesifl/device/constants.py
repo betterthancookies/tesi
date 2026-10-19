@@ -85,6 +85,8 @@ BATCH_OVERHEAD_S = float(_get("compute", "batch_overhead_s"))
 #   conv1: 456   conv2: 2_416   fc1: 48_120   fc2: 10_164   fc3: 850
 MODEL_NAME = str(_get("model", "name"))
 MODEL_DATASET = str(_get("model", "dataset"))
+# solo per il riassunto: l'augmentation non cambia la fisica (stessi MAC)
+MODEL_AUGMENT = bool(CFG["model"].get("augment", False))
 _SPEC_KEY = f"{MODEL_NAME}_{MODEL_DATASET}"
 try:
     _SPEC = CFG["model"]["specs"][_SPEC_KEY]
@@ -131,7 +133,8 @@ def describe() -> str:
     t = " ".join(f"{k}({v['capacity_mah']:.0f}mAh,{v['macs_per_s'] / 1e9:.1f}GMAC/s,"
                  f"{v['train_power_w']:.2f}W)" for k, v in TIERS.items())
     return (f"modello {MODEL_NAME}/{MODEL_DATASET} ({MODEL_MACS_FWD_PER_SAMPLE / 1e6:.1f} MMAC, "
-            f"{MODEL_SIZE_MB:.1f} MB) | tier: {t} | P_idle {IDLE_POWER_W * 1000:.0f} mW "
+            f"{MODEL_SIZE_MB:.1f} MB, augment {'on' if MODEL_AUGMENT else 'off'}) "
+            f"| tier: {t} | P_idle {IDLE_POWER_W * 1000:.0f} mW "
             f"| Peukert n={PEUKERT_N} | SoC0 N({INITIAL_SOC_MEAN},{INITIAL_SOC_STD}) "
             f"| 4G {COMM_ENERGY_DL_J_PER_MB}/{COMM_ENERGY_UL_J_PER_MB} J/MB "
             f"| ricarica {RECHARGE_RATE_PER_H}/h a {CHARGE_C_RATE}C")
