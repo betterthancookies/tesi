@@ -195,9 +195,26 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         calib_alpha: float = 0.3,
         batch_min: int = 16,
         batch_max: int = 64,
+        soc_source: str = "estimate",
+        negotiation: bool = True,
+        fednova: bool = True,
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
+        # [B] 19/10, ABLAZIONE (smart-ablation in server_app): i default sono
+        # SAGE-smart completo; ogni interruttore toglie un solo componente.
+        #   soc_source "report": il server usa l'ultimo SoC riportato, senza
+        #                        estrapolare l'idle (niente stima della Fase 2a)
+        #   negotiation False:   niente proposte (Fase 2b): il training va ai
+        #                        primi della classifica, che possono ancora
+        #                        ritirarsi dopo aver scaricato il modello
+        #   fednova False:       media pesata per i dati (FedAvg) al posto di
+        #                        FedNova
+        if soc_source not in ("estimate", "report"):
+            raise ValueError(f"soc_source: 'estimate' o 'report', non {soc_source!r}")
+        self.soc_source = soc_source
+        self.negotiation = bool(negotiation)
+        self.fednova = bool(fednova)
         self.stale_w = float(stale_weight)
         self.stale_max = int(stale_max)
         self.soc_min = float(soc_min)
@@ -254,7 +271,10 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
 
     @property
     def variant(self) -> str:
-        return f"sage-smart-{self.world.battery}"
+        off = [name for name, on in (("stima SoC", self.soc_source == "estimate"),
+                                     ("negoziazione", self.negotiation),
+                                     ("FedNova", self.fednova)) if not on]
+        return f"sage-smart-{self.world.battery}" + (f" SENZA {', '.join(off)}" if off else "")
 
     def configure_train(self, server_round, arrays, config, grid):
         # la griglia serve alla Fase 2 per i messaggi di controllo, che
@@ -332,7 +352,8 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         sa quando la carica finisce (stima prudente, la carica lo alzerebbe).
         """
         soc = self._soc_rep[cid]
-        if self._chg_rep.get(cid, False):
+        # ablazione: l'ultimo report cosi' com'e', anche se vecchio di molti round
+        if self.soc_source == "report" or self._chg_rep.get(cid, False):
             return soc
         dt = max(0.0, self._clock_s - self._t_rep.get(cid, 0.0))
         if dt <= 0.0:
@@ -485,7 +506,12 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         # la prima ondata di proposte e' esattamente la sua scelta, i
         # rimpiazzi sono i successivi nella stessa classifica
         ranking = sorted(pool, key=lambda n: -score[n])
-        selected = self._negotiate(ranking, len(selected), server_round)
+        if self.negotiation:
+            selected = self._negotiate(ranking, len(selected), server_round)
+        else:
+            # ablazione: la prima ondata senza chiedere, nessun rimpiazzo e
+            # nessuno scambio di controllo (waves = 0, overhead 0)
+            selected = ranking[:len(selected)]
         if not selected:
             self._charge_control([])
             log(INFO, "%s round %s: nessun candidato ha accettato in %s "
@@ -903,9 +929,15 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
             "tau_spread": float(max(taus) / max(1.0, min(taus))),
         })
 
-        log(INFO, "round %s: FedNova su %s client | tau %s-%s, tau_eff %.1f, "
-            "spread %.1f", server_round, len(rows), int(min(taus)),
-            int(max(taus)), tau_eff, max(taus) / max(1.0, min(taus)))
+        log(INFO, "round %s: %s su %s client | tau %s-%s, tau_eff %.1f, "
+            "spread %.1f", server_round, "FedNova" if self.fednova else "FedAvg",
+            len(rows), int(min(taus)), int(max(taus)), tau_eff,
+            max(taus) / max(1.0, min(taus)))
+        if not self.fednova:
+            # ablazione: la media pesata per i dati di super(), sulle stesse
+            # reply (BatchNorm compresa, mediata allo stesso modo); le colonne
+            # tau_* restano nel CSV per confronto
+            return arrays, metrics
 
         merged = ArrayRecord()
         for k, o in zip(keys, out):

@@ -175,28 +175,49 @@ def main(grid: Grid, context: Context) -> None:
             seed=seed,
             dataset=_DATASET,
         )
+        smart = dict(
+            stale_weight=float(context.run_config["smart-stale-weight"]),
+            epochs_min=int(context.run_config["smart-epochs-min"]),
+            batch_min=int(context.run_config["smart-batch-min"]),
+            batch_max=int(context.run_config["smart-batch-max"]),
+        )
+        # [B] 19/10, ABLAZIONE leave-one-out: smart-ablation toglie UN
+        # componente, il resto resta SAGE-smart completo. Un solo parametro
+        # (e non i singoli valori) perche' --run-config non ammette chiavi
+        # ripetute e quelle singole sono gia' in ALGOCFG.
+        ablation = str(context.run_config["smart-ablation"])
+        ablations = {
+            "none":    {},
+            "nostale": {"stale_weight": 0.0},                    # niente c
+            "noest":   {"soc_source": "report"},                 # niente stima SoC
+            "noneg":   {"negotiation": False},                   # niente proposte
+            "e5":      {"epochs_min": epochs, "epochs_cap_mult": 1},  # E = 5 fisso
+            "nonova":  {"fednova": False},                       # media FedAvg
+            "b128":    {"batch_min": batch_size, "batch_max": batch_size},  # B = 128
+        }
+        if ablation not in ablations:
+            raise ValueError(f"smart-ablation sconosciuta: {ablation!r} "
+                             f"(usa {', '.join(ablations)})")
+        smart.update(ablations[ablation])
         strategy = PhysicalSAGESmart(
             sage_a=float(context.run_config["sage-a"]),
             sage_b=float(context.run_config["sage-b"]),
-            stale_weight=float(context.run_config["smart-stale-weight"]),
             stale_max=int(context.run_config["smart-stale-max"]),
             partition_sizes=sizes,
             soc_min=float(context.run_config["smart-soc-min"]),
-            epochs_min=int(context.run_config["smart-epochs-min"]),
             deadline_mult=float(context.run_config["smart-deadline-mult"]),
             probe_samples=int(context.run_config["smart-probe-samples"]),
             max_waves=int(context.run_config["smart-max-waves"]),
-            batch_min=int(context.run_config["smart-batch-min"]),
-            batch_max=int(context.run_config["smart-batch-max"]),
-            **common, **bcast,
+            **smart, **common, **bcast,
         )
         print(
             f"[strategy] PhysicalSAGESmart ({strategy.variant}) "
+            f"ablazione {ablation} | "
             f"(a={context.run_config['sage-a']}, "
             f"b={context.run_config['sage-b']}, "
-            f"c={context.run_config['smart-stale-weight']}) | "
+            f"c={strategy.stale_w}) | "
             f"(E,B) decisi dal client | "
-            f"soc_min={strategy.soc_min} E_lo={strategy.epochs_min} "
+            f"soc_min={strategy.soc_min} E {strategy.epochs_min}-{strategy.epochs_cap} "
             f"deadline x{strategy.deadline_mult} probe={strategy.probe_samples} "
             f"negoziazione max {strategy.max_waves} ondate | "
             f"B in {strategy.batch_choices}"

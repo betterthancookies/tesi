@@ -24,9 +24,12 @@
 set -u
 cd "$(dirname "$0")"
 
-# di default le GPU di experiment.toml, cosi' start/status/stop a mano usano
-# le stesse porte di run.sh
-GPUS=${GPUS:-$(python3 -c "import tomllib; print(*tomllib.load(open('experiment.toml', 'rb'))['campaign']['gpus'])")}
+# di default le GPU della campagna (EXP_TOML se c'e', altrimenti
+# experiment.toml), cosi' start/status/stop a mano usano le stesse porte di
+# run.sh. [B] 19/10: prima sempre experiment.toml; con una campagna da un
+# altro file e altre GPU (ablation.sh su Stanis, GPU 1) il wait-idle di
+# _shard.sh cercava la porta di una GPU che non era nella lista.
+GPUS=${GPUS:-$(python3 -c "import os, tomllib; print(*tomllib.load(open(os.environ.get('EXP_TOML') or 'experiment.toml', 'rb'))['campaign']['gpus'])")}
 PORT_BASE=${PORT_BASE:-39101}
 STATE_DIR=${STATE_DIR:-$HOME/.flwr/sweep}
 CONF=${CONF:-$HOME/.flwr/config.toml}
