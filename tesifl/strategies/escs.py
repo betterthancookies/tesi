@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import math
 from logging import INFO
-from typing import Iterable
-
 import numpy as np
-from flwr.app import Message, MetricRecord
+from flwr.app import Message
 from flwr.common import log
 
 from device.battery_model import V_NOMINAL
@@ -42,13 +40,17 @@ class PhysicalESCS(PhysicalFedAvg):
     E' il motivo per cui il riferimento DEVE essere calcolato sulle taglie
     reali.
 
-    LOSS. Il paper usa la loss di VALUTAZIONE (c_l, Table 2) e con eval
-    fraction 1.0 la conosce per tutti i client a ogni round (Alg. 1 righe
-    13-14). Qui si legge da aggregate_evaluate: dopo il round 1 ogni client
-    ha una loss. Chi non ne ha ancora (fraction_evaluate < 1) vale
-    loss = max_loss, cioe' U = 1: priorita' all'esplorazione, che e' l'intento
-    dell'inf iniziale nel codice originale (li' pero' inf/inf = nan
-    escludeva per sempre i mai osservati in -sp; qui e' corretto).
+    LOSS. [B] 23/10, allineata ai SORGENTI degli autori (escs_*.py,
+    aggregate_fit righe 142-145): la loss di un client e' quella che riporta
+    a fine TRAINING (fit_res.metrics["loss"]), aggiornata solo quando viene
+    selezionato. Il paper parla di loss di valutazione (c_l, Table 2), ma il
+    loro aggregate_evaluate registra solo l'accuracy. Qui: "train_loss" del
+    nostro client (loss media del training locale). Prima la leggevamo da
+    aggregate_evaluate, che con fraction_evaluate 0.2 la aggiornava a caso
+    ogni ~5 round. Chi non ne ha ancora vale loss = max_loss, cioe' U = 1:
+    priorita' all'esplorazione, che e' l'intento dell'inf iniziale nel
+    codice originale (li' pero' inf/inf = nan escludeva per sempre i mai
+    osservati; il bug non e' riprodotto).
 
     RISORSA DI BATTERIA. bat = SoC del device, letto dalla batteria del mondo
     (lineare, Peukert o datasheet: etichette escs_sd_lin / _peuk / _nm). Fra
@@ -77,9 +79,21 @@ class PhysicalESCS(PhysicalFedAvg):
       probabilita' di fallimento, quindi non c'e' un corrispettivo fisico.
     - pesi a = b = g = 1/3: il paper usa pesi uguali senza specificarne la
       somma. [ASSUNZIONE] la somma a 1 e' nostra.
-    - il numero di selezionati e' k per entrambe le varianti dal round 2 in
-      avanti. Nell'originale -sd usa round(num_clients * C) e -sp usa
-      round(len(idonei) * C).
+    - QUALITA' DI RETE statica e niente fallimenti di trasmissione. I loro
+      sorgenti selezionano con trans_prob STATICA (has_client_resources) e
+      fanno poi fallire la trasmissione con un profilo di rete per round
+      (filter_clients_to_train_by_predicted_behavior): e' la simulazione del
+      loro ambiente, che vale per tutti gli algoritmi. Il nostro ambiente
+      (device/) non ha fallimenti di rete per nessun algoritmo: introdurli
+      solo per ESCS non sarebbe un confronto equo. Conseguenza della nq
+      statica: i client con nq < 0.2 non passano mai il filtro (13 / 22 / 22
+      su 100 coi seed 2026 / 42 / 73), come nel loro codice.
+
+    NUMERO DI SELEZIONATI dal round 2, come nei loro sorgenti (C = k / N):
+      -sd/-md  idonei <= k: tutti; altrimenti i primi k per utilita'
+      -sp/-mp  i sorteggiati; se nessuno, i primi round(len(idonei) * C)
+      ultimo ripiego (nessun idoneo): per sola batteria, i primi
+               round(len(con batteria) * C) per loss decrescente
     """
 
     def __init__(
@@ -197,6 +211,9 @@ class PhysicalESCS(PhysicalFedAvg):
         # di `available`, accoppiato alla partizione dei dati.
         ast = [ast[i] for i in self._rng.permutation(len(ast))] if ast else []
 
+        # frazione di training C dei loro sorgenti (fit_fraction, costante):
+        # client per round su N iscritti, non il k del round (che cala coi morti)
+        frac = self.k_per_round / max(1, len(cid_of))
         rate = float("nan")
         selected: list[int] = []
         if ast and self.selection_mode == "p":
@@ -206,9 +223,15 @@ class PhysicalESCS(PhysicalFedAvg):
                 idx = self._rng.choice(len(selected), size=k, replace=False)
                 selected = [selected[i] for i in idx]
 
-        if not selected and ast:  # deterministica: default, e fallback della -p
-            selected = (ast if len(ast) <= k
-                        else sorted(ast, key=lambda n: -util[n])[:k])
+        if not selected and ast:
+            ranked = sorted(ast, key=lambda n: -util[n])
+            if self.selection_mode == "d":
+                # escs_sd/md: tutti se non superano k, altrimenti i primi k
+                selected = ast if len(ast) <= k else ranked[:k]
+            else:
+                # escs_sp/mp, ripiego quando il sorteggio non sceglie nessuno:
+                # i primi round(len(idonei) * C), senza il ramo "tutti"
+                selected = ranked[:round(len(ast) * frac)]
 
         if not selected:
             # terzo fallback degli autori: si ignora la qualita' del link e si
@@ -217,7 +240,7 @@ class PhysicalESCS(PhysicalFedAvg):
                     if self._battery(cid_of[n]) - self._consumption(cid_of[n])
                     >= self.min_battery]
             batt.sort(key=lambda n: -self._loss.get(cid_of[n], max_loss))
-            selected = batt[:k]
+            selected = batt[:round(len(batt) * frac)]
 
         log(INFO, "%s round %s: %s idonei su %s, %s selezionati (accept %.2f)",
             self.variant, server_round, len(ast), len(available),
@@ -249,19 +272,9 @@ class PhysicalESCS(PhysicalFedAvg):
         cap = self._capacity(cid)
         if cap > 0.0:
             self._cons[cid] = float(e_wh / cap)
-
-    def aggregate_evaluate(
-        self, server_round: int, replies: Iterable[Message]
-    ) -> MetricRecord | None:
-        """Registra la loss di valutazione per client (c_l del paper)."""
-        replies = list(replies)
-        for reply in replies:
-            if not reply.has_content():
-                continue
-            cid = self._node_to_cid.get(int(reply.metadata.src_node_id))
-            if cid is None:
-                continue
-            loss = self._metric(reply, "eval_loss", "eval-loss", "loss", default=None)
+        # loss del client per l'utilita': quella del suo training, come nei
+        # sorgenti degli autori (aggregate_fit, solo se num_examples != 0)
+        if n_ex > 0:
+            loss = self._metric(reply, "train_loss", "loss", default=None)
             if loss is not None and math.isfinite(float(loss)):
                 self._loss[cid] = float(loss)
-        return super().aggregate_evaluate(server_round, replies)

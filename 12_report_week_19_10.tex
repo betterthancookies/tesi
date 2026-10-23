@@ -1,0 +1,653 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{siunitx}
+\usepackage{multirow}
+\usepackage{float}
+\usepackage[autostyle]{csquotes}
+\usepackage[hidelinks]{hyperref}
+\usepackage{graphicx}
+
+\sisetup{detect-weight=true}
+
+\title{\bfseries Marocco FL thesis --- week 19/10 update}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\vspace{-3.2em}
+\begin{center}
+\emph{Client-Driven Local Work Assignment in Battery-Constrained Federated Learning}
+\end{center}
+\vspace{1em}
+
+%======================================================================
+\section*{Summary}
+
+\begin{itemize}
+  \item New scenario requested by the supervisor: \textbf{ResNet-18 on
+        CIFAR-100, 100 clients, 20 per round}; baselines at $E=5$, $B=128$,
+        SAGE-smart with $E\in[2,10]$ and $B\in\{16,\dots,128\}$. Everything is
+        selected by parameters; ResNet-20/CIFAR-10 is still available.
+  \item The cost of the \textbf{state broadcast} at the start of each round
+        (option 1 of the ``Client Server Protocol'', 10\,\% of the clients do
+        not answer) is now charged to SAGE, ESCS and SAGE-smart: about
+        \SI{7}{}--\SI{10}{\watt\hour} per run, \textbf{less than 1\,\%} of the
+        energy.
+  \item Battery capacities are now those of the \textbf{same three phones}
+        whose speed and power we already use (\SI{4820}{} / \SI{4780}{} /
+        \SI{5000}{\milli\ampere\hour}), and the clients train with the standard
+        CIFAR \textbf{data augmentation}. A first campaign without
+        augmentation showed that ResNet-18 memorised the training data within
+        about 100 rounds (Section~\ref{sec:first}).
+  \item Main campaign (33 runs): averaged over the three $\beta$, SAGE-smart
+        reaches about the accuracy of FedAvg at $B=128$ (52.5--53.2\,\% vs
+        51.1\,\%) with \textbf{36\,\% less energy}, a mean final SoC of 0.39
+        instead of 0.14, and \textbf{7--8 depleted devices instead of 66}. The
+        result holds in the three battery worlds.
+  \item \textbf{Ablation} (24 runs, Section~\ref{sec:ablation}): the
+        advantage comes from three components. Adaptive epochs give the energy
+        saving and the battery protection; the staleness term and the small
+        batch give the accuracy. The server-side SoC estimate, the negotiation
+        and FedNova have no measurable effect in this scenario.
+  \item \textbf{FedAvg at $B=16$} (3 runs, Section~\ref{sec:b16}), the fair
+        reference for the batch: \textbf{58.0\,\%}, 5.5 points above SAGE-smart,
+        for the same energy and the same depletions as FedAvg at $B=128$. It
+        also reaches the final accuracy of SAGE-smart \textbf{with 19--31\,\%
+        less energy} (round 83--100). What SAGE-smart keeps is the protection of
+        the batteries over a long run: 8 depleted devices instead of 67, mean
+        SoC 0.39 instead of 0.16, 37\,\% less energy over 250 rounds, at the
+        price of about 5 accuracy points.
+\end{itemize}
+
+%======================================================================
+\section{What changed since the 12/10 report}
+
+\begin{table}[H]
+\centering
+\small
+\caption{Changes since the campaign of the 12/10 report (ResNet-20 on
+CIFAR-10, 30 clients).}
+\label{tab:changes}
+\begin{tabular}{p{3.3cm}p{3.6cm}p{3.9cm}p{3.9cm}}
+\toprule
+item & before & now & why \\
+\midrule
+model / dataset & ResNet-20 / CIFAR-10 (40.6 MMAC, 1.1 MB) & ResNet-18 (CIFAR variant) / CIFAR-100 (555 MMAC, 44.9 MB) & supervisor's request; MACs and parameters counted on the model \\
+clients & 30, 6 per round & 100, 20 per round & supervisor's request \\
+SAGE-smart batch & $B\in\{16,32,64\}$ & $B\in\{16,32,64,128\}$ & supervisor's request \\
+client evaluation & all clients & 20\,\% of the clients & the 45 MB model would be sent to all 100 every round \\
+state broadcast & not charged & SAGE, ESCS, SAGE-smart: 10\,\% no answer, \SI{1}{\second} timeout & ``Client Server Protocol'', option 1 \\
+battery metric & depleted devices & also devices below \SI{20}{\percent} (fig10) & battery-saver level \\
+capacities & 3500 / 4000 / 4500 mAh, no source & 4820 / 4780 / 5000 mAh & the three Mandheling phones (manufacturer specifications) \\
+data augmentation & none & random crop (padding 4) + horizontal flip, client training only & the model memorised the training data (Section~\ref{sec:first}) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Cost of one participation (ResNet-18, 400 samples, $E=5$).}
+Training costs 0.199 / 0.139 / \SI{0.187}{\watt\hour} on the low / mid / high
+tier, that is \textbf{1.12 / 0.79 / 1.01\,\%} of the battery (it was 0.3--0.4\,\%
+with ResNet-20). One model exchange costs \SI{181}{\joule}
+(\SI{0.05}{\watt\hour}, 0.28\,\% of the battery) and \SI{50}{\second}
+(\SI{14}{\second} down, \SI{36}{\second} up). The SAGE-smart deadline is about
+\SI{130}{\second}.
+
+\paragraph{The broadcast.} At the start of every round SAGE, ESCS and SAGE-smart
+ask all alive clients for their state. 10\,\% do not answer (indication of the
+supervisor) and are excluded from that round; the server waits
+\SI{1}{\second} for them. A client that answers and is not selected pays a full
+4G session (\SI{2.1}{\joule}); a selected client pays only the payload, because
+the model download follows in the same radio session. Over a run this costs
+\SI{7}{}--\SI{10}{\watt\hour} (0.4--0.8\,\% of the total energy) and
+\SI{250}{\second} of waiting. In the simulator the broadcast changes no
+information (SAGE and ESCS already read the true SoC, SAGE-smart its estimate):
+it only makes us pay for the fresh state we assume.
+
+%======================================================================
+\section{A first campaign without augmentation}
+\label{sec:first}
+
+The first ResNet-18 campaign (\texttt{ResNet18\_C100\_bcast}, old capacities,
+no augmentation) gave low accuracies (FedAvg 22--28\,\%, SAGE-smart 35--38\,\%)
+and very many depleted devices (FedAvg 83--91 out of 100). Looking at the
+choices of SAGE-smart revealed why:
+
+\begin{itemize}
+  \item the loss of the global model on the clients' own data dropped to
+        \textbf{0.002} by round 125, while the test accuracy stayed at 37\,\%:
+        the model had \textbf{memorised} the training data (11 million
+        parameters, 40\,000 images, no augmentation, no weight decay);
+  \item SAGE-smart then chose the minimum work, $E=2$, for every client from
+        round 75 on, because its utility (loss$/\ln C$) was zero. Part of its
+        energy saving was a consequence of overfitting.
+\end{itemize}
+
+For this reason the main campaign uses the standard CIFAR augmentation (He et
+al.\ 2016) on the clients' training data; test sets are untouched. At the same
+time the capacities were set to those of the three phones.
+Table~\ref{tab:before_after} shows the effect of the two changes together.
+
+\begin{table}[H]
+\centering
+\caption{Before and after augmentation and real capacities. Mean over the
+three $\beta$; accuracy at round 250; datasheet battery for SAGE-smart.}
+\label{tab:before_after}
+\begin{tabular}{lrrrrrr}
+\toprule
+& \multicolumn{3}{c}{no augmentation, 3500--4500 mAh} & \multicolumn{3}{c}{augmentation, 4780--5000 mAh} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}
+& acc. (\%) & energy (Wh) & depleted & acc. (\%) & energy (Wh) & depleted \\
+\midrule
+FedAvg     & 25.8 & 1765 & 86.7 & 51.0 & 1984 & 66.0 \\
+SAGE-smart & 36.7 & 1182 & 16.7 & 52.5 & 1261 &  8.0 \\
+\midrule
+difference & $+10.9$ & $-33\,\%$ & $-70$ & $+1.5$ & $-36\,\%$ & $-58$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Accuracies are now in the range reported for FedAvg with ResNet-18 on
+CIFAR-100 and Dirichlet partitions (about 40--60\,\%, depending on rounds and
+normalisation; e.g.\ FedMLB, TCT). The
+accuracy gap between SAGE-smart and FedAvg shrinks from $+10.9$ to $+1.5$
+points; \textbf{the energy saving does not shrink} ($-33\,\%$ $\to$ $-36\,\%$).
+So the saving was not an artefact of overfitting.
+
+%======================================================================
+\section{Results: ResNet-18 on CIFAR-100}
+\label{sec:results}
+
+Campaign \texttt{rechargeONdeviceON\_ResNet18\_C100\_bcast\_cap\_aug}: 11
+labels $\times$ 3 $\beta$, seed 2026, 250 rounds, 100 clients, 20 per round.
+FedAvg at $B=16$ (campaign \texttt{sweepB16}, same configuration except the
+baselines' batch) is added to the tables and discussed in
+Section~\ref{sec:b16}.
+\emph{Accuracy} is the mean over the last 10 rounds. \emph{SoC} is the mean
+final state of charge (depleted devices count as 0). \emph{Depleted}: devices
+that reached 0 (they never come back). \emph{$<20\,\%$}: devices that end below
+\SI{20}{\percent}, depleted included. \emph{1st}: round of the first depletion.
+
+\begin{table}[H]
+\centering
+\small
+\caption{Mean over the three $\beta$. Energy in Wh drawn from the batteries.}
+\label{tab:main}
+\begin{tabular}{lrrrrrrrrrr}
+\toprule
+& acc. & energy & train & comm & idle & control & SoC & depleted & $<20\,\%$ & 1st \\
+& (\%) & (Wh) & (Wh) & (Wh) & (Wh) & (Wh) & (\%) & & & \\
+\midrule
+FedAvg                    & 51.1 & 1984 & 937 & 242 &  806 &  0.0 & 14.4 & 66.0 & 74.7 &  57 \\
+FedProx                   & 51.0 & 1984 & 937 & 242 &  806 &  0.0 & 14.4 & 66.0 & 74.7 &  57 \\
+FedAvg ($B=16$)           & \textbf{58.0} & 2009 & 966 & 241 & 803 & 0.0 & 15.5 & 67.0 & 73.3 & 55 \\
+\midrule
+SAGE (paper, linear)      & 46.5 & 2074 & 818 & 224 & 1024 &  8.5 & 30.6 & 36.0 & 52.0 &  71 \\
+SAGE ablation (Peukert)   & 44.3 & 2016 & 767 & 194 & 1046 &  8.3 & 37.6 & 23.0 & 26.7 &  92 \\
+SAGE ablation (datasheet) & 44.4 & 1956 & 685 & 181 & 1081 &  9.4 & 36.8 & 27.7 & 34.0 &  83 \\
+\midrule
+ESCS-SD (linear)          & 46.6 & 2124 & 902 & 239 &  975 &  8.3 & 34.1 & 35.0 & 48.0 &  64 \\
+ESCS-SD (Peukert)         & 47.5 & 2063 & 895 & 235 &  925 &  7.3 & 33.3 & 33.0 & 48.3 &  64 \\
+ESCS-SD (datasheet)       & 46.6 & 2037 & 880 & 231 &  919 &  8.1 & 30.0 & 38.7 & 56.0 &  56 \\
+\midrule
+SAGE-smart (linear)       & 53.2 & 1268 & 461 & 225 & 572 & 10.2 & 38.6 & \textbf{6.7} & 25.3 & 175 \\
+SAGE-smart (Peukert)      & 52.6 & \textbf{1245} & 462 & 223 & 551 &  8.8 & 38.7 & 7.3 & \textbf{22.3} & 165 \\
+SAGE-smart (datasheet)    & 52.5 & 1261 & 444 & 216 & 591 & 10.2 & \textbf{39.0} & 8.0 & 25.0 & 159 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering
+\small
+\caption{Per $\beta$: accuracy (\%) / energy (Wh) / mean SoC (\%) / depleted
+devices. SAGE ablation, ESCS-SD and SAGE-smart with the datasheet battery;
+FedAvg and SAGE (paper) in the linear world, as in the main campaign.}
+\label{tab:perbeta}
+\begin{tabular}{lrrrrrrrrrrrr}
+\toprule
+& \multicolumn{4}{c}{$\beta=0.1$} & \multicolumn{4}{c}{$\beta=0.5$} & \multicolumn{4}{c}{$\beta=1.0$} \\
+\cmidrule(lr){2-5}\cmidrule(lr){6-9}\cmidrule(lr){10-13}
+& acc & Wh & SoC & dep. & acc & Wh & SoC & dep. & acc & Wh & SoC & dep. \\
+\midrule
+FedAvg            & 49.7 & 2077 & 20.2 & 57 & 51.3 & 1956 & 13.6 & 69 & 52.3 & 1919 &  9.4 & 72 \\
+FedAvg ($B=16$)   & 56.0 & 2074 & 20.2 & 63 & 58.3 & 1962 & 10.3 & 72 & 59.5 & 1992 & 16.2 & 66 \\
+SAGE (paper)      & 44.4 & 2082 & 29.1 & 38 & 47.2 & 2073 & 33.2 & 38 & 47.8 & 2068 & 29.6 & 32 \\
+SAGE ablation     & 42.1 & 1875 & 38.2 & 32 & 46.0 & 2004 & 36.4 & 24 & 45.2 & 1989 & 35.8 & 27 \\
+ESCS-SD           & 45.3 & 2035 & 30.5 & 38 & 46.8 & 2021 & 30.9 & 40 & 47.7 & 2056 & 28.7 & 38 \\
+SAGE-smart        & 49.6 & 1330 & 40.9 & 10 & 54.6 & 1226 & 38.6 &  6 & 53.2 & 1228 & 37.5 &  8 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{results_rechargeONdeviceON_ResNet18_C100_bcast_cap_aug/fig1_energy_accuracy_ball.png}
+\caption{Accuracy against the energy drawn from the batteries, all $\beta$
+pooled.}
+\label{fig:energy}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{results_rechargeONdeviceON_ResNet18_C100_bcast_cap_aug/fig2_accuracy_rounds_ball.png}
+\caption{Accuracy per round, all $\beta$ pooled.}
+\label{fig:rounds}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{results_rechargeONdeviceON_ResNet18_C100_bcast_cap_aug/fig10_lowbat_ball.png}
+\caption{Final SoC (top) and devices below \SI{20}{\percent} (bottom), all
+$\beta$ pooled.}
+\label{fig:lowbat}
+\end{figure}
+
+\paragraph{What the results say.}
+\begin{itemize}
+  \item \textbf{Per Wh, SAGE-smart beats every algorithm run at $B=128$}
+        (Figure~\ref{fig:energy}). To reach 45\,\% accuracy (mean of 10
+        rounds) it needs 1044 / 538 / \SI{569}{\watt\hour} at $\beta=0.1$ /
+        0.5 / 1.0, against 1374 / 995 / \SI{885}{\watt\hour} for FedAvg
+        ($-24$ to $-46\,\%$). 50\,\% is reached by SAGE-smart at 758 / \SI{818}{\watt\hour}
+        ($\beta=0.5$ / 1.0) and by FedAvg at 1553 / \SI{1212}{\watt\hour}; SAGE
+        and ESCS never reach it. \textbf{It does not beat FedAvg at $B=16$}
+        (Section~\ref{sec:b16}).
+  \item \textbf{Per round, SAGE-smart starts slower} and overtakes FedAvg only
+        after about 180--200 rounds (Figure~\ref{fig:rounds}). It inherits the
+        ramp of SAGE ($2, 3, \dots$ clients in the first rounds, 20 from round
+        19) and trains 2--4 epochs instead of 5. With a budget of fewer than
+        about 180 rounds FedAvg would reach a higher accuracy.
+  \item \textbf{Batteries}: FedAvg depletes 66 devices out of 100 and leaves 75
+        below \SI{20}{\percent}; SAGE-smart 7--8 and 22--25. The first depletion
+        comes at round 57 with FedAvg and at round 159--175 with SAGE-smart.
+        The 4--10 depletions of SAGE-smart all come after round 135, never on
+        the low tier and mostly on the high tier (\SI{6.15}{\watt} at full
+        load), which drains the most between rounds.
+  \item \textbf{SAGE and ESCS} protect the batteries better than FedAvg (23--39
+        depleted) but lose 3.5--7 accuracy points for the same or slightly more
+        energy (1956--\SI{2124}{\watt\hour} vs 1984): they keep more devices
+        alive, and every alive device pays the idle between rounds
+        (\SI{919}{}--\SI{1081}{\watt\hour} of idle against 806 for FedAvg).
+  \item \textbf{Training energy of SAGE-smart is half that of FedAvg}
+        (444--462 vs \SI{937}{\watt\hour}) for about the same number of
+        participations (communication 216--225 vs \SI{242}{\watt\hour}): it is
+        the effect of fewer epochs per participation (next paragraph).
+  \item \textbf{The battery world changes little}: for ESCS, the SAGE ablation
+        and SAGE-smart, linear, Peukert and datasheet differ by at most 1
+        accuracy point and 4\,\% of energy. (SAGE in the linear world is the
+        paper's version, a different algorithm from the ablation.)
+  \item FedAvg and FedProx consume exactly the same energy: same seed, hence
+        same random selection, and same declared work. Only the accuracy
+        differs ($\pm0.2$ points).
+\end{itemize}
+
+\paragraph{SAGE-smart: how many epochs the clients choose.} With
+augmentation the loss of the global model on the clients' data no longer
+collapses, but SAGE-smart still moves towards the minimum $E$
+(Table~\ref{tab:epochs}). Two causes: the deadline caps the envelope at
+$E_\text{hi}\approx 3.5$--4 for 19--20 clients out of 20, and the utility
+$u=\text{loss}/\ln 100$ falls below 0.3 after round 100, so the client picks
+$E_\text{lo}=2$. The choice of $E$ is therefore mostly a consequence of the
+deadline, computed on the baselines' nominal work ($E=5$, $B=128$).
+
+\begin{table}[H]
+\centering
+\caption{SAGE-smart (datasheet), $\beta=0.5$: mean over the rounds of each
+interval. Without augmentation the same loss was 0.05 at round 126 and 0.002
+at round 226.}
+\label{tab:epochs}
+\begin{tabular}{lrrrrrr}
+\toprule
+rounds & 1--10 & 11--50 & 51--100 & 101--150 & 151--200 & 201--250 \\
+\midrule
+loss of the global model on local data & 4.49 & 3.13 & 2.06 & 1.30 & 0.79 & 0.57 \\
+epochs chosen $E$                      & 3.64 & 2.78 & 2.44 & 2.29 & 2.02 & 2.03 \\
+test accuracy (\%)                     &  5.8 & 22.9 & 39.6 & 48.2 & 51.8 & 54.0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{SAGE-smart: negotiation.} Counted as in the 12/10 report
+(Table~\ref{tab:negotiation}). Unlike the ResNet-20 campaign, refusals now
+happen: each participation costs about 1\,\% of the battery, and at
+$\beta=0.1$ some clients are too close to the \SI{20}{\percent} reserve to
+accept the minimum work. Nobody withdrew after accepting. 9--15\,\% of the
+participations miss the deadline (clients with the largest partitions, which
+cannot fit $E=2$ even at $B=128$). The step spread of FedNova
+($\tau_\text{max}/\tau_\text{min}$) is above 8 in 64--95\,\% of the rounds
+(maximum 21), without the collapse seen with ResNet-20.
+
+\begin{table}[H]
+\centering
+\caption{Negotiation of SAGE-smart over the 250 rounds. Proposals: envelopes
+sent (all waves). 2nd waves: rounds in which refusals were replaced. Late: in
+\% of the accepted proposals.}
+\label{tab:negotiation}
+\begin{tabular}{llrrrrr}
+\toprule
+$\beta$ & battery & proposals & refused & 2nd waves & opt-outs & late \\
+\midrule
+\multirow{3}{*}{0.1} & linear    & 4829 & 91 & 63 & 0 & 539 (11.4\,\%) \\
+                     & Peukert   & 4770 & 69 & 54 & 0 & 683 (14.5\,\%) \\
+                     & datasheet & 4761 & 74 & 56 & 0 & 648 (13.8\,\%) \\
+\midrule
+\multirow{3}{*}{0.5} & linear    & 4759 & 22 & 18 & 0 & 502 (10.6\,\%) \\
+                     & Peukert   & 4761 & 21 & 18 & 0 & 603 (12.7\,\%) \\
+                     & datasheet & 4743 & 19 & 18 & 0 & 411 (8.7\,\%) \\
+\midrule
+\multirow{3}{*}{1.0} & linear    & 4757 &  3 &  3 & 0 & 570 (12.0\,\%) \\
+                     & Peukert   & 4745 &  2 &  2 & 0 & 530 (11.2\,\%) \\
+                     & datasheet & 4739 & 12 & 11 & 0 & 686 (14.5\,\%) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%======================================================================
+\section{Ablation: which part of SAGE-smart brings the advantage}
+\label{sec:ablation}
+
+Leave-one-out, as proposed in the 12/10 report: full SAGE-smart, then the same
+algorithm with \textbf{one} component removed, everything else unchanged.
+Datasheet battery, same configuration as the main campaign, three $\beta$, seed
+2026, plus FedAvg in the same battery world (24 runs).
+
+\begin{itemize}
+  \item \emph{staleness}: $c=0$ in the score $a\cdot\text{SoC}+b\cdot D+c\cdot\text{staleness}$;
+  \item \emph{SoC estimate}: the server ranks with the last reported SoC,
+        without extrapolating the idle consumption since the report;
+  \item \emph{negotiation}: no proposal, no accept/refuse, no replacement: the
+        training message goes directly to the top of the ranking (the client
+        still chooses $(E,B)$ and can still withdraw);
+  \item \emph{adaptive epochs}: $E=5$ fixed as in the baselines ($B$ still
+        chosen by the client);
+  \item \emph{FedNova}: plain data-weighted average (BatchNorm statistics
+        averaged as before);
+  \item \emph{small batch}: $B=128$ fixed as in the baselines ($E$ still
+        chosen by the client).
+\end{itemize}
+
+The full SAGE-smart run of the ablation is identical to the one of the main
+campaign (bit for bit at $\beta=0.1$ and 0.5, 0.04 accuracy points at
+$\beta=1.0$): differences between variants come from the component, not from
+the GPU. They still include the variability of a single seed (see below).
+
+\begin{table}[H]
+\centering
+\caption{Contribution of each component = full SAGE-smart \emph{minus}
+SAGE-smart without that component. \textbf{Positive = the component helps}:
+more accuracy, higher SoC, fewer depleted devices, less energy. First line of
+each block: absolute value of full SAGE-smart (FedAvg, datasheet battery, in
+brackets).}
+\label{tab:ablation}
+\begin{tabular}{lrrrr}
+\toprule
+& $\beta=0.1$ & $\beta=0.5$ & $\beta=1.0$ & \textbf{mean} \\
+\midrule
+\multicolumn{5}{l}{\textbf{Final accuracy} (points; mean of the last 10 rounds)} \\
+\quad \emph{full SAGE-smart (FedAvg)} & \emph{49.6 (48.2)} & \emph{54.6 (51.9)} & \emph{53.3 (52.4)} & \emph{52.5 (50.8)} \\
+\quad staleness term $c$        & $+9.8$ & $+9.4$  & $+7.2$ & $\mathbf{+8.8}$ \\
+\quad server-side SoC estimate  & $-0.6$ & $-0.3$  & $-2.7$ & $\mathbf{-1.2}$ \\
+\quad negotiation               & $+0.9$ & $-0.8$  & $-2.9$ & $\mathbf{-0.9}$ \\
+\quad adaptive epochs           & $+7.3$ & $+10.5$ & $+4.9$ & $\mathbf{+7.5}$ \\
+\quad FedNova                   & $+1.0$ & $-0.4$  & $-3.1$ & $\mathbf{-0.9}$ \\
+\quad small batch               & $+6.3$ & $+7.9$  & $+6.0$ & $\mathbf{+6.7}$ \\
+\midrule
+\multicolumn{5}{l}{\textbf{Mean final SoC} (points)} \\
+\quad \emph{full SAGE-smart (FedAvg)} & \emph{40.9 (12.5)} & \emph{38.6 (16.7)} & \emph{37.5 (14.0)} & \emph{39.0 (14.4)} \\
+\quad staleness term $c$        & $-5.4$ & $-7.4$ & $-5.8$ & $\mathbf{-6.2}$ \\
+\quad server-side SoC estimate  & $-2.0$ & $-1.5$ & $+0.8$ & $\mathbf{-0.9}$ \\
+\quad negotiation               & $+4.1$ & $0.0$  & $-1.6$ & $\mathbf{+0.8}$ \\
+\quad adaptive epochs           & $+5.1$ & $+0.6$ & $0.0$  & $\mathbf{+1.9}$ \\
+\quad FedNova                   & $+4.4$ & $+1.2$ & $-4.8$ & $\mathbf{+0.3}$ \\
+\quad small batch               & $+3.2$ & $-0.6$ & $-1.3$ & $\mathbf{+0.4}$ \\
+\midrule
+\multicolumn{5}{l}{\textbf{Depleted devices avoided} (out of 100)} \\
+\quad \emph{full SAGE-smart, depleted (FedAvg)} & \emph{10 (72)} & \emph{6 (63)} & \emph{8 (70)} & \emph{8.0 (68.3)} \\
+\quad staleness term $c$        & $0$  & $0$  & $-3$  & $\mathbf{-1.0}$ \\
+\quad server-side SoC estimate  & $-1$ & $+4$ & $+4$  & $\mathbf{+2.3}$ \\
+\quad negotiation               & $+3$ & $+6$ & $-1$  & $\mathbf{+2.7}$ \\
+\quad adaptive epochs           & $+22$ & $+24$ & $+24$ & $\mathbf{+23.3}$ \\
+\quad FedNova                   & $+5$ & $+3$ & $-5$  & $\mathbf{+1.0}$ \\
+\quad small batch               & $+1$ & $+1$ & $-3$  & $\mathbf{-0.3}$ \\
+\midrule
+\multicolumn{5}{l}{\textbf{Energy saved} (Wh)} \\
+\quad \emph{full SAGE-smart, energy (FedAvg)} & \emph{1330 (1991)} & \emph{1226 (1983)} & \emph{1228 (1915)} & \emph{1261 (1963)} \\
+\quad staleness term $c$        & $-6$   & $-49$  & $-58$  & $\mathbf{-38}$ \\
+\quad server-side SoC estimate  & $-52$  & $+7$   & $-11$  & $\mathbf{-19}$ \\
+\quad negotiation               & $-48$  & $-9$   & $-18$  & $\mathbf{-25}$ \\
+\quad adaptive epochs           & $+716$ & $+742$ & $+915$ & $\mathbf{+791}$ \\
+\quad FedNova                   & $-68$  & $-3$   & $-5$   & $\mathbf{-26}$ \\
+\quad small batch               & $-39$  & $+16$  & $+9$   & $\mathbf{-5}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Reading the table.}
+\begin{itemize}
+  \item \textbf{Adaptive epochs are the engine of the energy saving and of
+        the battery protection}: $-791$~Wh ($-39\,\%$) and 23 depleted devices
+        fewer. With $E=5$ fixed SAGE-smart uses as much energy as FedAvg
+        (2052 vs \SI{1963}{\watt\hour}) and still depletes 31 devices, against 68
+        for FedAvg (that half of the protection comes from the SoC term of the
+        score, the reserve and the energy guard, which are still active). The
+        $+7.5$ accuracy points must be read with care: to fit 5 epochs in the
+        deadline the clients raise the batch to $B\approx 85$--104, and 4--7
+        times more participations arrive late. The two effects (more epochs,
+        larger batch) are mixed.
+  \item \textbf{Small batch: $+6.7$ accuracy points at no cost} (energy
+        $\pm\SI{40}{\watt\hour}$, same depletions). With ResNet-18 a batch costs
+        about \SI{1}{\second} of computation on the phone and the fixed cost per
+        batch (\SI{0.057}{\second}) becomes negligible: a smaller batch gives
+        more SGD steps for the same energy. \textbf{Without it, SAGE-smart is
+        5 points below FedAvg} (45.7 vs 50.8\,\%): the accuracy advantage over
+        FedAvg comes from the batch. FedAvg gains the same from it
+        (Section~\ref{sec:b16}).
+  \item \textbf{Staleness: $+8.8$ accuracy points}, paid with 6 points of SoC
+        and \SI{38}{\watt\hour}. Without it the score keeps choosing the same
+        clients: their batteries reach the reserve (598--894 refusals per run
+        instead of 12--74), part of the data is almost never used, and the
+        server's knowledge of the others ages (SoC error 0.19--0.23 instead of
+        0.02--0.06). The higher mean SoC is the energy of the clients that
+        never train.
+  \item \textbf{SoC estimate, negotiation and FedNova: no measurable effect}
+        (on average within 1.2 accuracy points, 1 SoC point, 3 devices and
+        \SI{30}{\watt\hour}). This is expected in this scenario:
+        \begin{itemize}
+          \item rounds are back to back and every candidate reports its state at
+                every proposal, so the last report is almost as good as the
+                estimate (its error is even slightly lower: 0.015--0.027 against
+                0.018--0.056, probably because the estimate does not foresee
+                recharges);
+          \item refusals are few (12--74 per run); without negotiation 6--82
+                clients per run download the model and then withdraw, which
+                costs little. The negotiation saves 3 and 6 devices at
+                $\beta=0.1$ and 0.5, where refusals exist;
+          \item plain averaging works as well as FedNova with a step spread of
+                10--12.
+        \end{itemize}
+  \item \textbf{Variability of one seed.} At $\beta=1.0$ three different
+        variants (no estimate, no negotiation, no FedNova) all end 2.7--3.1
+        points above full SAGE-smart. Most likely the full run at $\beta=1.0$
+        is below its average by chance: it has a transient collapse in the first
+        rounds (accuracy back to 1\,\% after round 1, with 2 clients and a step
+        spread of 14). Differences of up to about 3 points should not be read
+        as effects without more seeds.
+\end{itemize}
+
+\paragraph{In one sentence.} The energy and battery advantage of SAGE-smart
+comes from letting the clients train fewer epochs (adaptive $E$, bounded by
+the deadline); its accuracy comes from the small batch and from the staleness
+term, which spreads participation over all clients. The other three components
+are neutral here. Since FedAvg gains as much from the small batch, only the
+first part (energy and batteries) is an advantage over a well-tuned FedAvg
+(Section~\ref{sec:b16}).
+
+%======================================================================
+\section{FedAvg at $B=16$: the fair reference for the batch}
+\label{sec:b16}
+
+The ablation shows that the small batch is worth 6.7 points to SAGE-smart, and
+that without it SAGE-smart is 5 points below FedAvg. The baselines run at
+$B=128$; with ResNet-18 a smaller batch costs almost nothing more (the fixed
+cost per batch is negligible), so the fair question is how FedAvg does at
+$B=16$. Campaign \texttt{sweepB16}: FedAvg at $B=16$, $E=5$, everything else as
+in the main campaign, three $\beta$.
+
+\begin{table}[H]
+\centering
+\caption{FedAvg at $B=16$ against the main campaign. Mean over the three
+$\beta$.}
+\label{tab:b16}
+\begin{tabular}{lrrrrrr}
+\toprule
+& acc. (\%) & energy (Wh) & train (Wh) & SoC (\%) & depleted & $<20\,\%$ \\
+\midrule
+FedAvg ($B=128$)                  & 51.1 & 1984 & 937 & 14.4 & 66.0 & 74.7 \\
+FedAvg ($B=16$)                   & \textbf{58.0} & 2009 & 966 & 15.5 & 67.0 & 73.3 \\
+SAGE-smart (datasheet)            & 52.5 & 1261 & 444 & \textbf{39.0} & 8.0 & 25.0 \\
+SAGE-smart, $B=128$ (ablation)    & 45.7 & \textbf{1257} & 446 & 38.6 & \textbf{7.7} & 25.0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering
+\caption{Same accuracy: when FedAvg at $B=16$ reaches the final accuracy of
+SAGE-smart (mean of 10 rounds), how much energy it has used and how many
+devices it has depleted.}
+\label{tab:b16_iso}
+\begin{tabular}{lrrrrrr}
+\toprule
+& \multicolumn{3}{c}{SAGE-smart, end of run (round 250)} & \multicolumn{3}{c}{FedAvg $B=16$, same accuracy} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}
+$\beta$ & accuracy & energy & depleted & round & energy & depleted \\
+\midrule
+0.1 & 49.6\,\% & \SI{1330}{\watt\hour} & 10 &  95 & \SI{1005}{\watt\hour} ($-24\,\%$) & 21 \\
+0.5 & 54.6\,\% & \SI{1226}{\watt\hour} &  6 & 100 &  \SI{997}{\watt\hour} ($-19\,\%$) & 24 \\
+1.0 & 53.2\,\% & \SI{1228}{\watt\hour} &  8 &  83 &  \SI{849}{\watt\hour} ($-31\,\%$) &  7 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{results_sweepB16/fig_b16_comparison.png}
+\caption{FedAvg at $B=16$ and $B=128$, SAGE-smart and SAGE-smart at $B=128$:
+accuracy against energy, accuracy against rounds, depleted devices. Mean over
+the three $\beta$.}
+\label{fig:b16}
+\end{figure}
+
+\begin{itemize}
+  \item \textbf{The batch alone is worth about 7 points to FedAvg}: 51.1 $\to$
+        58.0\,\% (+6.3 / +7.0 / +7.2 at $\beta=0.1$ / 0.5 / 1.0) for 1\,\%
+        more energy and the same depletions. It confirms the ablation (+6.7
+        for SAGE-smart) and the ResNet-20 batch sweep.
+  \item \textbf{FedAvg at $B=16$ is 5.5 points more accurate than
+        SAGE-smart} and \textbf{more efficient per Wh at every $\beta$}
+        (Figure~\ref{fig:b16}, left). It reaches 45\,\% with 781 / 555 /
+        \SI{504}{\watt\hour} (SAGE-smart: 1044 / 538 / 569) and the final
+        accuracy of SAGE-smart with 19--31\,\% less energy
+        (Table~\ref{tab:b16_iso}). The claim ``same accuracy with less
+        energy'' holds only against the baselines at $B=128$.
+  \item \textbf{What SAGE-smart keeps is the protection of the batteries
+        over a long run.} Over 250 rounds FedAvg at $B=16$ depletes 67 devices
+        out of 100 and leaves 73 below \SI{20}{\percent}; SAGE-smart 8 and
+        25, with a mean SoC of 0.39 instead of 0.16 and 37\,\% less energy.
+        Even when FedAvg at $B=16$ has just reached the accuracy of
+        SAGE-smart, it has already depleted 21 and 24 devices at $\beta=0.1$
+        and 0.5 (7 at $\beta=1.0$, as many as SAGE-smart after 250 rounds).
+  \item \textbf{Why SAGE-smart learns less per Wh.} Two design choices, not
+        the battery: (i) the deadline is the median nominal time of the
+        baselines' work ($E=5$, $B=128$, about \SI{130}{\second}), so by
+        construction about half of the clients cannot fit 5 epochs and
+        SAGE-smart trains 2--3 epochs even when the battery would allow more;
+        (ii) the ramp inherited from SAGE (2 clients in round 1, 20 from round
+        19) slows the start (Figure~\ref{fig:b16}, centre). Both can be
+        changed: the deadline has a parameter (\texttt{smart\_deadline\_mult}),
+        the ramp needs a small switch.
+\end{itemize}
+
+%======================================================================
+\section{Limits}
+
+\begin{itemize}
+  \item \textbf{One seed}, as before. The ablation shows that a single run can
+        differ by about 3 points from its neighbours.
+  \item \textbf{Baselines at $B=128$}: with ResNet-18 they are a weak reference
+        for the accuracy. Only FedAvg was run at $B=16$; SAGE and ESCS at
+        $B=16$ would probably gain about as much.
+  \item \textbf{Not converged}: in the last 50 rounds SAGE-smart still gains 2
+        points, FedAvg 0.7 (FedAvg at $B=16$ is almost flat after round 175).
+        Ranking at 250 rounds; with fewer than about 180 rounds FedAvg at
+        $B=128$ would be ahead.
+  \item \textbf{Depletion is permanent}: a device that reaches 0 never
+        recharges. It drives the second half of the FedAvg runs (66 devices
+        lost).
+  \item \textbf{Leave-one-out does not see interactions}: removing the adaptive
+        epochs also changes the batch, through the deadline.
+  \item \textbf{The deadline} is computed on the baselines' nominal work ($E=5$,
+        $B=128$) and is the main limit on the epochs of SAGE-smart.
+  \item Phones, 4G and users as in the 12/10 report.
+\end{itemize}
+
+%======================================================================
+\section{Next steps}
+
+\begin{enumerate}
+  \item \textbf{Close the accuracy gap with FedAvg at $B=16$ without losing
+        the battery protection.} Two knobs, both outside the battery logic:
+        a longer deadline (\texttt{smart\_deadline\_mult} 1.5 and 2, a value
+        in the configuration) and no SAGE ramp (all 20 clients from round 1,
+        a small switch). SAGE-smart datasheet, three $\beta$: 6--9 runs.
+  \item \textbf{Two more seeds} (7, 13) for FedAvg ($B=16$ and 128), SAGE
+        (paper), ESCS-SD and SAGE-smart, datasheet battery: 15 runs per seed,
+        about 15--20 hours each.
+  \item \textbf{Decide what to keep in SAGE-smart.} FedNova, the SoC estimate
+        and the negotiation do not help in this scenario. Either the method is
+        simplified (plain averaging; the broadcast already gives a fresh SoC),
+        or they are kept as safety mechanisms and shown in a scenario where
+        they matter: no broadcast and pauses between rounds (stale
+        information), or low batteries (frequent refusals).
+  \item \textbf{How to present the contribution}: against a well-tuned FedAvg,
+        SAGE-smart trades about 5 accuracy points for a population that stays
+        alive (8 instead of 67 depleted devices) and 37\,\% less energy over
+        the run. Whether this trade is the thesis claim, or the target is to
+        reduce the 5 points with step 1, is to be discussed.
+\end{enumerate}
+
+%======================================================================
+\section*{References}
+
+\begin{itemize}
+  \item K.~He, X.~Zhang, S.~Ren, J.~Sun, ``Deep Residual Learning for Image
+        Recognition'', CVPR 2016 (ResNet; CIFAR augmentation).
+  \item D.~Xu et al., ``Mandheling: Mixed-Precision On-Device DNN Training
+        with DSP Offloading'', ACM MobiCom 2022 (arXiv 2206.07509).
+  \item Battery capacities: manufacturer specifications of Redmi Note 9 Pro 5G
+        (\SI{4820}{\milli\ampere\hour}), Xiaomi Mi 10
+        (\SI{4780}{\milli\ampere\hour}) and Xiaomi Mi 11 Pro
+        (\SI{5000}{\milli\ampere\hour}); GSMArena, Notebookcheck, mi.com.
+  \item J.~Kim, G.~Kim, B.~Han, ``Multi-Level Branched Regularization for
+        Federated Learning'' (FedMLB), ICML 2022.
+  \item Y.~Yu, A.~Wei, S.~P.~Karimireddy, Y.~Ma, M.~I.~Jordan, ``TCT:
+        Convexifying Federated Learning using Bootstrapped Neural Tangent
+        Kernels'', NeurIPS 2022 (arXiv 2207.06343).
+  \item K.~Hsieh, A.~Phanishayee, O.~Mutlu, P.~Gibbons, ``The Non-IID Data
+        Quagmire of Decentralized Machine Learning'', ICML 2020 (BatchNorm
+        under non-IID data).
+  \item J.~Wang et al., ``Tackling the Objective Inconsistency Problem in
+        Heterogeneous Federated Optimization'' (FedNova), NeurIPS 2020.
+  \item F.~Maciel et al., ``Federated learning energy saving through client
+        selection'' (ESCS), Pervasive and Mobile Computing 103 (2024) 101948.
+  \item M.~Savoia et al., ``SAGE: Sustainable and green energy-aware client
+        selection for federated learning'', Applied Energy 410 (2026) 127568.
+  \item References for 4G, recharge and Peukert: see the 12/10 report.
+\end{itemize}
+
+\end{document}

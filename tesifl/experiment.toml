@@ -10,7 +10,9 @@ name        = "rechargeONdeviceON_ResNet18_C100_bcast_cap_aug"   # -> results_<n
                              # bcast = fisica2 + broadcast dello stato per
                              # SAGE/ESCS/SAGE-smart + colonna n_soc_low (fig10)
 rounds      = 250
-seeds       = [2026]         # [2026, 7, 13] per tre seed
+seeds       = [2026, 42, 73] # [B] 23/10: 42 e 73 aggiunti dopo la call; il 2026
+                             # e' gia' fatto e run.sh lo salta (stesso nome di
+                             # campagna, CSV gia' presenti)
 betas       = [0.1, 0.5, 1.0]
 clients     = 100            # numero di SuperNode (30 per ResNet-20)
 k_fraction  = 0.2            # client per round = round(k_fraction * clients)
@@ -55,6 +57,11 @@ algorithms = [
   "escs_sd_lin",
   "escs_sd_peuk",
   "escs_sd_nm",
+  # [B] 23/10: le altre tre varianti del paper (Tab. 3), solo datasheet: la
+  # batteria cambia ESCS-SD di meno di 1 punto
+  "escs_sp_nm",
+  "escs_md_nm",
+  "escs_mp_nm",
 ]
 
 
