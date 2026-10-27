@@ -86,6 +86,11 @@ class PhysicalFedAvg(FedAvg):
         # durata dell'ultimo round (training piu' lento + ritardo iniziale):
         # il server la conosce, ha aspettato le risposte
         self._last_round_s = 0.0
+        # [B] 27/10: tempo simulato cumulato a fine round (colonne round_s e
+        # sim_time_s del CSV), per i grafici in funzione del tempo T. Solo
+        # registrazione: e' la stessa durata che il mondo usa per idle e
+        # ricarica, non cambia nulla della fisica.
+        self._sim_time_s = 0.0
         # [B] selezione vuota = fine della run. Serve a sage_soc, che termina
         # per esaurimento del pool e non per numero di round: senza questo
         # flag Flower continuerebbe a valutare tutti i client fino a R_max.
@@ -315,10 +320,15 @@ class PhysicalFedAvg(FedAvg):
         # selezionati, che in quel tempo stanno parlando col server.
         overhead = float(self._round_overhead_s())
         self._last_round_s = max(durations.values(), default=0.0) + overhead
+        self._sim_time_s += self._last_round_s
         self.world.apply_idle({c: d + overhead for c, d in durations.items()})
 
         s = self.world.stats()
         self._round_stats[int(server_round)] = dict(s)
+        self._round_stats[int(server_round)].update({
+            "round_s": float(self._last_round_s),
+            "sim_time_s": float(self._sim_time_s),
+        })
         if self.broadcast:
             # [B] l'energia del broadcast e' gia' dentro energy_ctrl_wh (e
             # quindi nel totale): qui la si riporta a parte per leggerla

@@ -70,6 +70,21 @@ for seed in $SEEDS; do
 sage_smart_nonova|sage_smart_b128)
                   algo="sage_smart"
                   extra="sage-a=${QA} sage-b=${QB} smart-ablation='${base#sage_smart_}'" ;;
+      # ablazione CUMULATA (ablation_cum.sh): dal gradino 0, tutto spento, si
+      # accende un componente per gradino: anzianita', E adattivo, B piccolo,
+      # negoziazione, stima del SoC. Il gradino 6 (+ FedNova) e' sage_smart.
+      sage_smart_cum0) algo="sage_smart"
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='nostale+noest+noneg+e5+nonova+b128'" ;;
+      sage_smart_cum1) algo="sage_smart"
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='noest+noneg+e5+nonova+b128'" ;;
+      sage_smart_cum2) algo="sage_smart"
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='noest+noneg+nonova+b128'" ;;
+      sage_smart_cum3) algo="sage_smart"
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='noest+noneg+nonova'" ;;
+      sage_smart_cum4) algo="sage_smart"
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='noest+nonova'" ;;
+      sage_smart_cum5) algo="sage_smart"
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='nonova'" ;;
       escs_sd)    algo="escs-sd" ;;
       escs_sp)    algo="escs-sp" ;;
       escs_md)    algo="escs-md" ;;

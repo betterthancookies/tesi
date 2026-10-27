@@ -195,10 +195,15 @@ def main(grid: Grid, context: Context) -> None:
             "nonova":  {"fednova": False},                       # media FedAvg
             "b128":    {"batch_min": batch_size, "batch_max": batch_size},  # B = 128
         }
-        if ablation not in ablations:
-            raise ValueError(f"smart-ablation sconosciuta: {ablation!r} "
-                             f"(usa {', '.join(ablations)})")
-        smart.update(ablations[ablation])
+        # [B] 27/10: piu' componenti spenti insieme separati da "+", per
+        # l'ablazione CUMULATA (ablation_cum.sh), es. "noest+noneg+nonova"
+        parts = [p for p in ablation.split("+") if p and p != "none"]
+        unknown = [p for p in parts if p not in ablations]
+        if unknown:
+            raise ValueError(f"smart-ablation sconosciuta: {'+'.join(unknown)!r} "
+                             f"(usa {', '.join(ablations)}, uniti da '+')")
+        for p in parts:
+            smart.update(ablations[p])
         strategy = PhysicalSAGESmart(
             sage_a=float(context.run_config["sage-a"]),
             sage_b=float(context.run_config["sage-b"]),

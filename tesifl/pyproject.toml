@@ -66,6 +66,7 @@ smart-max-waves = 2          # ondate di proposte per round (1 = nessun rimpiazz
 smart-batch-min = 16         # B piu' piccolo (preferito) dell'envelope
 smart-batch-max = 64         # B piu' grande, se il piccolo non ci sta
 smart-ablation = "none"      # none | nostale | noest | noneg | e5 | nonova | b128
+                             # anche piu' d'uno uniti da "+" (ablazione cumulata)
                              # (_shard.sh la ricava dall'etichetta sage_smart_<x>_nm)
 # --- broadcast dello stato a inizio round (SAGE, ESCS, SAGE-smart)
 broadcast = false            # run.sh lo prende da experiment.toml
