@@ -180,6 +180,12 @@ def main(grid: Grid, context: Context) -> None:
             epochs_min=int(context.run_config["smart-epochs-min"]),
             batch_min=int(context.run_config["smart-batch-min"]),
             batch_max=int(context.run_config["smart-batch-max"]),
+            # [B] 30/10, dopo la call: FedNova TOLTO di default. E' un
+            # contributo esterno, non nostro, e nelle due ablazioni (leave-one-
+            # out e cumulata) la media pesata per i dati va uguale o meglio
+            # (FedNova -0.9 / -1.0 punti). "nova" lo riaccende (campagne fino
+            # a cap_aug).
+            fednova=False,
         )
         # [B] 19/10, ABLAZIONE leave-one-out: smart-ablation toglie UN
         # componente, il resto resta SAGE-smart completo. Un solo parametro
@@ -192,8 +198,9 @@ def main(grid: Grid, context: Context) -> None:
             "noest":   {"soc_source": "report"},                 # niente stima SoC
             "noneg":   {"negotiation": False},                   # niente proposte
             "e5":      {"epochs_min": epochs, "epochs_cap_mult": 1},  # E = 5 fisso
-            "nonova":  {"fednova": False},                       # media FedAvg
+            "nonova":  {"fednova": False},                       # media FedAvg (ora default)
             "b128":    {"batch_min": batch_size, "batch_max": batch_size},  # B = 128
+            "nova":    {"fednova": True},                        # FedNova come fino a cap_aug
         }
         # [B] 27/10: piu' componenti spenti insieme separati da "+", per
         # l'ablazione CUMULATA (ablation_cum.sh), es. "noest+noneg+nonova"
@@ -356,6 +363,35 @@ def _write_round_csv(strategy, algorithm: str, seed: int, history,
     known = set(cols)
     extra = sorted({k for st in stats.values() for k in st} - known)
     cols += extra
+    # [B] 30/10: file per device, scritti PRIMA del CSV principale. _shard.sh
+    # prende il .csv piu' recente della cartella della run e poi sposta questi
+    # due accanto a lui: con un'estensione diversa da .csv non possono essere
+    # scambiati per il CSV della run.
+    #   .devsoc   una riga per round: round, SoC di ogni device (ordine cid)
+    #   .devinfo  una riga per device: tier, workload, SoC iniziale e finale,
+    #             scarico, ricariche, energia per voce, partecipazioni
+    try:
+        dev_soc = getattr(strategy, "_dev_soc", {}) or {}
+        world = getattr(strategy, "world", None)
+        if dev_soc:
+            n_dev = len(next(iter(dev_soc.values())))
+            with open(path.with_suffix(".devsoc"), "w", newline="") as fh:
+                w = csv.writer(fh)
+                w.writerow(["round"] + [f"soc_{c}" for c in range(n_dev)])
+                for r in sorted(dev_soc):
+                    w.writerow([r] + [f"{x:.5f}" for x in dev_soc[r]])
+        if world is not None and hasattr(world, "device_rows"):
+            part = getattr(strategy, "_participations", {}) or {}
+            rows = world.device_rows()
+            with open(path.with_suffix(".devinfo"), "w", newline="") as fh:
+                w = csv.writer(fh)
+                keys = list(rows[0]) + ["participations"] if rows else []
+                w.writerow(keys)
+                for row in rows:
+                    w.writerow([row[k] if not isinstance(row[k], float) else f"{row[k]:.6f}"
+                                for k in keys[:-1]] + [part.get(row["cid"], 0)])
+    except Exception as exc:  # i file per device non devono bloccare il CSV
+        print(f"[log] file per device non scritti: {exc}")
     with open(path, "w", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(cols)

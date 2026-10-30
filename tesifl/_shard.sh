@@ -132,7 +132,14 @@ sage_smart_nonova|sage_smart_b128)
     while [ $(( $(date +%s) - before )) -lt "$TIMEOUT" ]; do
       newest=$(ls -t "${RDIR}"/*.csv 2>/dev/null | head -1)
       if [ -n "$newest" ]; then
-        mv "$newest" "$target"; ok=1; break
+        mv "$newest" "$target"; ok=1
+        # [B] 30/10: file per device (server_app li scrive prima del .csv),
+        # con lo stesso nome della run: <label>_b<beta>_seed<s>.devsoc/.devinfo
+        for ext in devsoc devinfo; do
+          f=$(ls "${RDIR}"/*."${ext}" 2>/dev/null | head -1)
+          [ -n "$f" ] && mv "$f" "${target%.csv}.${ext}"
+        done
+        break
       fi
       sleep 20
     done

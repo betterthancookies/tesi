@@ -91,6 +91,11 @@ class PhysicalFedAvg(FedAvg):
         # registrazione: e' la stessa durata che il mondo usa per idle e
         # ricarica, non cambia nulla della fisica.
         self._sim_time_s = 0.0
+        # [B] 30/10: SoC di ogni device a fine round (file .devsoc) e numero
+        # di partecipazioni con training per device (file .devinfo). Solo
+        # registrazione, per i grafici di distribuzione.
+        self._dev_soc: dict[int, list[float]] = {}
+        self._participations: dict[int, int] = {}
         # [B] selezione vuota = fine della run. Serve a sage_soc, che termina
         # per esaurimento del pool e non per numero di round: senza questo
         # flag Flower continuerebbe a valutare tutti i client fino a R_max.
@@ -307,6 +312,8 @@ class PhysicalFedAvg(FedAvg):
             durations[cid] = dt
             e_tr, l_tr = self.world.apply_round(cid, dt_s=dt, batch_size=b)
             e_cm, l_cm = self.world.apply_communication(cid)
+            if n_ex > 0:
+                self._participations[cid] = self._participations.get(cid, 0) + 1
             self._on_round_result(cid, n_ex, dt, float(e_tr + e_cm),
                                   float(l_tr + l_cm), reply, server_round)
 
@@ -322,6 +329,7 @@ class PhysicalFedAvg(FedAvg):
         self._last_round_s = max(durations.values(), default=0.0) + overhead
         self._sim_time_s += self._last_round_s
         self.world.apply_idle({c: d + overhead for c, d in durations.items()})
+        self._dev_soc[int(server_round)] = self.world.soc_vector()
 
         s = self.world.stats()
         self._round_stats[int(server_round)] = dict(s)

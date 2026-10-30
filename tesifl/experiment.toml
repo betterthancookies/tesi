@@ -1,5 +1,10 @@
 [campaign]
-name        = "rechargeONdeviceON_ResNet18_C100_bcast_cap_aug"   # -> results_<name>/
+name        = "rechargeONdeviceON_ResNet18_C100_v2"   # -> results_<name>/
+                             # v2 (30/10) = cap_aug + SAGE-smart SENZA FedNova
+                             # + file per device (.devsoc, .devinfo) e tempo
+                             # simulato + ESCS SP/MD/MP in tutti i mondi. Le run
+                             # dei seed 42/73 che non cambiano si copiano da
+                             # results_..._cap_aug (vedi comandi del 30/10).
                              # ResNet18_C100 = scenario ResNet-18 su CIFAR-100,
                              # 100 client (vedi SCENARIO in [model]); la
                              # campagna ResNet-20 era ..._ResNet20_bcast.
@@ -57,10 +62,16 @@ algorithms = [
   "escs_sd_lin",
   "escs_sd_peuk",
   "escs_sd_nm",
-  # [B] 23/10: le altre tre varianti del paper (Tab. 3), solo datasheet: la
-  # batteria cambia ESCS-SD di meno di 1 punto
+  # 23/10: le altre tre varianti del paper (Tab. 3), prima solo datasheet;
+  # 27/10: anche lineare e Peukert, per avere ogni ESCS nei tre mondi
+  "escs_sp_lin",
+  "escs_sp_peuk",
   "escs_sp_nm",
+  "escs_md_lin",
+  "escs_md_peuk",
   "escs_md_nm",
+  "escs_mp_lin",
+  "escs_mp_peuk",
   "escs_mp_nm",
 ]
 

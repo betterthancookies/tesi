@@ -164,12 +164,14 @@ def main() -> int:
               "B " + " ".join(f"{b:.0f}" for b in mb)
               + ("  E " + " ".join(f"{e:.1f}" for e in me) if me else ""))
         # [B] FedNova amplifica di tau_eff/tau_i chi fa pochi passi: sopra ~8
-        # un solo update domina (collasso del 14/10 con spread 15-16)
+        # un solo update domina (collasso del 14/10 con spread 15-16).
+        # [B] 30/10: FedNova e' spento di default e la media pesata per i dati
+        # non amplifica nessuno, quindi lo spread alto e' solo un avviso.
         sp = [x for x in (float(r["tau_spread"]) for r in rows if r.get("tau_spread"))
               if math.isfinite(x)]
-        if sp:
-            check("spread dei passi FedNova contenuto (max tau / min tau <= 8)",
-                  max(sp) <= 8.0, " ".join(f"{x:.1f}" for x in sp))
+        if sp and max(sp) > 8.0:
+            warns.append("spread dei passi > 8 (" + " ".join(f"{x:.1f}" for x in sp)
+                         + "): conta solo se la run usa FedNova")
 
     # --- broadcast dello stato (solo strategie che selezionano sullo stato) --
     if rows[0].get("bcast_targets") not in (None, ""):

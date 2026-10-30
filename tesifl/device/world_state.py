@@ -243,6 +243,33 @@ class WorldState:
         """Capacita' nominale in Wh, V_nom * C_nom."""
         return self._profiles[cid].battery_capacity_mah / 1000.0 * V_NOMINAL
 
+    def soc_vector(self) -> list[float]:
+        """SoC di tutti i device in ordine di cid (0 per gli scarichi).
+
+        [B] 30/10: solo lettura, per il file .devsoc (SoC di ogni device a
+        ogni round) e i grafici di distribuzione.
+        """
+        return [float(self._soc[c]) for c in sorted(self._profiles)]
+
+    def device_rows(self) -> list[dict]:
+        """Riepilogo per device a fine run (file .devinfo). Solo lettura."""
+        rows = []
+        for c in sorted(self._profiles):
+            p = self._profiles[c]
+            rows.append({
+                "cid": c, "tier": p.tier, "capacity_mah": p.battery_capacity_mah,
+                "workload_chain": getattr(self.workload, "_profile", {}).get(c, ""),
+                "soc0": self._soc0[c], "soc_final": self._soc[c],
+                "depleted": int(self._failed[c]), "recharges": self._n_recharges[c],
+                "energy_train_wh": self._energy_wh[c],
+                "energy_comm_wh": self._energy_comm_wh[c],
+                "energy_ctrl_wh": self._energy_ctrl_wh[c],
+                "energy_idle_wh": self._energy_idle_wh[c],
+                "energy_grid_wh": self._energy_grid_wh[c],
+                "energy_lin_wh": self._energy_lin_wh[c],
+            })
+        return rows
+
     def energy_wh(self, cid: int) -> float:
         """Carica cumulata (train + comm + controllo) del client, in Wh."""
         return (self._energy_wh[cid] + self._energy_comm_wh[cid]

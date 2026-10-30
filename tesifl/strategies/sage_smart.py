@@ -139,7 +139,9 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
       FINALE, loss prima e dopo. Il server:
         - verifica che (E, B) stiano nell'envelope: se no scarta l'update;
         - addebita al mondo fisico il lavoro DICHIARATO (Fedavg._work_done);
-        - aggrega con FedNova, tau_i = passi dichiarati dal client.
+        - aggrega con la media pesata per i dati (FedAvg). FedNova, con tau_i
+          = passi dichiarati dal client, solo con fednova=True: era il
+          default fino al 30/10, tolto dopo le ablazioni (vedi server_app).
 
     FASE 8 -- AGGIORNAMENTO DELLO STATO
       SoC noto <- SoC finale riportato; k_i <- media mobile del rapporto fra
@@ -197,7 +199,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         batch_max: int = 64,
         soc_source: str = "estimate",
         negotiation: bool = True,
-        fednova: bool = True,
+        fednova: bool = False,
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -272,9 +274,11 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
     @property
     def variant(self) -> str:
         off = [name for name, on in (("stima SoC", self.soc_source == "estimate"),
-                                     ("negoziazione", self.negotiation),
-                                     ("FedNova", self.fednova)) if not on]
-        return f"sage-smart-{self.world.battery}" + (f" SENZA {', '.join(off)}" if off else "")
+                                     ("negoziazione", self.negotiation)) if not on]
+        # [B] dal 30/10 FedNova e' spento di default: si segnala quando e' acceso
+        return (f"sage-smart-{self.world.battery}"
+                + (" CON FedNova" if self.fednova else "")
+                + (f" SENZA {', '.join(off)}" if off else ""))
 
     def configure_train(self, server_round, arrays, config, grid):
         # la griglia serve alla Fase 2 per i messaggi di controllo, che
