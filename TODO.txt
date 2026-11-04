@@ -28,6 +28,14 @@ Numeri dell'introduzione aggiornati con la v2.
      mentre gira una run.
 
 4. Esperimento sul workload (chiesto in call il 30/10)
+   - [04/11] CODICE SCRITTO: workload-scale (etichette _x3/_x2/_x1p5/_x1),
+     sage_smart_noinfo, ritiro = solo download (48 J invece di 181 J),
+     workload_sweep.sh (19 run, campagna workload_ResNet18_C100).
+     fastTest x1 identico alla v2; fastTest x3 ok tranne il falso allarme
+     sulla soglia bassa del training (rampa di SAGE, 2-4 client).
+   - Morti SENZA FL (seed 2026, solo modello del mondo), a 12 h / 24 h:
+     x1 8/21, x1.5 17/32, x2 26/44, x3 46/63. A x1 i ~8 morti di SAGE-smart
+     (run di ~11.6 h) sono quasi tutti di fondo; FedAvg dura ~25 h.
    - Scopo: trovare da quale carico stima del SoC e negoziazione danno un
      contributo visibile.
    - Decisione moltiplicatore / matrice di transizione: chiesta ai prof,
