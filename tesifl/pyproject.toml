@@ -49,6 +49,7 @@ battery-capacity-mah = 200.0 # usata SOLO con tiers-enabled = false
 # politica di selezione.
 tiers-enabled = true      # 3 tier in parti uguali, 200/300/400 mAh, 1x/2x/4x
 workload-enabled = true   # 3 catene di Markov, assegnate indipendentemente
+workload-scale = 1.0      # moltiplica gli stati del workload (etichette *_x<m>, workload_sweep.sh)
 idle-enabled = true       # consumo fra i round, modello ESCS Sez. 4.2
 
 # --- ricarica sporadica, probabilita' p = 0.05 * (1 - SoC) per round.

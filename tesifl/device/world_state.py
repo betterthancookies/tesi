@@ -11,7 +11,8 @@ from device.battery_model import (
 )
 from device.battery_model_peukert import delta_soc as peukert_delta_soc
 from device.communication_model import (
-    comm_power_w, comm_time_s, ctrl_power_w, ctrl_time_s,
+    comm_power_w, comm_time_s, ctrl_power_w, ctrl_time_s, download_power_w,
+    download_time_s,
 )
 from device.compute_model import probe_time_s, training_time_s
 from device.constants import (
@@ -409,6 +410,18 @@ class WorldState:
         self._energy_comm_wh[cid] += e
         return e, e_lin
 
+    def apply_download(self, cid: int) -> tuple[float, float]:
+        """Solo il download del modello, con la sua sessione radio.
+
+        [B] 04/11: e' cio' che paga un client di SAGE-smart che riceve il
+        modello e poi si ritira (opt-out): prima pagava lo scambio intero
+        (~181 J con ResNet-18), anche l'upload che non fa (~46 J il solo
+        download). La risposta di ritiro e' un messaggio di controllo a parte.
+        """
+        e, e_lin = self._drain(cid, download_power_w(), download_time_s())
+        self._energy_comm_wh[cid] += e
+        return e, e_lin
+
     def idle_power_w(self, cid: int) -> float:
         """P_idle + w * (P_train - P_idle) del tier, vedi idle_power_w()."""
         return idle_power_w(self._profiles[cid], self.workload.utilization(cid))
@@ -532,17 +545,19 @@ def build_world_state(n_clients: int, seed: int,
                       recharge_enabled: bool = False,
                       recharge_available: bool = True,
                       battery: str = "nm",
+                      workload_scale: float = 1.0,
                       **kwargs) -> WorldState:
     """`battery` e' la batteria dei device: "lin", "peuk" o "nm".
 
     I tre flag disattivano tier, workload e idle. Tutti a False riproducono
     esattamente il mondo delle campagne precedenti. Lo stesso seed da' la
     stessa popolazione (tier, SoC iniziali, workload) in tutti e tre i mondi.
+    `workload_scale` moltiplica gli stati del workload (1 = campagne normali).
     """
     profiles = generate_profiles(n_clients, seed=seed, capacity_mah=capacity_mah,
                                  tiers_enabled=tiers_enabled)
     workload = WorkloadModel(n_clients=n_clients, seed=seed + 7919,
-                             enabled=workload_enabled)
+                             enabled=workload_enabled, scale=workload_scale)
     return WorldState(profiles=profiles, seed=seed, workload=workload,
                       idle_enabled=idle_enabled,
                       recharge_enabled=recharge_enabled,

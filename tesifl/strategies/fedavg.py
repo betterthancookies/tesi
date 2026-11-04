@@ -253,6 +253,11 @@ class PhysicalFedAvg(FedAvg):
         )
         return dt, b
 
+    def _charge_communication(self, cid: int, reply: Message) -> tuple[float, float]:
+        """Comunicazione del round di un client: download del modello e upload
+        dell'update. sage_smart la riduce per chi si ritira (opt-out)."""
+        return self.world.apply_communication(cid)
+
     def _round_overhead_s(self) -> float:
         """Secondi spesi prima del training (scambi di controllo): il
         broadcast dello stato, se attivo. sage_smart aggiunge la negoziazione."""
@@ -311,7 +316,7 @@ class PhysicalFedAvg(FedAvg):
             dt, b = self._work_done(cid, n_ex, reply)
             durations[cid] = dt
             e_tr, l_tr = self.world.apply_round(cid, dt_s=dt, batch_size=b)
-            e_cm, l_cm = self.world.apply_communication(cid)
+            e_cm, l_cm = self._charge_communication(cid, reply)
             if n_ex > 0:
                 self._participations[cid] = self._participations.get(cid, 0) + 1
             self._on_round_result(cid, n_ex, dt, float(e_tr + e_cm),

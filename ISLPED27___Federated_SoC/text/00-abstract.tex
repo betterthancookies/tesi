@@ -1,0 +1,18 @@
+\begin{abstract}
+Estimating the evolution of the battery's State of Charge (SoC) in response to its usage is critical for implementing effective power management policies and for ultimately improving the system's lifetime.
+Most existing estimation methods are either physics-based digital twins of the battery or data-driven models such as Neural Networks (NNs).
+In this work, we propose two new contributions in this domain. First, we introduce a novel NN architecture formed by two cascaded branches: one to predict the \textit{current} SoC based on sensor readings, and one to estimate the SoC at a \textit{future} time as a function of the load behavior. Second, we integrate battery dynamics equations into the training of our NN, merging the physics-based and data-driven approaches, to improve the models' generalization over variable prediction horizons. 
+We validate our approach on two publicly accessible datasets, showing that our Physics-Informed Neural Networks (PINNs) outperform purely data-driven ones while also obtaining superior prediction accuracy with a smaller architecture with respect to the state-of-the-art.  
+
+% \rev{
+% \st- \st{cambiamento Tab 1 per aggiungere mem e ops nostri e di SoA;}
+
+% \st{- chiarire metodi che ground truth è usata solo per training;}
+
+% - \st{aggiungere espeirmenti Sandia con tutte temperautre / cicli di scarica;}
+
+% - \st{CONFRONTARSI CON "UNICO?" PAPER CHE FA PREDICTION; FARE RIASSUNTO E DISCUTERNE; CONTROLLARE ANCHE ALTRI PAPERS}
+
+% \st{- sottolineare che non consideriamo SOH e il nostro algoritmo è ortogonale: puoi trainare SOH model e un SoC prediction a ogni diverso livello di SOH}
+% }
+\end{abstract}

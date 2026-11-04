@@ -87,6 +87,9 @@ def main(grid: Grid, context: Context) -> None:
     recharge_avail = bool(context.run_config["recharge-available"])
     # batteria dei device: "lin" | "peuk" | "nm" (vedi WorldState)
     battery = str(context.run_config["world-battery"])
+    # [B] 04/11, esperimento sul workload: moltiplica gli stati del workload
+    # (etichette *_x<m> in _shard.sh); 1.0 = campagne normali
+    workload_scale = float(context.run_config["workload-scale"])
     world = build_world_state(n_clients=n_clients, seed=seed,
                               capacity_mah=capacity_mah,
                               tiers_enabled=tiers_on,
@@ -94,7 +97,8 @@ def main(grid: Grid, context: Context) -> None:
                               idle_enabled=idle_on,
                               recharge_enabled=recharge_on,
                               recharge_available=recharge_avail,
-                              battery=battery)
+                              battery=battery,
+                              workload_scale=workload_scale)
     from collections import Counter
     tiers = Counter(world.tier(c) for c in range(n_clients))
     print(f"[world] batteria {BATTERY_NAMES[world.battery]} ({world.battery})")
@@ -102,6 +106,7 @@ def main(grid: Grid, context: Context) -> None:
           f"({k_per_round / max(n_clients, 1):.0%}) | "
           f"tier {'ON ' + str(dict(tiers)) if tiers_on else f'OFF ({capacity_mah:.0f} mAh)'}")
     print(f"[world] workload {'ON ' + str(world.workload.counts_by_profile()) if workload_on else 'OFF'}"
+          f" x{workload_scale:g} (stato piu' pesante w={world.workload.max_utilization():.2f})"
           f" | idle {'ON' if idle_on else 'OFF'}"
           f" | ricarica {('ON, modalita ' + ('a: disponibile' if recharge_avail else 'b: unavailable')) if recharge_on else 'OFF'}")
 
@@ -202,6 +207,9 @@ def main(grid: Grid, context: Context) -> None:
             "b128":    {"batch_min": batch_size, "batch_max": batch_size},  # B = 128
             "nova":    {"fednova": True},                        # FedNova come fino a cap_aug
         }
+        # [B] 04/11: per l'esperimento sul workload l'etichetta sage_smart_noinfo
+        # (_shard.sh) passa "noneg+noest": senza negoziazione e senza stima,
+        # che i relatori vedono come un solo componente
         # [B] 27/10: piu' componenti spenti insieme separati da "+", per
         # l'ablazione CUMULATA (ablation_cum.sh), es. "noest+noneg+nonova"
         parts = [p for p in ablation.split("+") if p and p != "none"]

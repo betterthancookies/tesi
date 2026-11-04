@@ -85,6 +85,24 @@ def comm_power_w(profile: DeviceProfile | None = None) -> float:
     return comm_energy_j() / t if t > 0 else 0.0
 
 
+# ------------------------------------------------ solo download del modello
+# [B] 04/11: chi riceve il modello e poi si ritira (opt-out di SAGE-smart)
+# scarica il modello ma non carica l'update: una sola sessione radio.
+def download_time_s() -> float:
+    rx_mb, _ = round_payload_mb()
+    return _payload_time_s(rx_mb, 0.0) + session_time_s()
+
+
+def download_energy_j() -> float:
+    rx_mb, _ = round_payload_mb()
+    return _payload_energy_j(rx_mb, 0.0) + session_energy_j()
+
+
+def download_power_w() -> float:
+    t = download_time_s()
+    return download_energy_j() / t if t > 0 else 0.0
+
+
 # ------------------------------------------------- messaggi di controllo
 # Richiesta di stato o proposta di lavoro, con la risposta del client.
 # merged=True: lo scambio cade nella stessa sessione radio del download del

@@ -1,0 +1,9 @@
+% \vspace{-0.1cm}
+\section{Conclusions}
+\label{sec:conclusions}
+The \textit{prediction} of future battery SoC for different time horizons is a topic not as popular as the \textit{instantanous} SoC estimation. It requires models including as parameters the future expected workload for which one wants the SoC to be predicted.
+%
+In this work we proposed one such model, which relies on: i) a novel, two-stage NN that decouples the problem in two steps (current SoC estimation first, and then future SoC prediction using the expected workload as input); ii) the integration of a very simple yet effective equation that describes SoC evolution over time into the learning process, making the above NN \textit{physics-informed}. 
+The proposed method shows accuracy comparable with the SoA (0.014 vs 0.012 MAE) with a much simpler architecture (409$\times$ fewer parameters and 260k$\times$ less operations), and, more importantly, demonstrates excellent future SoC prediction capability even for time horizons that differ from those available in the training dataset.
+%
+% Our future work will focus on the problem of SoC autoregressive prediction.

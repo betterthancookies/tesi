@@ -35,6 +35,20 @@ from device.constants import WORKLOAD_CHAINS, WORKLOAD_STATES
 STATE_NAMES = list(WORKLOAD_STATES)          # idle, light, heavy
 STATE_UTIL = np.array(list(WORKLOAD_STATES.values()), dtype=float)
 PROFILE_NAMES = list(WORKLOAD_CHAINS)        # low, medium, high
+# [B] 04/11, esperimento sul workload (call del 30/10): tetto di w quando gli
+# stati sono moltiplicati per `scale`. Con w -> 1 il throughput (1 - w)
+# andrebbe a zero e il training non finirebbe mai.
+W_MAX = 0.95
+
+
+def scaled_util(scale: float) -> np.ndarray:
+    """Utilizzazione dei tre stati moltiplicata per `scale`, con tetto W_MAX.
+
+    A scale = 1 i valori sono quelli di experiment.toml, identici bit per bit.
+    """
+    if scale <= 0.0:
+        raise ValueError(f"workload scale {scale}: deve essere > 0")
+    return np.minimum(W_MAX, STATE_UTIL * float(scale))
 
 
 class WorkloadModel:
@@ -42,10 +56,19 @@ class WorkloadModel:
 
     enabled=False congela tutto a w=0: e' l'ablazione che riporta il mondo
     alla popolazione senza workload, per verificare che il resto non cambi.
+
+    scale moltiplica gli stati (esperimento sul workload, workload-scale nella
+    run-config). Le catene NON cambiano: con lo stesso seed la sequenza degli
+    stati di ogni client e' la stessa a ogni scale, cambia solo quanto pesa
+    ogni stato. [B] scala anche l'idle: P_idle(w) cresce con w, quindi il
+    workload alto scarica i telefoni anche senza FL.
     """
 
-    def __init__(self, n_clients: int, seed: int, enabled: bool = True) -> None:
+    def __init__(self, n_clients: int, seed: int, enabled: bool = True,
+                 scale: float = 1.0) -> None:
         self.enabled = bool(enabled)
+        self.scale = float(scale)
+        self._util = scaled_util(self.scale)
         self.n_clients = int(n_clients)
         self._rng = np.random.default_rng(seed)
         self._chains = {p: np.asarray(WORKLOAD_CHAINS[p], dtype=float)
@@ -81,7 +104,12 @@ class WorkloadModel:
         """w in [0, 1): frazione di calcolo occupata da altre applicazioni."""
         if not self.enabled:
             return 0.0
-        return float(STATE_UTIL[self._state[cid]])
+        return float(self._util[self._state[cid]])
+
+    def max_utilization(self) -> float:
+        """w dello stato piu' pesante a questo scale: il caso peggiore che
+        SAGE-smart assume finche' non conosce il workload di un client."""
+        return float(self._util.max())
 
     def profile(self, cid: int) -> str:
         return self._profile[cid] if self.enabled else "disabled"
@@ -101,12 +129,13 @@ class WorkloadModel:
         return out
 
 
-def stationary_utilization() -> dict[str, float]:
+def stationary_utilization(scale: float = 1.0) -> dict[str, float]:
     """Utilizzazione media attesa di ogni profilo, dall'autovettore della catena.
 
     Serve a verificare che le matrici diano le medie che ci si aspetta, senza
     doverle simulare: e' il primo dei controlli di validazione.
     """
+    util = scaled_util(scale)
     out = {}
     for name, m in WORKLOAD_CHAINS.items():
         m = np.asarray(m, dtype=float)
@@ -114,7 +143,7 @@ def stationary_utilization() -> dict[str, float]:
         i = int(np.argmin(np.abs(vals - 1.0)))
         pi = np.real(vecs[:, i])
         pi = pi / pi.sum()
-        out[name] = float(pi @ STATE_UTIL)
+        out[name] = float(pi @ util)
     return out
 
 

@@ -1,0 +1,41 @@
+%%%%%%%%%%%%%%%%%
+%%% OLD TABLE %%%
+%%%%%%%%%%%%%%%%%
+
+% \begin{table}[]
+% \caption{Comparison with SoA on the LG dataset.}
+% \label{tab:soa}
+% \begin{tabular}{l|lll}
+% \hline
+%                                  & T {[}°C{]} & SoC Estimation & SoC Pred. \\ \hline
+% Our Work (No PINN)               & 25         & 0.013         & 0.038           \\
+% Our Work (PINN-All)              & 25         & 0.013         & 0.013           \\ \hline
+% LSTM~\cite{wong-2021}    & 25         & 0.012          & n.a.            \\
+% LSTM~\cite{wong-2021}    & 0          & 0.017          & n.a.            \\
+% DE-LSTM~\cite{Dang23} & 0          & 0.129          & n.a.            \\
+% DE-MLP~\cite{Dang23} & 0          & 0.177          & n.a.            \\ \hline
+% \end{tabular}
+% \end{table}
+
+%%%%%%%%%%%%%%%%%
+%%% NEW TABLE %%%
+%%%%%%%%%%%%%%%%%
+\begin{table}[]
+\footnotesize
+\vspace{-0.2cm}
+\caption{Comparison with SoA on the LG dataset for the prediction of SoC(t) and SoC(t+N)}
+\label{tab:soa}
+\begin{tabular}{l|lllll}
+\hline
+                                 & T {[}°C{]} & SoC(t) & SoC(t+N) & Mem & Ops\\ \hline
+No-PINN               & 0         & 0.031         & 0.036 & $\simeq$ 9kb &     $\simeq$ 1150    \\
+No-PINN               & 25         & 0.014         & 0.016 & $\simeq$ 9kb &     $\simeq$ 1150    \\
+PINN-All              & 0         & 0.031         & 0.032 & $\simeq$ 9kb  & $\simeq$ 1150       \\
+PINN-All              & 25         & 0.014         & 0.014 & $\simeq$ 9kb  & $\simeq$ 1150       \\ \hline
+LSTM~\cite{wong-2021}    & 25         & 0.012          & n.a.         & $\simeq$ 4Mb& $\simeq$300M  \\
+LSTM~\cite{wong-2021}    & 0          & 0.017          & n.a.           & $\simeq$4Mb & $\simeq$300M\\
+DE-LSTM~\cite{Dang23} & 0          & 0.129          & n.a.            & n.a. & n.a.\\
+DE-MLP~\cite{Dang23} & 0          & 0.177          & n.a.            & n.a. & n.a.\\ \hline
+\end{tabular}
+\vspace{-0.4cm}
+\end{table}

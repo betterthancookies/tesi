@@ -1,0 +1,54 @@
+\vspace{-0.2cm}
+\section{Background and Related Works}
+\label{sec:background}
+The SoC of an energy storage device is defined as the ratio of the available capacity $Q(t)$ and the maximum possible charge that can be stored into it, i.e., $\mbox{SoC}(t) = Q(t)/Q_{max}$.
+In spite of its straightforward definition, 
+accurate estimation of SoC is non-trivial.
+%
+%For instance, 
+$Q_{max}$ is typically %initially 
+assumed to be the nominal battery capacity as provided by the manufacturers, which might not be an accurate guess due to various variability effects \cite{DAHMARDEH2021103204}. Moreover, $Q_{max}$ 
+is not constant throughout the battery life due to aging \cite{10244587}.
+%
+Because of these and other subtle factors, accurate SoC estimation remains a challenging problem to solve, thereby inspiring a wealth of literature on the topic.
+The landscape of SoC estimation methods is so vast that there exists a number of surveys that provide excellent overviews of the various solutions~\cite{8843918,Vidal20}. 
+
+As a compact summary, SoC estimation methods can be broadly classified in three categories:
+\begin{enumerate}
+    \item  \textit{Direct measurements}, which use some measurable quantity (voltage, resistance/impedance, current) that can be correlated to SoC. This includes methods based on open circuit voltage (OCV) \cite{Ng08}, impedance \cite{Coleman07}, and \textit{Coulomb counting}, in which the SoC is estimated by integrating the discharging current over time \cite{Ng2009}; 
+    \item  \textit{Physics-based} approaches, which model the battery by following or approximating the underlying physics; these include electro-chemical models~\cite{westerhoff}, electrical-circuit equivalent models~\cite{islped13}, and models based on state estimation (e.g., Kalman filters)~\cite{kalman};
+    %%% It is ok IMO to use a single reference for all of them if we want to speed up convergence
+    \item \textit{Data-driven} approaches, which also rely on a model that is, however, directly extracted from a dataset of current, voltage, and temperature measurements associated to ground-truth SoC values~\cite{lstm_tie,fnn_chemali,Vidal20}; unlike the previous class, such models are not based on physics, and their parameters are rather obtained through a fitting (or training) procedure.
+\end{enumerate}
+%\rev
+When addressing the more complex problem of SoC \textit{prediction} (i.e., not just estimating the \textit{current} SoC but rather \textit{predicting its future value} in response to how the battery will be stimulated), direct measurements as in (1) are unfeasible, and the only available options are either to build a physics-based digital twin of the battery using a model from category (2), or to train a data-driven forecasting model as in (3).
+For the former option, we refer the reader to the above-mentioned surveys for a detailed analysis. % of the strengths and weaknesses of physics-based methods.
+In the rest of the section, we overview the most relevant data-driven models, which are the main focus of our work.
+\vspace{-0.1cm}
+\subsection{Data-Driven SoC Models}
+\vspace{-0.1cm}
+A number of different data-driven solutions have been proposed to estimate battery states (SoC and/or SoH). They differ essentially in the structure and complexity of the ML model adopted, ranging from simple classic ones such as tree-based ensembles~\cite{10244587} to deep feedforward~\cite{fnn_chemali} or recurrent NNs~\cite{wong-2021}. The survey of \cite{Vidal20} provides an exhaustive overview of ML-based approaches for battery state estimation.
+%%[Vidal20] C. Vidal, P. Malysz, P. Kollmeyer, A. Emad, Machine Learning Applied to Electrified Vehicle Battery State of Charge and State of Health Estimation: State-of-the-Art, IEEE Access, Vol. 8, 2020.
+
+In this domain, the problem of the generalization of ML models (i.e., their ability to accurately model data different from those seen during training) is particularly critical. In fact, in-field data might correspond to widely varying system workloads (i.e., current and temperature profiles), while most training datasets are obtained by controlled lab measurements. However, recent studies have observed that by incorporating prior information (e.g., physical laws or domain knowledge) in the learning process, it is possible to enhance the generalization of the models and also accelerate training~\cite{Raissi21}.
+
+Physics-informed neural networks (PINNs) are an example of this learning bias, in which the physics of the underlying phenomenon is added to the model's training loss function as penalty constraint in the form of partial differential equations (PDEs) \cite{10.1007/s10915-022-01939-z}.
+%
+% \st{A few recent works have used physics-informed ML models for SoC estimation \cite{Tian22,Wang22,Ahn23,Dang23},
+% by incorporating some form of battery dynamics inside the model.
+% Our work is closest to \cite{Dang23} in that it is the only ``true'', canonical PINN architecture of the above list; the authors include the PDEs corresponding to the dynamics of a first-order circuit-equivalent RC battery model into the loss function of conventional NN models (a Multi-Layer Perceptron, or MLP, and two types of recurrent NNs).
+% However, our work differs from \cite{Dang23} in several aspects. First, \textit{we target SoC prediction rather than estimation}, although our proposed model is capable of both. As a second element of novelty, we propose a novel NN architecture formed by two cascaded branches: one to predict the current SoC based on sensor readings and one to estimate the SoC at a future time as a function of the expected battery usage. This architecture is significantly smaller and less computationally expensive than the ones in~\cite{Dang23}.
+% %
+% %\rev
+% {Third, we incorporate physics equations in our model's loss function with a different purpose, that is, to enhance its generalization in predicting the future SoC at multiple time horizons. This enables our architecture to predict the future SoC at multiple time scales with high accuracy, which we believe might open the way to new power management strategies.}}
+%
+A few recent works have used physics-informed ML models for SoC estimation \cite{Tian22,Wang22,Ahn23,Dang23},
+by incorporating some form of battery dynamics inside the model.
+Our work is closest to \cite{Dang23} in that it is the only ``true'', canonical PINN architecture of the above list; the authors include the PDEs corresponding to the dynamics of a first-order circuit-equivalent RC battery model into the loss function of conventional NN models, namely a Multi-Layer Perceptron (MLP), and two types of recurrent NNs.
+However, our work differs from \cite{Dang23} in several aspects. First, similarly to \cite{Bian2020}, \textit{we target SoC prediction rather than estimation}, although our proposed model is capable of both. As a second element of novelty, we propose a novel NN architecture formed by two cascaded branches: one to predict the current SoC based on sensor readings and one to estimate the SoC at a future time as a function of the expected battery usage. This architecture is significantly smaller and less computationally expensive than the ones in~\cite{Dang23}.
+%
+Third, we incorporate physics equations in our model's loss function with a different purpose, that is, to enhance its generalization in predicting the future SoC at \textit{multiple time horizons}.
+%
+% . This enables our architecture to predict the future SoC at multiple time scales with high accuracy, which we believe might open the way to new power management strategies.
+%
+% a useful feature for power management, as detailed below.

@@ -42,16 +42,27 @@ for seed in $SEEDS; do
       SKIP=$((SKIP + 1)); continue
     fi
 
+    # [B] 04/11, esperimento sul workload (workload_sweep.sh): un suffisso
+    # finale _x<m> moltiplica gli stati del workload per m, con "p" al posto
+    # del punto (sage_smart_nm_x3, fedavg_nm_x1p5). Si toglie prima di leggere
+    # la batteria. Senza suffisso: workload-scale di pyproject (1.0).
+    wscale=""
+    core="$label"
+    if [[ "$label" =~ ^(.+)_x([0-9]+(p[0-9]+)?)$ ]]; then
+      core="${BASH_REMATCH[1]}"
+      wscale="${BASH_REMATCH[2]/p/.}"
+    fi
+
     # label -> batteria dei device + algoritmo + extra specifici.
     # Il suffisso _lin / _peuk / _nm e' la batteria FISICA del mondo (lineare,
     # Peukert, datasheet); senza suffisso (fedavg, fedprox) e' lineare.
-    case "$label" in
+    case "$core" in
       *_lin)  battery="lin" ;;
       *_peuk) battery="peuk" ;;
       *_nm)   battery="nm" ;;
       *)      battery="lin" ;;
     esac
-    base="${label%_lin}"; base="${base%_peuk}"; base="${base%_nm}"
+    base="${core%_lin}"; base="${base%_peuk}"; base="${base%_nm}"
     algo=""; extra=""
     case "$base" in
       fedavg)     algo="fedavg" ;;
@@ -85,6 +96,10 @@ sage_smart_nonova|sage_smart_b128)
                   extra="sage-a=${QA} sage-b=${QB} smart-ablation='noest+nonova'" ;;
       sage_smart_cum5) algo="sage_smart"
                   extra="sage-a=${QA} sage-b=${QB} smart-ablation='nonova'" ;;
+      # esperimento sul workload (workload_sweep.sh): negoziazione e stima del
+      # SoC spente insieme, che i relatori vedono come un componente solo
+      sage_smart_noinfo) algo="sage_smart"
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='noneg+noest'" ;;
       escs_sd)    algo="escs-sd" ;;
       escs_sp)    algo="escs-sp" ;;
       escs_md)    algo="escs-md" ;;
@@ -94,7 +109,7 @@ sage_smart_nonova|sage_smart_b128)
       echo "--- ${label}: etichetta sconosciuta, salto (vedi experiment.toml)"
       FAIL=$((FAIL + 1)); continue
     fi
-    extra="world-battery='${battery}'${extra:+ $extra}"
+    extra="world-battery='${battery}'${extra:+ $extra}${wscale:+ workload-scale=${wscale}}"
 
     # [B] UNA CARTELLA PER RUN. Prima tutte le run dello shard scrivevano in
     # ${WDIR} e lo shard prendeva il CSV piu' recente: una run oltre il

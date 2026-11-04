@@ -1,0 +1,129 @@
+COSE DA FARE - stato al 03/11/2026
+==================================
+
+A. RUN SULLA GPU 2 DI CORINNA (in quest'ordine)
+-----------------------------------------------
+
+[FATTO 04/11] Punti 1 e 2: v2 completa (180/180), FedAvg e FedProx
+beta 0.1 seed 2026 rifatti, 5000 partecipazioni, identici a cap_aug.
+Numeri dell'introduzione aggiornati con la v2.
+
+1. Campagna v2 (results_rechargeONdeviceON_ResNet18_C100_v2)
+   - 132 run su 180 al 03/11, fine prevista verso il 05/11.
+   - Contiene: seed 2026 rifatto con i log nuovi (round_s, sim_time_s,
+     .devsoc, .devinfo), tutti gli ESCS in tutte le batterie, SAGE-smart
+     senza FedNova.
+
+2. Rifare FedAvg e FedProx a beta 0.1, seed 2026 (GIA' IN CODA)
+   - Motivo: a inizio v2 la GPU 2 aveva gia' ~6 GB occupati, i client
+     fallivano (FedAvg per tutta la run, FedProx nei round 1-19).
+   - Comandi (se non gia' lanciati):
+       cd ~/tesi/tesifl && rm results_rechargeONdeviceON_ResNet18_C100_v2/{fedavg,fedprox}_b01_seed2026.{csv,devsoc,devinfo}
+       nohup bash -c 'while tmux has-session -t rechargeONdeviceON_ResNet18_C100_v2_gpu2 2>/dev/null; do sleep 600; done; for i in $(seq 60); do [ "$(nvidia-smi -i 2 --query-gpu=memory.used --format=csv,noheader,nounits)" -lt 1000 ] && break; sleep 60; done; bash run.sh' > rerun_fedavg.log 2>&1 &
+   - Controllo: FedAvg deve tornare identico a cap_aug
+     (49.8 %, 2077 Wh, 57 morti) e avere 5000 partecipazioni nel .devinfo.
+
+3. git pull sul server
+   - SOLO dopo la fine del punto 2: non cambiare codice o experiment.toml
+     mentre gira una run.
+
+4. Esperimento sul workload (chiesto in call il 30/10)
+   - Scopo: trovare da quale carico stima del SoC e negoziazione danno un
+     contributo visibile.
+   - Decisione moltiplicatore / matrice di transizione: chiesta ai prof,
+     aspettare la risposta prima di scrivere il codice.
+   - Proposta: parametro di run workload-scale che moltiplica gli stati
+     (oggi 0 / 0.10 / 0.30) per x3, x2, x1.5 (x1 c'e' gia'; con x3 lo stato
+     piu' pesante arriva a 0.90, oltre non ha senso).
+   - Un solo beta (0.1), seed 2026, broadcast acceso come nella campagna
+     principale.
+   - Etichette: SAGE-smart completo, senza negoziazione, senza stima,
+     senza entrambe, piu' FedAvg come riferimento.
+   - 3 moltiplicatori x 5 etichette = 15 run, circa 1 giorno.
+   - Tocca la fisica: serve l'ok prima di scrivere il codice.
+
+5. FedAvg con B = 16 (confronto pari)
+   - Il seed 2026 c'e' gia' (report 12, campagna sweepB16).
+   - Mancano seed 42 e 73 (6 run) + rifare il 2026 per i log nuovi
+     (3 run): 9 run in tutto.
+   - Attenzione: a 250 round FedAvg B16 ha 58.0 % e 67 morti contro
+     52.5 % e 8 di SAGE-smart, ma raggiunge l'accuracy finale di
+     SAGE-smart gia' al round 83-100 con il 19-31 % di energia in meno
+     (21/24/7 morti contro 10/6/8). Il nostro vantaggio sono i morti,
+     non l'energia a pari accuracy.
+   - Valutare almeno una run di SAGE a B = 16 (un revisore chiedera'
+     perche' SAGE ed ESCS girano a B = 128).
+
+
+B. PROTOCOLLO PARAMETRICO (approvato, da fare piu' avanti)
+----------------------------------------------------------
+
+6. Parametro di run smart-protocol con tre valori:
+   - propose   (default) = la nostra A "leggera" di oggi: proposta senza
+               modello, il modello solo a chi accetta, il client sceglie
+               (E, B) al training e lo dice con l'update.
+   - model     = A classica: modello + intervallo subito ai primi 20, il
+               client sceglie o si ritira. E' gia' l'ablazione noneg.
+               Da correggere: chi si ritira oggi paga lo scambio intero
+               (~181 J, download + upload, strategies/fedavg.py:314),
+               dovrebbe pagare solo il download (~46 J).
+   - broadcast = B: il server usa le risposte al broadcast (SoC e
+               workload veri) al posto della stima (_refresh_state in
+               sage_smart.py) e decide lui (E, B) (_assign_work), con
+               l'ultima loss riportata; il client esegue, con la guardia
+               sulla batteria.
+   - Il broadcast di SAGE-smart lo decide il protocollo (acceso solo in
+     B), non experiment.toml. SAGE ed ESCS invariati.
+   - Nelle due A il 10 % di non risposta vale anche per le proposte (chi
+     non risponde conta come rifiuto).
+   - Etichette nuove in _shard.sh.
+   - Da combinare col workload: 3 protocolli x 3 moltiplicatori = 9 run,
+     beta 0.1, seed 2026.
+   - Nota: oggi (broadcast = true) SAGE-smart paga il broadcast ma ordina
+     con la stima; per questo l'ablazione "senza stima" mostra poco.
+
+
+C. LAVORO SENZA GPU (si puo' fare mentre gira la v2)
+----------------------------------------------------
+
+7. Protocolli A e B descritti sulla carta (chiesto in call il 30/10)
+   - Tabella: messaggi, MB, joule, download sprecati, ritardo.
+   - Numeri: rifiuto ~2 J nella A leggera, ~46 J nella A classica
+     (44.9 MB x 0.98 J/MB + 2.1 J di sessione); broadcast ~150 J a round
+     (70 non scelti x 2.1 J), ~10 Wh su 250 round.
+   - A classica costa meno di B finche' ci sono meno di ~3 rifiuti a
+     round; la A leggera costa meno di entrambe quasi sempre.
+
+8. Distribuzione dei morti (chiesta in call il 30/10), dai file
+   .devsoc e .devinfo
+   - Morti per tier, per workload e nel tempo.
+   - Istogramma del SoC finale.
+   - Partecipazioni per device (min, mediana, max, Gini).
+
+9. Accuracy ed energia in funzione del tempo simulato (confronto a pari
+   tempo), seed 2026.
+
+10. Limite dei log nuovi
+    - Le 66 run dei seed 42 e 73 copiate da cap_aug non hanno .devsoc,
+      .devinfo ne' sim_time_s.
+    - Grafici per device e nel tempo completi solo col seed 2026;
+      per averli su 3 seed bisognerebbe rifare quelle 66 run (~3.5 giorni).
+
+11. Report 14 con tutto questo.
+
+12. Scheletro del paper ISLPED (cartella ISLPED27___Federated_SoC):
+    struttura, metodo, sezione sui protocolli; i numeri alla fine.
+
+
+D. PICCOLE COSE
+---------------
+
+13. Report 13: percorsi delle figure rotti (la cartella report13_figs e'
+    stata spostata in tesifl/results_report13_figs).
+
+14. Controllo in run.sh: non partire se la GPU scelta ha gia' piu' di
+    1 GB occupato (proposto, da approvare). E' gia' successo due volte
+    (Stanis e v2).
+
+15. ESCS-MD a beta 0.1 non identico tra cap_aug e v2 dopo il round 134
+    (non-determinismo della GPU): una frase in tesi.

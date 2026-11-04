@@ -12,7 +12,7 @@ from device.battery_model import energy_wh_linear
 from device.communication_model import comm_power_w, comm_time_s
 from device.compute_model import probe_time_s, training_time_s
 from device.communication_model import ctrl_latency_s
-from device.constants import V_NOMINAL, WORKLOAD_STATES
+from device.constants import V_NOMINAL
 from device.fuel_gauge import DeviceReading
 from device.world_state import (
     BATTERY_NAMES, battery_delta_soc, effective_profile, idle_power_w,
@@ -239,8 +239,9 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
                                    (partition_sizes or {}).items()}
         # [B] workload ignoto = caso peggiore (proposta, Fase 1): meglio
         # proporre poco lavoro a un client che si scopre libero che troppo a
-        # uno che si scopre occupato.
-        self.w_busy = float(max(WORKLOAD_STATES.values()))
+        # uno che si scopre occupato. Segue workload-scale (04/11): a scale 1
+        # e' 0.30 come prima.
+        self.w_busy = self.world.workload.max_utilization()
 
         self._last_seen: dict[int, int] = {}       # cid -> ultimo round scelto
         self._plan: dict[int, Envelope] = {}       # cid -> envelope del round
@@ -654,6 +655,17 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
 
     def _is_optout(self, reply: Message) -> bool:
         return int(self._rep(reply, "smart-optout", 0) or 0) == 1
+
+    def _charge_communication(self, cid: int, reply: Message) -> tuple[float, float]:
+        """Chi si ritira ha scaricato il modello ma non carica l'update: paga
+        il download e la risposta di ritiro (uno scambio di controllo
+        isolato), non lo scambio intero. [B] 04/11: prima pagava ~181 J invece
+        di ~48 J, e l'ablazione senza negoziazione risultava penalizzata."""
+        if not self._is_optout(reply):
+            return super()._charge_communication(cid, reply)
+        e_dl, l_dl = self.world.apply_download(cid)
+        e_ct, l_ct = self.world.apply_control(cid, merged=False)
+        return e_dl + e_ct, l_dl + l_ct
 
     def _work_done(self, cid: int, n_ex: int, reply: Message) -> tuple[float, int]:
         """Lavoro dichiarato dal client -> durata, per l'addebito fisico.
