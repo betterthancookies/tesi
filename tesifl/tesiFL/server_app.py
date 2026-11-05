@@ -206,6 +206,10 @@ def main(grid: Grid, context: Context) -> None:
             "nonova":  {"fednova": False},                       # media FedAvg (ora default)
             "b128":    {"batch_min": batch_size, "batch_max": batch_size},  # B = 128
             "nova":    {"fednova": True},                        # FedNova come fino a cap_aug
+            # [B] 05/11, AGGIUNTE dopo l'esperimento sul workload (non tolgono,
+            # accendono): etichette sage_smart_plus* in _shard.sh
+            "dlrefuse": {"refuse_deadline": True},              # rifiuto anche per deadline
+            "loadavg":  {"load_estimate": "mean"},              # stima col workload medio
         }
         # [B] 04/11: per l'esperimento sul workload l'etichetta sage_smart_noinfo
         # (_shard.sh) passa "noneg+noest": senza negoziazione e senza stima,

@@ -200,6 +200,8 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         soc_source: str = "estimate",
         negotiation: bool = True,
         fednova: bool = False,
+        refuse_deadline: bool = False,
+        load_estimate: str = "last",
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -212,11 +214,26 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         #                        ritirarsi dopo aver scaricato il modello
         #   fednova False:       media pesata per i dati (FedAvg) al posto di
         #                        FedNova
+        # [B] 05/11, dopo l'esperimento sul workload (spenti di default, cosi'
+        # le campagne fino alla v2 restano valide; li accende "plus" in
+        # server_app):
+        #   refuse_deadline True: nella proposta il client rifiuta anche se il
+        #                        lavoro minimo non sta nella deadline col suo
+        #                        workload attuale (client_policy.accepts_proposal)
+        #   load_estimate "mean": la stima del SoC estrapola l'idle col workload
+        #                        MEDIO riportato dal client, non con l'ultimo. A
+        #                        x3 l'ultimo, preso come costante per decine di
+        #                        minuti, dava 8.7 punti di errore contro i 5.3
+        #                        del report senza stima.
         if soc_source not in ("estimate", "report"):
             raise ValueError(f"soc_source: 'estimate' o 'report', non {soc_source!r}")
+        if load_estimate not in ("last", "mean"):
+            raise ValueError(f"load_estimate: 'last' o 'mean', non {load_estimate!r}")
         self.soc_source = soc_source
         self.negotiation = bool(negotiation)
         self.fednova = bool(fednova)
+        self.refuse_deadline = bool(refuse_deadline)
+        self.load_estimate = load_estimate
         self.stale_w = float(stale_weight)
         self.stale_max = int(stale_max)
         self.soc_min = float(soc_min)
@@ -254,6 +271,8 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         self._soc_rep: dict[int, float] = {}
         self._t_rep: dict[int, float] = {}
         self._w_rep: dict[int, float] = {}
+        self._w_sum: dict[int, float] = {}         # workload riportati, per la media
+        self._w_cnt: dict[int, int] = {}
         self._chg_rep: dict[int, bool] = {}
         self._soc_known: dict[int, float] = {}
         self._chg_known: dict[int, bool] = {}
@@ -276,9 +295,13 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
     def variant(self) -> str:
         off = [name for name, on in (("stima SoC", self.soc_source == "estimate"),
                                      ("negoziazione", self.negotiation)) if not on]
+        on = [name for name, flag in (("FedNova", self.fednova),
+                                      ("rifiuto per deadline", self.refuse_deadline),
+                                      ("workload medio", self.load_estimate == "mean"))
+              if flag]
         # [B] dal 30/10 FedNova e' spento di default: si segnala quando e' acceso
         return (f"sage-smart-{self.world.battery}"
-                + (" CON FedNova" if self.fednova else "")
+                + (f" CON {', '.join(on)}" if on else "")
                 + (f" SENZA {', '.join(off)}" if off else ""))
 
     def configure_train(self, server_round, arrays, config, grid):
@@ -319,7 +342,9 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         cids = list(self._node_to_cid.values())
         for c in cids:
             # il primo "report" e' l'iscrizione, al tempo 0, workload ignoto
-            self._record(c, self._sensor_soc(c), self.w_busy, False, 0.0)
+            # (non entra nella media dei workload: non e' una lettura vera)
+            self._record(c, self._sensor_soc(c), self.w_busy, False, 0.0,
+                         measured=False)
             self._k_cal[c] = 1.0
         nominal = [
             training_time_s(self.world.profile(c), int(self.epochs),
@@ -335,8 +360,12 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
             self.epochs, self.batch_size, self.max_waves,
             BATTERY_NAMES[self.world.battery])
 
-    def _record(self, cid: int, soc: float, w: float, chg: bool, t: float) -> None:
+    def _record(self, cid: int, soc: float, w: float, chg: bool, t: float,
+                measured: bool = True) -> None:
         """Un report del client: diventa anche lo stato noto."""
+        if measured:
+            self._w_sum[cid] = self._w_sum.get(cid, 0.0) + float(w)
+            self._w_cnt[cid] = self._w_cnt.get(cid, 0) + 1
         self._soc_rep[cid], self._w_rep[cid] = float(soc), float(w)
         self._chg_rep[cid], self._t_rep[cid] = bool(chg), float(t)
         self._soc_known[cid], self._w_known[cid] = float(soc), float(w)
@@ -364,6 +393,10 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         if dt <= 0.0:
             return float(soc)
         w = self._w_rep.get(cid, self.w_busy)
+        if self.load_estimate == "mean" and self._w_cnt.get(cid):
+            # media dei workload riportati: su un intervallo di decine di
+            # minuti il workload cambia stato, l'ultimo valore non dura
+            w = self._w_sum[cid] / self._w_cnt[cid]
         prof = self.world.profile(cid)
         p_idle = idle_power_w(prof, w)
         n = max(1, math.ceil(dt / _ESTIMATE_STEP_S))
@@ -621,6 +654,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
             deadline_s=float(self._deadline_s) if math.isfinite(self._deadline_s)
             else 1e12,
             soc_min=float(self.soc_min), probe_samples=self.probe_samples,
+            refuse_deadline=self.refuse_deadline,
         )
 
     def _per_client_config(

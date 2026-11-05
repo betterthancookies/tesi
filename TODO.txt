@@ -33,6 +33,19 @@ Numeri dell'introduzione aggiornati con la v2.
      workload_sweep.sh (19 run, campagna workload_ResNet18_C100).
      fastTest x1 identico alla v2; fastTest x3 ok tranne il falso allarme
      sulla soglia bassa del training (rampa di SAGE, 2-4 client).
+   - [05/11] PRIMO GIRO FATTO (19 run): fino a x2 le 4 varianti sono uguali
+     entro il rumore; a x3 il completo e' il peggiore (28.6% contro 32-36%).
+     Perche': il client rifiuta solo per la batteria, ma il limite vero e' la
+     deadline (98% degli envelope); i client carichi accettano e lavorano in
+     ritardo (round medio 181 s a x1, 455 s a x3; idle 623 -> 1615 Wh). La
+     stima col workload dell'ultimo report sbaglia di 8.7 punti a x3.
+     Distacco da FedAvg in crescita col carico (x2: 44% contro 22%; x3:
+     FedAvg esaurisce tutti i 100 telefoni al round 200).
+   - [05/11] SECONDO GIRO, codice scritto: SAGE-smart "plus" (rifiuto anche
+     per deadline + stima col workload medio), interruttori spenti di default
+     (v2 invariata). WL_PLUS=1 bash workload_sweep.sh: 12 run.
+     Se plus e' meglio anche a x1: rifare SAGE-smart nella campagna
+     principale (27 run) e aggiornare il metodo nel paper.
    - Morti SENZA FL (seed 2026, solo modello del mondo), a 12 h / 24 h:
      x1 8/21, x1.5 17/32, x2 26/44, x3 46/63. A x1 i ~8 morti di SAGE-smart
      (run di ~11.6 h) sono quasi tutti di fondo; FedAvg dura ~25 h.

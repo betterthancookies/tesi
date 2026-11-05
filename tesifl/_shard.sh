@@ -100,6 +100,16 @@ sage_smart_nonova|sage_smart_b128)
       # SoC spente insieme, che i relatori vedono come un componente solo
       sage_smart_noinfo) algo="sage_smart"
                   extra="sage-a=${QA} sage-b=${QB} smart-ablation='noneg+noest'" ;;
+      # [B] 05/11 SAGE-smart "plus": il client rifiuta la proposta anche se il
+      # lavoro minimo non sta nella deadline, e la stima del SoC usa il
+      # workload medio riportato. Le varianti tolgono negoziazione o stima.
+      # (senza entrambe = sage_smart_noinfo: i due interruttori non contano)
+      sage_smart_plus) algo="sage_smart"
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='dlrefuse+loadavg'" ;;
+      sage_smart_plus_noneg) algo="sage_smart"
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='noneg+dlrefuse+loadavg'" ;;
+      sage_smart_plus_noest) algo="sage_smart"
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='noest+dlrefuse+loadavg'" ;;
       escs_sd)    algo="escs-sd" ;;
       escs_sp)    algo="escs-sp" ;;
       escs_md)    algo="escs-md" ;;

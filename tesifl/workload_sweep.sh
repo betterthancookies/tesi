@@ -20,6 +20,15 @@
 #   campagna v2 (zero ritiri, quindi identica anche col codice del 04/11).
 #   4 x 5 - 1 = 19 run in fila sulla GPU di WL_GPUS (default 2, Corinna).
 #
+# SECONDO GIRO (05/11), WL_PLUS=1: SAGE-smart "plus", in cui il client rifiuta
+# la proposta anche se il lavoro minimo non sta nella deadline e la stima del
+# SoC usa il workload medio riportato. Nel primo giro a x3 la negoziazione non
+# serviva: i client carichi accettavano e lavoravano fuori deadline.
+#   WL_PLUS=1 nohup bash workload_sweep.sh > workload_plus.log 2>&1 &
+#   etichette sage_smart_plus_nm, sage_smart_plus_noneg_nm, sage_smart_plus_noest_nm
+#   x 4 moltiplicatori = 12 run, stessa cartella dei risultati. "Senza entrambe"
+#   e FedAvg non cambiano: si riusano quelle del primo giro.
+#
 # Come ablation_cum.sh: experiment.toml derivato (sweeps/experiment_workload.toml)
 # che cambia SOLO nome, GPU, seed, beta e algoritmi; fisica, [algo] e [model]
 # restano quelli della campagna principale. Il moltiplicatore viaggia nel nome
@@ -34,7 +43,11 @@ GPUS_WL=${WL_GPUS:-"2"}
 SEEDS_WL=${WL_SEEDS:-"2026"}
 BETAS_WL=${WL_BETAS:-"0.1"}
 MULTS=${WL_MULTS:-"x3 x2 x1p5 x1"}
-VARIANTS=${WL_VARIANTS:-"sage_smart_nm sage_smart_noneg_nm sage_smart_noest_nm sage_smart_noinfo_nm fedavg_nm"}
+if [ "${WL_PLUS:-0}" = "1" ]; then
+  VARIANTS=${WL_VARIANTS:-"sage_smart_plus_nm sage_smart_plus_noneg_nm sage_smart_plus_noest_nm"}
+else
+  VARIANTS=${WL_VARIANTS:-"sage_smart_nm sage_smart_noneg_nm sage_smart_noest_nm sage_smart_noinfo_nm fedavg_nm"}
+fi
 if [ -z "${WL_ALGOS:-}" ]; then
   WL_ALGOS=""
   for m in $MULTS; do

@@ -58,11 +58,17 @@ K_BATCHES = "smart-batches"
 K_DEADLINE = "smart-deadline-s"
 K_SOC_MIN = "smart-soc-min"
 K_PROBE = "smart-probe-samples"
+K_REFUSE_DL = "smart-refuse-deadline"
 
 
 @dataclass(frozen=True)
 class Envelope:
-    """Proposta del server: dentro questi limiti decide il client."""
+    """Proposta del server: dentro questi limiti decide il client.
+
+    refuse_deadline: il client rifiuta la proposta anche se E_lo non sta
+    nella deadline col workload di adesso (vedi accepts_proposal). Viaggia
+    nel messaggio solo se acceso.
+    """
 
     e_lo: int
     e_hi: int
@@ -70,9 +76,10 @@ class Envelope:
     deadline_s: float
     soc_min: float
     probe_samples: int
+    refuse_deadline: bool = False
 
     def to_config(self) -> dict:
-        return {
+        cfg = {
             K_E_LO: int(self.e_lo),
             K_E_HI: int(self.e_hi),
             K_BATCHES: [int(b) for b in self.batches],
@@ -80,6 +87,9 @@ class Envelope:
             K_SOC_MIN: float(self.soc_min),
             K_PROBE: int(self.probe_samples),
         }
+        if self.refuse_deadline:
+            cfg[K_REFUSE_DL] = 1
+        return cfg
 
     @classmethod
     def from_config(cls, cfg) -> "Envelope":
@@ -90,6 +100,7 @@ class Envelope:
             deadline_s=float(cfg[K_DEADLINE]),
             soc_min=float(cfg[K_SOC_MIN]),
             probe_samples=int(cfg[K_PROBE]),
+            refuse_deadline=bool(int(cfg[K_REFUSE_DL])) if K_REFUSE_DL in cfg else False,
         )
 
     @staticmethod
@@ -147,8 +158,27 @@ def accepts_proposal(reading: DeviceReading, env: Envelope, n_samples: int) -> b
     controllo che fara' di nuovo al momento del training: qui serve a
     rifiutare PRIMA di scaricare il modello, cosi' il server puo' chiamare
     un altro client nello stesso round.
+
+    [B] 05/11, con env.refuse_deadline: rifiuta anche se E_lo non sta nella
+    deadline nemmeno col B piu' veloce, col workload di ADESSO. Senza, un
+    client molto carico accetta e poi lavora fuori deadline: allunga il round
+    e l'idle di tutti (esperimento sul workload, x3: round medio 455 s contro
+    181 s a x1, 98% degli envelope limitati dalla deadline). Il workload e'
+    l'informazione che ha solo il client; al training la regola non cambia
+    (il modello e' gia' scaricato, vedi decide).
     """
-    return can_afford_minimum(reading, env, n_samples)
+    if not can_afford_minimum(reading, env, n_samples):
+        return False
+    if env.refuse_deadline and not can_meet_deadline(reading, env, n_samples):
+        return False
+    return True
+
+
+def can_meet_deadline(reading: DeviceReading, env: Envelope, n_samples: int) -> bool:
+    """E_lo col B piu' veloce dell'envelope sta nella deadline, col workload
+    attuale? Stessa durata (training + stima della loss) che usa decide."""
+    return min(reading.work_time_s(env.e_lo, b, n_samples, env.probe_samples)
+               for b in env.batches) <= env.deadline_s
 
 
 def decide(reading: DeviceReading, env: Envelope, n_samples: int,
