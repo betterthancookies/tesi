@@ -75,6 +75,24 @@ Numeri dell'introduzione aggiornati con la v2.
      (2 run). Interruttore spento di default: v2 e plus invariati.
      Da guardare: a x1 nessun client mai selezionato e Gini ~0.32; a x3
      guadagno del plus mantenuto (38.9% / 1760 Wh / 59 morti).
+   - [06/11] TERZO GIRO FATTO (2 run). plus2: x1 49.9/1249/10 (plus
+     49.1/1072/7, 1o giro 49.4/1285/15), mai scelti 0 (plus 8), Gini 0.35;
+     x3 33.8/1758/72 (plus 38.9/1760/59, 1o giro 28.6/1972/78).
+     L'esclusione e' risolta ma il guadagno del plus in gran parte sparisce:
+     i ritardi erano soprattutto STRUTTURALI (telefono lento + molti dati),
+     non di carico: x1 ritardi 1o giro 691, plus2 495, plus 69.
+     Opzioni proposte: A plus2 (inclusivo, guadagno piccolo), B plus
+     (efficiente, esclude), C lavoro parziale per chi non sta nella deadline
+     nemmeno a riposo (meno di E_lo epoche, quanti passi stanno nella
+     deadline) + peso in aggregazione da decidere. In attesa della scelta.
+   - [06/11] Scelta C (ok dell'utente), codice SCRITTO: "plus3" = plus2 +
+     lavoro parziale (partial_work, chiave smart-partial-work, token
+     partial). Al training, se nemmeno E_lo sta nella deadline (e E_lo e'
+     sostenibile), il client fa i passi che ci stanno (deadline_steps, B piu'
+     piccolo che la batteria regge). Peso nella media = campioni visti,
+     min(n, passi*B) (metrica smart-weight; aggregazione manuale in sage_smart
+     solo nei round con almeno un parziale). Colonne nuove smart_n_partial,
+     smart_weight_frac. WL_PLUS=3 bash workload_sweep.sh = x3 e x1.
 
 [06/11] REPORT 14 SCRITTO: 14_report_week_02_11.tex, figure in report14_figs/
 (script nello scratchpad: r14_stats.py, r14_figs.py). Dentro: v2, distribuzione

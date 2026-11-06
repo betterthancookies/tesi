@@ -213,6 +213,9 @@ def main(grid: Grid, context: Context) -> None:
             # [B] 06/11: rifiuto per deadline solo se colpa del carico (a
             # riposo ci starebbe); etichetta sage_smart_plus2
             "dlload":   {"refuse_deadline": True, "refuse_load_only": True},
+            # [B] 06/11: chi non sta nella deadline nemmeno con E_lo fa i passi
+            # che ci stanno (lavoro parziale); etichetta sage_smart_plus3
+            "partial":  {"partial_work": True},
         }
         # [B] 04/11: per l'esperimento sul workload l'etichetta sage_smart_noinfo
         # (_shard.sh) passa "noneg+noest": senza negoziazione e senza stima,

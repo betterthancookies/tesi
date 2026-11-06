@@ -36,6 +36,13 @@
 #   etichetta sage_smart_plus2_nm a x3 e x1 = 2 run (WL_MULTS="x2 x1p5" per
 #   gli altri due carichi).
 #
+# QUARTO GIRO (06/11), WL_PLUS=3: "plus3" = plus2 + lavoro parziale (chi non
+# sta nella deadline nemmeno con E_lo fa i passi che ci stanno e pesa nella
+# media per i campioni visti). Col plus2 quei client arrivavano sempre in
+# ritardo (x1: ~430 dei 495 ritardi).
+#   WL_PLUS=3 nohup bash workload_sweep.sh > workload_plus3.log 2>&1 &
+#   etichetta sage_smart_plus3_nm a x3 e x1 = 2 run.
+#
 # Come ablation_cum.sh: experiment.toml derivato (sweeps/experiment_workload.toml)
 # che cambia SOLO nome, GPU, seed, beta e algoritmi; fisica, [algo] e [model]
 # restano quelli della campagna principale. Il moltiplicatore viaggia nel nome
@@ -50,7 +57,12 @@ GPUS_WL=${WL_GPUS:-"2"}
 SEEDS_WL=${WL_SEEDS:-"2026"}
 BETAS_WL=${WL_BETAS:-"0.1"}
 MULTS=${WL_MULTS:-"x3 x2 x1p5 x1"}
-if [ "${WL_PLUS:-0}" = "2" ]; then
+if [ "${WL_PLUS:-0}" = "3" ]; then
+  # [B] 06/11 QUARTO GIRO, plus3: plus2 + lavoro parziale per chi non sta
+  # nella deadline nemmeno con E_lo. Stessi due carichi del terzo giro.
+  MULTS=${WL_MULTS:-"x3 x1"}
+  VARIANTS=${WL_VARIANTS:-"sage_smart_plus3_nm"}
+elif [ "${WL_PLUS:-0}" = "2" ]; then
   # [B] 06/11 TERZO GIRO, plus2: rifiuto per deadline solo se colpa del
   # carico. Prima i due carichi che decidono (x3: guadagno, x1: esclusi);
   # gli altri con WL_MULTS="x2 x1p5".

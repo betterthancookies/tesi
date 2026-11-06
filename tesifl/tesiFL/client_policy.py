@@ -60,6 +60,7 @@ K_SOC_MIN = "smart-soc-min"
 K_PROBE = "smart-probe-samples"
 K_REFUSE_DL = "smart-refuse-deadline"
 K_REFUSE_LOAD = "smart-refuse-load-only"
+K_PARTIAL = "smart-partial-work"
 
 
 @dataclass(frozen=True)
@@ -70,7 +71,10 @@ class Envelope:
     nella deadline col workload di adesso (vedi accepts_proposal).
     refuse_load_only: con refuse_deadline, rifiuta per la deadline SOLO se
     a riposo (workload 0) ci starebbe: il ritardo e' colpa del carico del
-    momento. Viaggiano nel messaggio solo se accesi.
+    momento.
+    partial_work: al training, se nemmeno E_lo sta nella deadline il client
+    fa i passi di SGD che ci stanno (meno di E_lo epoche) invece di lavorare
+    in ritardo (vedi decide). Viaggiano nel messaggio solo se accesi.
     """
 
     e_lo: int
@@ -81,6 +85,7 @@ class Envelope:
     probe_samples: int
     refuse_deadline: bool = False
     refuse_load_only: bool = False
+    partial_work: bool = False
 
     def to_config(self) -> dict:
         cfg = {
@@ -95,6 +100,8 @@ class Envelope:
             cfg[K_REFUSE_DL] = 1
         if self.refuse_load_only:
             cfg[K_REFUSE_LOAD] = 1
+        if self.partial_work:
+            cfg[K_PARTIAL] = 1
         return cfg
 
     @classmethod
@@ -108,6 +115,7 @@ class Envelope:
             probe_samples=int(cfg[K_PROBE]),
             refuse_deadline=bool(int(cfg[K_REFUSE_DL])) if K_REFUSE_DL in cfg else False,
             refuse_load_only=bool(int(cfg[K_REFUSE_LOAD])) if K_REFUSE_LOAD in cfg else False,
+            partial_work=bool(int(cfg[K_PARTIAL])) if K_PARTIAL in cfg else False,
         )
 
     @staticmethod
@@ -126,6 +134,7 @@ class Plan:
     utility: float = 0.0
     e_target: int = 0
     reason: str = ""
+    steps_cap: int = 0          # > 0: lavoro parziale, al massimo tanti passi
 
 
 def statistical_utility(loss: float, n_classes: int = 10) -> float:
@@ -228,15 +237,62 @@ def decide(reading: DeviceReading, env: Envelope, n_samples: int,
                 return Plan(False, e, b, t, soc_end, True, u, e_target,
                             "target" if e == e_target else "ridotto")
 
+    # [B] 06/11, LAVORO PARZIALE (env.partial_work): nessun E >= E_lo sta
+    # nella deadline. Invece di fare E_lo in ritardo (il round aspetta e tutti
+    # pagano idle), il client fa i passi di SGD che stanno nella deadline, col
+    # B piu' piccolo che la batteria regge (piu' passi per lo stesso tempo,
+    # come nel resto della regola). Riguarda soprattutto i telefoni lenti con
+    # molti dati, che non stanno nella deadline nemmeno a riposo: col solo
+    # rifiuto per deadline non partecipavano mai, accettando arrivavano
+    # sempre in ritardo (workload x1: ~430 ritardi su 495). L'update pesa nella
+    # media per i campioni visti davvero (smart-weight, vedi sage_smart).
+    # Solo se E_lo e' sostenibile per la batteria (feasible): il caso
+    # "riserva" (ritiro) resta quello di prima.
+    feasible = options(env.e_lo)
+    if feasible and env.partial_work:
+        for b in sorted(env.batches):
+            k = deadline_steps(reading, env, n_samples, b)
+            t, soc_end = reading.predict(k / steps_per_epoch(n_samples, b), b, n_samples, p)
+            if _energy_ok(reading, soc_end, env.soc_min):
+                return Plan(False, env.e_lo, b, t, soc_end, t <= env.deadline_s, u, e_target,
+                            "parziale", steps_cap=k)
+
     # nessun E rispetta la deadline: E_lo col batch piu' veloce, se la
     # batteria lo regge. La deadline e' un vincolo di comparabilita', la
     # riserva no.
-    feasible = options(env.e_lo)
     if feasible:
         b, t, soc_end = min(feasible, key=lambda o: o[1])
         return Plan(False, env.e_lo, b, t, soc_end, False, u, e_target,
                     "fuori-deadline")
     return Plan(True, utility=u, e_target=e_target, reason="riserva")
+
+
+def steps_per_epoch(n_samples: int, batch: int) -> int:
+    """ceil(n / B), come len(DataLoader) nel client."""
+    return max(1, math.ceil(n_samples / batch))
+
+
+def deadline_steps(reading: DeviceReading, env: Envelope, n_samples: int, batch: int) -> int:
+    """Massimo numero di passi di SGD (al piu' E_lo epoche) la cui durata,
+    stima della loss compresa e col workload attuale, sta nella deadline.
+    Almeno 1: se non ci sta nemmeno un passo, se ne fa uno (ritardo minimo).
+    La durata e' lineare nelle epoche, quindi la ricerca binaria e' esatta."""
+    spe = steps_per_epoch(n_samples, batch)
+
+    def fits(k: int) -> bool:
+        return reading.work_time_s(k / spe, batch, n_samples, env.probe_samples) <= env.deadline_s
+
+    hi = env.e_lo * spe
+    if fits(hi):
+        return hi
+    lo = 0                       # fits(0): la sola stima della loss, si assume
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        if fits(mid):
+            lo = mid
+        else:
+            hi = mid
+    return max(1, lo)
 
 
 def affordable_steps(reading: DeviceReading, env: Envelope, n_samples: int,

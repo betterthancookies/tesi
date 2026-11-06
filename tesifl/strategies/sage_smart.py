@@ -202,6 +202,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         fednova: bool = False,
         refuse_deadline: bool = False,
         refuse_load_only: bool = False,
+        partial_work: bool = False,
         load_estimate: str = "last",
         **kwargs,
     ) -> None:
@@ -233,8 +234,14 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         #                        nemmeno a riposo accetta come nella v2. Col
         #                        solo refuse_deadline i telefoni lenti con
         #                        molti dati rifiutavano sempre.
+        #   partial_work True:   al training chi non sta nella deadline nemmeno
+        #                        con E_lo fa i passi che ci stanno invece di
+        #                        lavorare in ritardo; nella media pesa per i
+        #                        campioni visti davvero (aggregate_train).
         if refuse_load_only and not refuse_deadline:
             raise ValueError("refuse_load_only richiede refuse_deadline")
+        if partial_work and fednova:
+            raise ValueError("partial_work non e' previsto con FedNova")
         if soc_source not in ("estimate", "report"):
             raise ValueError(f"soc_source: 'estimate' o 'report', non {soc_source!r}")
         if load_estimate not in ("last", "mean"):
@@ -244,6 +251,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         self.fednova = bool(fednova)
         self.refuse_deadline = bool(refuse_deadline)
         self.refuse_load_only = bool(refuse_load_only)
+        self.partial_work = bool(partial_work)
         self.load_estimate = load_estimate
         self.stale_w = float(stale_weight)
         self.stale_max = int(stale_max)
@@ -310,6 +318,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
                                       ("rifiuto per deadline" + (" (solo se colpa del carico)"
                                                                  if self.refuse_load_only else ""),
                                        self.refuse_deadline),
+                                      ("lavoro parziale", self.partial_work),
                                       ("workload medio", self.load_estimate == "mean"))
               if flag]
         # [B] dal 30/10 FedNova e' spento di default: si segnala quando e' acceso
@@ -669,6 +678,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
             soc_min=float(self.soc_min), probe_samples=self.probe_samples,
             refuse_deadline=self.refuse_deadline,
             refuse_load_only=self.refuse_load_only,
+            partial_work=self.partial_work,
         )
 
     def _per_client_config(
@@ -824,6 +834,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
             # mondo dopo l'addebito di training + upload (l'idle viene dopo)
             "soc_err": abs(float(self.world.snapshot(cid).soc) - soc1),
             "rejected": (not optout) and not self._in_envelope(cid, reply),
+            "partial": int(self._rep(reply, "smart-partial", 0)),
         }
         if self._reports[cid]["rejected"]:
             log(INFO, "%s round %s: update del client %s fuori envelope, "
@@ -866,6 +877,9 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
             "smart_waves": int(self._waves),
             "smart_overhead_s": float(self._overhead_s),
         }
+        if self.partial_work:
+            # [B] solo con il lavoro parziale: le altre run hanno le colonne di prima
+            st["smart_n_partial"] = int(sum(1 for r in done if r.get("partial")))
         log(INFO, "%s: %s risposte | E eseguite %.1f (min %.2f, max %.2f) "
             "| E_hi medio %.1f (energia %s, deadline %s) | opt-out %s | "
             "fuori deadline %s | errore SoC %.1e | errore stato noto %.3f",
@@ -943,6 +957,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         keys = list(self._global_arrays.keys())
         glob = [self._global_arrays[k].numpy().astype(np.float64) for k in keys]
         rows = []
+        wts = []        # campioni visti davvero (smart-weight), solo col lavoro parziale
         # stesse reply che super() ha mediato: senza opt-out e fuori envelope
         for r in self._aggregatable(replies):
             if not r.has_content():
@@ -956,6 +971,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
             key = sorted(r.content.array_records)[0]
             rec = r.content.array_records[key]
             rows.append((n, tau, [rec[k].numpy() for k in keys]))
+            wts.append(float(self._metric(r, "smart-weight", default=n)))
 
         if len(rows) < 2:
             return arrays, metrics
@@ -997,6 +1013,27 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
             "spread %.1f", server_round, "FedNova" if self.fednova else "FedAvg",
             len(rows), int(min(taus)), int(max(taus)), tau_eff,
             max(taus) / max(1.0, min(taus)))
+        if self.partial_work and any(w < n for w, (n, _, _) in zip(wts, rows)):
+            # [B] 06/11 LAVORO PARZIALE: media pesata per i campioni VISTI,
+            # min(n, passi * B), invece che per n. Cambia solo il peso di chi
+            # ha fatto meno di un'epoca (un update da meta' dati non deve pesare
+            # come uno da tutti); nei round senza lavoro parziale resta la media
+            # di super(), identica. BatchNorm mediata allo stesso modo.
+            tot_w = sum(wts)
+            q = [w / tot_w for w in wts]
+            merged = ArrayRecord()
+            for j, k in enumerate(keys):
+                avg = np.asarray(sum(qi * row[2][j].astype(np.float64) for qi, row in zip(q, rows)),
+                                 dtype=np.float64).reshape(glob[j].shape)
+                dt = self._global_arrays[k].numpy().dtype
+                if np.issubdtype(dt, np.integer):
+                    avg = np.rint(avg)
+                merged[k] = Array(avg.astype(dt))
+            self._round_stats.setdefault(int(server_round), {}).update({
+                "smart_weight_frac": float(tot_w / sum(n for n, _, _ in rows)),
+            })
+            return merged, metrics
+
         if not self.fednova:
             # ablazione: la media pesata per i dati di super(), sulle stesse
             # reply (BatchNorm compresa, mediata allo stesso modo); le colonne

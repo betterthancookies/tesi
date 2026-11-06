@@ -227,6 +227,10 @@ def _train_client_driven(msg: Message, model, device, config, partition_id: int,
     loader = DataLoader(dataset, batch_size=plan.batch, shuffle=True)
     spe = len(loader)                        # ceil(n / B): passi per epoca
     planned = plan.epochs * spe
+    # [B] 06/11 lavoro parziale (env.partial_work): al massimo i passi che
+    # stanno nella deadline, vedi client_policy.decide
+    if plan.steps_cap > 0:
+        planned = min(planned, plan.steps_cap)
     budget = affordable_steps(reading, env, n, plan.batch, cap=planned)
     stats: dict = {}
     train_loss, loss_sq_sum, loss_n = train_fn(
@@ -261,6 +265,12 @@ def _train_client_driven(msg: Message, model, device, config, partition_id: int,
         "smart-loss-pre": float(loss_pre),
         "smart-loss-post": float(stats["last_loss"]),
     }
+    if env.partial_work:
+        # [B] solo con il lavoro parziale acceso, cosi' le altre run mandano
+        # esattamente le metriche di prima. smart-weight = campioni visti
+        # davvero (n se ha fatto almeno un'epoca): il peso nella media.
+        metrics["smart-partial"] = int(plan.steps_cap > 0)
+        metrics["smart-weight"] = int(min(n, steps * plan.batch))
     content = RecordDict({"arrays": ArrayRecord(model.state_dict()),
                           "metrics": MetricRecord(metrics)})
     return Message(content=content, reply_to=msg)

@@ -115,6 +115,11 @@ sage_smart_nonova|sage_smart_b128)
       # Col plus i telefoni lenti con molti dati rifiutavano sempre.
       sage_smart_plus2) algo="sage_smart"
                   extra="sage-a=${QA} sage-b=${QB} smart-ablation='dlload+loadavg'" ;;
+      # [B] 06/11 "plus3": plus2 + lavoro parziale. Chi non sta nella deadline
+      # nemmeno con E_lo (lento + molti dati) fa i passi che ci stanno invece
+      # di arrivare in ritardo; nella media pesa per i campioni visti.
+      sage_smart_plus3) algo="sage_smart"
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='dlload+loadavg+partial'" ;;
       escs_sd)    algo="escs-sd" ;;
       escs_sp)    algo="escs-sp" ;;
       escs_md)    algo="escs-md" ;;
