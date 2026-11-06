@@ -110,6 +110,11 @@ sage_smart_nonova|sage_smart_b128)
                   extra="sage-a=${QA} sage-b=${QB} smart-ablation='noneg+dlrefuse+loadavg'" ;;
       sage_smart_plus_noest) algo="sage_smart"
                   extra="sage-a=${QA} sage-b=${QB} smart-ablation='noest+dlrefuse+loadavg'" ;;
+      # [B] 06/11 "plus2": come plus, ma il rifiuto per deadline scatta solo
+      # se a riposo il client ci starebbe (colpa del carico del momento).
+      # Col plus i telefoni lenti con molti dati rifiutavano sempre.
+      sage_smart_plus2) algo="sage_smart"
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='dlload+loadavg'" ;;
       escs_sd)    algo="escs-sd" ;;
       escs_sp)    algo="escs-sp" ;;
       escs_md)    algo="escs-md" ;;

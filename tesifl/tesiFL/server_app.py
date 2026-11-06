@@ -210,6 +210,9 @@ def main(grid: Grid, context: Context) -> None:
             # accendono): etichette sage_smart_plus* in _shard.sh
             "dlrefuse": {"refuse_deadline": True},              # rifiuto anche per deadline
             "loadavg":  {"load_estimate": "mean"},              # stima col workload medio
+            # [B] 06/11: rifiuto per deadline solo se colpa del carico (a
+            # riposo ci starebbe); etichetta sage_smart_plus2
+            "dlload":   {"refuse_deadline": True, "refuse_load_only": True},
         }
         # [B] 04/11: per l'esperimento sul workload l'etichetta sage_smart_noinfo
         # (_shard.sh) passa "noneg+noest": senza negoziazione e senza stima,

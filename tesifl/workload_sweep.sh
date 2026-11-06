@@ -29,6 +29,13 @@
 #   x 4 moltiplicatori = 12 run, stessa cartella dei risultati. "Senza entrambe"
 #   e FedAvg non cambiano: si riusano quelle del primo giro.
 #
+# TERZO GIRO (06/11), WL_PLUS=2: "plus2", il rifiuto per deadline scatta solo
+# se a riposo il client ci starebbe (colpa del carico del momento). Col plus 8
+# telefoni low con molti dati non venivano mai selezionati a x1.
+#   WL_PLUS=2 nohup bash workload_sweep.sh > workload_plus2.log 2>&1 &
+#   etichetta sage_smart_plus2_nm a x3 e x1 = 2 run (WL_MULTS="x2 x1p5" per
+#   gli altri due carichi).
+#
 # Come ablation_cum.sh: experiment.toml derivato (sweeps/experiment_workload.toml)
 # che cambia SOLO nome, GPU, seed, beta e algoritmi; fisica, [algo] e [model]
 # restano quelli della campagna principale. Il moltiplicatore viaggia nel nome
@@ -43,7 +50,13 @@ GPUS_WL=${WL_GPUS:-"2"}
 SEEDS_WL=${WL_SEEDS:-"2026"}
 BETAS_WL=${WL_BETAS:-"0.1"}
 MULTS=${WL_MULTS:-"x3 x2 x1p5 x1"}
-if [ "${WL_PLUS:-0}" = "1" ]; then
+if [ "${WL_PLUS:-0}" = "2" ]; then
+  # [B] 06/11 TERZO GIRO, plus2: rifiuto per deadline solo se colpa del
+  # carico. Prima i due carichi che decidono (x3: guadagno, x1: esclusi);
+  # gli altri con WL_MULTS="x2 x1p5".
+  MULTS=${WL_MULTS:-"x3 x1"}
+  VARIANTS=${WL_VARIANTS:-"sage_smart_plus2_nm"}
+elif [ "${WL_PLUS:-0}" = "1" ]; then
   VARIANTS=${WL_VARIANTS:-"sage_smart_plus_nm sage_smart_plus_noneg_nm sage_smart_plus_noest_nm"}
 else
   VARIANTS=${WL_VARIANTS:-"sage_smart_nm sage_smart_noneg_nm sage_smart_noest_nm sage_smart_noinfo_nm fedavg_nm"}

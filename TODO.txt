@@ -46,6 +46,46 @@ Numeri dell'introduzione aggiornati con la v2.
      (v2 invariata). WL_PLUS=1 bash workload_sweep.sh: 12 run.
      Se plus e' meglio anche a x1: rifare SAGE-smart nella campagna
      principale (27 run) e aggiornare il metodo nel paper.
+   - [05/11 sera] Secondo giro, 4/12 run finite (x3 tutte e 3, x2 plus):
+     x3 plus 38.9% / 1760 Wh / 59 morti (1o giro 28.6 / 1972 / 78);
+     plus senza negoz. 33.7 / 2057 / 73; plus senza stima 35.5 / 1694 / 64.
+     x2 plus 46.1 / 1378 / 35 (1o giro 44.0 / 1648 / 45).
+     Ritardi x3 477 -> 150, round 455 -> 287 s. Negoziazione ora visibile.
+     Nota: in plus_noneg il rifiuto per deadline non agisce (niente
+     proposta): e' noneg + stima media. Manca x1 (decisivo). Un solo seed.
+   - [06/11] SECONDO GIRO FATTO (12/12). Plus contro completo del 1o giro
+     (acc / Wh / morti): x1 49.1/1072/7 vs 49.4/1285/15; x1.5 49.3/1257/19
+     vs 46.9/1503/28; x2 46.1/1378/35 vs 44.0/1648/45; x3 38.9/1760/59 vs
+     28.6/1972/78. Run piu' corte (x1 8.8 h vs 12.6 h).
+     Negoziazione (plus - plus_noneg): -14/-20% energia a ogni carico,
+     accuracy -1.7 (x1) ... +5.2 (x3). Stima: visibile solo a x3 (+3.4 pt).
+     ATTENZIONE: a x1 il 26% delle proposte e' rifiutato; 8 telefoni LOW mai
+     scelti (catena di workload bassa, SoC alto: troppi dati per stare nella
+     deadline anche a riposo); partecipazioni low 55 -> 31, Gini 0.32 -> 0.43.
+     Morti dovuti al FL (meno quelli senza FL a pari durata): x1 7 -> 6,
+     x3 13 -> 4: il calo dei morti viene soprattutto dalla durata piu' corta.
+     Proposta: rifiuto per deadline solo se colpa del carico attuale (chi non
+     ci sta nemmeno a riposo accetta come prima), provare a x1 e x3, poi
+     rifare le 27 run principali. RIMANDATA dall'utente il 06/11 (prima il
+     report 14); da fare dopo.
+   - [06/11 sera] TERZO GIRO, codice scritto (ok dell'utente): "plus2" =
+     rifiuto per deadline solo se a riposo ci starebbe (refuse_load_only,
+     chiave smart-refuse-load-only, token dlload) + workload medio.
+     Etichetta sage_smart_plus2; WL_PLUS=2 bash workload_sweep.sh = x3 e x1
+     (2 run). Interruttore spento di default: v2 e plus invariati.
+     Da guardare: a x1 nessun client mai selezionato e Gini ~0.32; a x3
+     guadagno del plus mantenuto (38.9% / 1760 Wh / 59 morti).
+
+[06/11] REPORT 14 SCRITTO: 14_report_week_02_11.tex, figure in report14_figs/
+(script nello scratchpad: r14_stats.py, r14_figs.py). Dentro: v2, distribuzione
+dei morti (punto 8), pari tempo e pari accuracy (punto 9), protocolli (punto 7),
+workload primo e secondo giro. Numeri nuovi da ricordare:
+  - a pari tempo (11.5 h) SAGE-smart +8.2 punti ma +16% energia di FedAvg
+    (250 round contro 109); a pari accuracy -43/-45/-52% di energia
+    (40/45/50%) e meno di meta' del tempo. Nel paper: energia per accuracy.
+  - morti seed 2026: SAGE-smart 9 di cui 7 ci sarebbero anche senza FL;
+    FedAvg +47 rispetto al mondo senza FL (24 dei 34 telefoni low).
+  - senza FL: primo morto a 7.7 h, 23 a 25 h (13 high, nessuno con poco uso).
    - Morti SENZA FL (seed 2026, solo modello del mondo), a 12 h / 24 h:
      x1 8/21, x1.5 17/32, x2 26/44, x3 46/63. A x1 i ~8 morti di SAGE-smart
      (run di ~11.6 h) sono quasi tutti di fondo; FedAvg dura ~25 h.

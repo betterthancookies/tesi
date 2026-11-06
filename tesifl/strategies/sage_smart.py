@@ -201,6 +201,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         negotiation: bool = True,
         fednova: bool = False,
         refuse_deadline: bool = False,
+        refuse_load_only: bool = False,
         load_estimate: str = "last",
         **kwargs,
     ) -> None:
@@ -225,6 +226,15 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         #                        x3 l'ultimo, preso come costante per decine di
         #                        minuti, dava 8.7 punti di errore contro i 5.3
         #                        del report senza stima.
+        # [B] 06/11:
+        #   refuse_load_only True: con refuse_deadline, il client rifiuta per
+        #                        la deadline solo se a riposo ci starebbe
+        #                        (colpa del carico del momento); chi non ci sta
+        #                        nemmeno a riposo accetta come nella v2. Col
+        #                        solo refuse_deadline i telefoni lenti con
+        #                        molti dati rifiutavano sempre.
+        if refuse_load_only and not refuse_deadline:
+            raise ValueError("refuse_load_only richiede refuse_deadline")
         if soc_source not in ("estimate", "report"):
             raise ValueError(f"soc_source: 'estimate' o 'report', non {soc_source!r}")
         if load_estimate not in ("last", "mean"):
@@ -233,6 +243,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         self.negotiation = bool(negotiation)
         self.fednova = bool(fednova)
         self.refuse_deadline = bool(refuse_deadline)
+        self.refuse_load_only = bool(refuse_load_only)
         self.load_estimate = load_estimate
         self.stale_w = float(stale_weight)
         self.stale_max = int(stale_max)
@@ -296,7 +307,9 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         off = [name for name, on in (("stima SoC", self.soc_source == "estimate"),
                                      ("negoziazione", self.negotiation)) if not on]
         on = [name for name, flag in (("FedNova", self.fednova),
-                                      ("rifiuto per deadline", self.refuse_deadline),
+                                      ("rifiuto per deadline" + (" (solo se colpa del carico)"
+                                                                 if self.refuse_load_only else ""),
+                                       self.refuse_deadline),
                                       ("workload medio", self.load_estimate == "mean"))
               if flag]
         # [B] dal 30/10 FedNova e' spento di default: si segnala quando e' acceso
@@ -655,6 +668,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
             else 1e12,
             soc_min=float(self.soc_min), probe_samples=self.probe_samples,
             refuse_deadline=self.refuse_deadline,
+            refuse_load_only=self.refuse_load_only,
         )
 
     def _per_client_config(
