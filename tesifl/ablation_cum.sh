@@ -20,6 +20,17 @@
 #                                 (campagna cap_aug e ablazione, seed 2026)
 #   riferimenti gia' fatti: fedavg_nm (ablazione), sage_nm (cap_aug)
 #
+# [B] 06/11 CUMULATA DEL PLUS3, ABL_PLUS3=1: i gradini 0-3 restano quelli
+# sopra (gia' fatti, x1); si aggiungono
+#   4        sage_smart_pcum4_nm  gradino 3 + lavoro parziale
+#   5        sage_smart_pcum5_nm  + negoziazione (rifiuto per deadline solo se
+#                                 colpa del carico)
+#   6        sage_smart_plus3_nm  + stima del SoC col workload medio = plus3
+# a ogni carico del workload (_x3 _x2 _x1p5 _x1, ABL_MULTS per cambiarli):
+# 36 run in results_ablation_cum_plus3_ResNet18_C100/.
+#   ABL_PLUS3=1 nohup bash ablation_cum.sh > ablation_plus3.log 2>&1 &
+#   ABL_PLUS3=1 FT_ALGO=sage_smart_pcum5_nm_x3 bash ablation_cum.sh --fastTest
+#
 # Come ablation.sh: experiment.toml derivato (sweeps/experiment_ablation_cum.toml)
 # che cambia SOLO nome, GPU, seed e algoritmi; fisica, [algo] e [model] restano
 # quelli della campagna principale. Risultati in results_<nome>/.
@@ -29,10 +40,25 @@
 set -u
 cd "$(dirname "$0")"
 
-NAME=${ABL_NAME:-"ablation_cum_ResNet18_C100_cap_aug"}
+if [ "${ABL_PLUS3:-0}" = "1" ]; then
+  # [B] 06/11 cumulata del PLUS3: solo i gradini nuovi, a ogni carico del
+  # workload (dal piu' alto), seed 2026, i 3 beta di experiment.toml.
+  # 3 gradini x 4 carichi x 3 beta = 36 run. Gradini 0-3: vecchia cartella.
+  DEF_NAME="ablation_cum_plus3_ResNet18_C100"
+  DEF_ALGOS=""
+  for m in ${ABL_MULTS:-x3 x2 x1p5 x1}; do
+    for v in sage_smart_pcum4_nm sage_smart_pcum5_nm sage_smart_plus3_nm; do
+      DEF_ALGOS="${DEF_ALGOS:+$DEF_ALGOS }${v}_${m}"
+    done
+  done
+else
+  DEF_NAME="ablation_cum_ResNet18_C100_cap_aug"
+  DEF_ALGOS="sage_smart_cum0_nm sage_smart_cum1_nm sage_smart_cum2_nm sage_smart_cum3_nm sage_smart_cum4_nm sage_smart_cum5_nm"
+fi
+NAME=${ABL_NAME:-"$DEF_NAME"}
 GPUS_ABL=${ABL_GPUS:-"2"}
 SEEDS_ABL=${ABL_SEEDS:-"2026"}
-ALGOS=${ABL_ALGOS:-"sage_smart_cum0_nm sage_smart_cum1_nm sage_smart_cum2_nm sage_smart_cum3_nm sage_smart_cum4_nm sage_smart_cum5_nm"}
+ALGOS=${ABL_ALGOS:-"$DEF_ALGOS"}
 F="sweeps/experiment_ablation_cum.toml"
 
 mkdir -p sweeps

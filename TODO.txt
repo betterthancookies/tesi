@@ -93,6 +93,36 @@ Numeri dell'introduzione aggiornati con la v2.
      min(n, passi*B) (metrica smart-weight; aggregazione manuale in sage_smart
      solo nei round con almeno un parziale). Colonne nuove smart_n_partial,
      smart_weight_frac. WL_PLUS=3 bash workload_sweep.sh = x3 e x1.
+   - [06/11] QUARTO GIRO FATTO (2 run, scratchpad plus3_analysis.py).
+     plus3 acc/Wh/morti: x1 52.8/1119/6 (v2 49.4/1285/15, plus 49.1/1072/7,
+     plus2 49.9/1249/10); x3 46.8/1461/44 (plus 38.9/1760/59, 1o giro
+     28.6/1972/78). Ritardi 0 a entrambi i carichi, round 133 s (= deadline
+     132 s), durata 9.2 h. Nessun escluso a x1 (Gini 0.35), a x3 4 mai scelti
+     (tutti morti prima), Gini 0.52 (plus 0.68). Parziali: x1 529 (10.6%
+     delle partecipazioni, tutti >= 1 epoca, quindi pesi invariati), x3 733
+     (14.7%), peso medio 0.89 nei 152 round con meno di un'epoca. B medio 16
+     (prima i ritardatari usavano B = 128). Morti dovuti al FL x1 +5, x3 +6:
+     il calo viene ancora dalla durata. Un solo seed e un solo beta.
+     Prossimi passi proposti: x2 e x1.5 (WL_MULTS="x2 x1p5"), altri seed,
+     poi rifare le 27 run principali di SAGE-smart con plus3.
+   - [06/11] plus3 anche a x2 e x1.5 FATTO (scratchpad plus3_all.py).
+     plus3 contro SAGE-smart completo (1o giro; x1 = v2), acc/Wh/morti:
+       x3   46.8/1461/44 contro 28.6/1972/78  (+18.2 pt, -26%, -34)
+       x2   48.4/1331/30 contro 44.0/1648/45  (+4.4 pt, -19%, -15)
+       x1.5 51.1/1255/18 contro 46.9/1503/28  (+4.2 pt, -17%, -10)
+       x1   52.8/1119/6  contro 49.4/1285/15  (+3.4 pt, -13%, -9)
+     Ritardi 0 a ogni carico, round 133 s, durata 9.2 h (prima 12.6-31.6 h).
+     Morti dovuti al FL simili (x3 +13 -> +6, x2 +8 -> +11, x1.5 +10 -> +11,
+     x1 +7 -> +5): il calo dei morti viene dalla durata piu' corta.
+     Contro plus: meglio a ogni carico in accuracy (+1.8..+7.9), energia
+     uguale a x1.5/x2, +4% a x1, -17% a x3, e nessun escluso.
+   - [06/11] CUMULATA DEL PLUS3, codice SCRITTO (ok dell'utente, a tutti e 4
+     i carichi, seed 2026, 3 beta): gradini 0-3 = vecchi cum0..3 (x1);
+     4 = sage_smart_pcum4 (noest+noneg+partial), 5 = sage_smart_pcum5
+     (noest+dlload+partial: + negoziazione), 6 = sage_smart_plus3 (+ stima).
+     ABL_PLUS3=1 bash ablation_cum.sh = 36 run (~33 h a 3300 s/run) in
+     results_ablation_cum_plus3_ResNet18_C100; copiando i 4 plus3 b01 dal
+     workload si salta a 32 run (~29 h).
 
 [06/11] REPORT 14 SCRITTO: 14_report_week_02_11.tex, figure in report14_figs/
 (script nello scratchpad: r14_stats.py, r14_figs.py). Dentro: v2, distribuzione

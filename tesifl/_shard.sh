@@ -120,6 +120,15 @@ sage_smart_nonova|sage_smart_b128)
       # di arrivare in ritardo; nella media pesa per i campioni visti.
       sage_smart_plus3) algo="sage_smart"
                   extra="sage-a=${QA} sage-b=${QB} smart-ablation='dlload+loadavg+partial'" ;;
+      # [B] 06/11 ablazione CUMULATA del plus3 (ABL_PLUS3=1 bash
+      # ablation_cum.sh). I gradini 0-3 sono sage_smart_cum0..3 (gia' fatti
+      # a x1), poi: 4 = gradino 3 + lavoro parziale; 5 = + negoziazione, col
+      # rifiuto per deadline solo se colpa del carico; 6 = + stima del SoC col
+      # workload medio = sage_smart_plus3. FedNova e' spento di default.
+      sage_smart_pcum4) algo="sage_smart"
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='noest+noneg+partial'" ;;
+      sage_smart_pcum5) algo="sage_smart"
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='noest+dlload+partial'" ;;
       escs_sd)    algo="escs-sd" ;;
       escs_sp)    algo="escs-sp" ;;
       escs_md)    algo="escs-md" ;;
