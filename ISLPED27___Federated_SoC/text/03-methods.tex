@@ -2,27 +2,28 @@
 \label{sec:methodology}
 
 Section~\ref{sec:system} describes the system we target and how we account
-for its energy. Section~\ref{sec:smart} presents SAGE-smart, and
-Section~\ref{sec:protocols} compares the protocols that bring the state of the
-clients into the decision.
+for its energy, Section~\ref{sec:smart} presents SAGE-smart, and
+Section~\ref{sec:protocols} its messages and their cost.
 
 % =====================================================================
 \subsection{System Model}\label{sec:system}
 
-We consider $N$ smartphones and one server that run $R$ synchronous rounds of
-FL. In round $r$ the server selects a set $S_r$ of clients. Each selected
-client downloads the global model, trains it on its $n_i$ local samples and
-uploads the update. A round lasts as long as its slowest selected client.
-Every phone that is not training, selected or not, is idle for the rest of the
-round, as in~\cite{maciel2024escs}. Every term below is charged to the battery
-of the device that spends it.
+We consider a set $\mathcal{N}=\{1,\dots,N\}$ of smartphones and one server
+that run $R$ synchronous rounds of FL. At the start of round $r$, the phones
+that still have charge form the set of alive clients
+$\mathcal{A}_r\subseteq\mathcal{N}$, and the server selects a subset
+$S_r\subseteq\mathcal{A}_r$. Each selected client downloads the global model,
+trains it on its $n_i$ local samples and uploads the update. A round lasts as
+long as its slowest selected client, and every phone that is not training,
+including selected clients that have finished training, is idle for the rest
+of the round, as in~\cite{maciel2024escs}. Every term below is charged to the
+battery of the device that spends it.
 
-\textbf{Computation.}
 Each phone belongs to one of three tiers, which are the three smartphones
 profiled in~\cite{xu2022mandheling} (Table~\ref{tab:tiers}). A tier has a
 training throughput $\Theta_i$ and a constant training power $P_i$, both
 derived from the measured per-batch latency and energy of FP32 training on the
-CPU. The battery capacities $Q_i$ are those of the same phones. Training $E$
+CPU, and $Q_i$ is the battery capacity of the corresponding phone. Training $E$
 epochs with batch size $B$ takes
 \begin{equation}
   t_i(E,B,w) = E\left(\frac{3\,M\,n_i}{(1-w)\,\Theta_i}
@@ -30,11 +31,11 @@ epochs with batch size $B$ takes
   \label{eq:ttrain}
 \end{equation}
 where $M$ is the number of forward MACs per sample ($555.5\times10^{6}$ for
-ResNet-18 on $32\times32$ images), the factor 3 accounts for the backward pass,
+ResNet-18), the factor 3 accounts for the backward pass,
 $t_b=57\,\mathrm{ms}$ is the fixed cost of a batch~\cite{xu2022mandheling}, and
 $w\in[0,1)$ is the fraction of the phone taken by other applications. The
-energy is $P_i\,t_i$. Since $P_i$ does not depend on $B$, a smaller batch costs
-slightly more per epoch but performs more SGD steps per joule.
+energy is $P_i\,t_i$, so a smaller batch costs slightly more per epoch but
+performs more SGD steps per joule.
 
 \begin{table}[t]
 \centering
@@ -45,208 +46,209 @@ capacities from the manufacturers.}
 \setlength{\tabcolsep}{4pt}
 \begin{tabular}{llrrr}
 \hline
-Tier & Phone (SoC chip) & $\Theta_i$ [GMAC/s] & $P_i$ [W] & $Q_i$ [mAh] \\
+Tier & Phone (chipset) & $\Theta_i$ [GMAC/s] & $P_i$ [W] & $Q_i$ [mAh] \\
 \hline
-Low  & Redmi Note 9 Pro (SD750G) & 13.9 & 2.99 & 4820 \\
-Mid  & Xiaomi Mi 10 (SD865)      & 26.6 & 4.00 & 4780 \\
-High & Xiaomi Mi 11 Pro (SD888)  & 30.5 & 6.15 & 5000 \\
+Low  & Redmi Note 9 Pro 5G (SD750G) & 13.9 & 2.99 & 4820 \\
+Mid  & Xiaomi Mi 10 (SD865)         & 26.6 & 4.00 & 4780 \\
+High & Xiaomi Mi 11 Pro (SD888)     & 30.5 & 6.15 & 5000 \\
 \hline
 \end{tabular}
 \end{table}
 
-\textbf{Background workload and idle.}
-The load $w$ of the other applications follows a Markov chain over three
-states, $w\in\{0,\,0.10,\,0.30\}$, with one step per round. Three chains, with
-stationary means 0.03, 0.12 and 0.21, are assigned to the phones in equal
-shares and independently of the tier. The load slows the training down
-(Eq.~\eqref{eq:ttrain}) and sets the idle power:
+The load $w$ follows a Markov chain over the states $\{0,\,0.10,\,0.30\}$, with
+one step per round. Three chains, with stationary means 0.03, 0.12 and 0.21,
+are assigned to the phones in equal shares and independently of the tier. The
+load slows the training down (Eq.~\eqref{eq:ttrain}) and sets the idle power
 \begin{equation}
   P^{\mathrm{idle}}_i(w) = P_0 + w\,(P_i - P_0), \qquad P_0=0.1\,\mathrm{W}.
   \label{eq:idle}
 \end{equation}
-The phone knows its own $w$. The server sees it only through reports.
+The phone knows its own $w$, while the server only sees it through reports.
 
-\textbf{Battery.}
-The SoC of a phone drops by the charge drawn at its nominal voltage
-($V=3.7\,\mathrm{V}$), and a phone at zero SoC is depleted and leaves the
-federation. We consider three battery models, which define three simulated
-worlds. The \emph{ideal} model draws $P\,t/V$. The \emph{Peukert} model scales
-the drawn charge by $(I/I_R)^{n-1}$, with $I_R=0.2$C and $n=1.05$; we
-obtained $n$ by least squares on the capacities of a commercial cell (2.60,
-2.50 and 2.39~Ah at 0.2C, 0.5C and 1C)~\cite{doerffel2006peukert}. The
-\emph{datasheet} model has no exponent. It interpolates the discharge curves
-$V(\mathrm{SoC},C)$ and capacities $Q(C)$ of the same cell, normalized in
-C-rate so that they apply to any capacity, and solves $P=V(\mathrm{SoC},I)\,I$
-for the current. Its voltage drops with the charge, so at constant power the
-discharge accelerates near the reserve, which is where the battery constraint
-binds. \rev{[Cite the cell datasheet.]}
+The battery is described by three models of increasing fidelity, each defining
+a separate simulated world, in which a phone that reaches zero SoC is depleted
+and leaves the federation. The Ideal model is a store of energy: the SoC
+decreases by the charge drawn from the battery, computed at its nominal voltage
+$V_{\mathrm{nom}}=3.7\,\mathrm{V}$, i.e., by $P\,t/(V_{\mathrm{nom}}Q_i)$. The
+Peukert model~\cite{doerffel2006peukert} adds the loss of capacity at high
+discharge rates: the drawn charge is scaled by $(I/I_R)^{\gamma-1}$, with
+$I=P/V_{\mathrm{nom}}$, $I_R=0.2$C and $\gamma=1.05$, fitted on the capacities
+of a commercial cell, 2.60, 2.50 and 2.39~Ah at 0.2C, 0.5C and
+1C~\cite{datasheet}. The Datasheet model also captures the drop of the
+voltage with the charge. It interpolates the discharge curves
+$V(\mathrm{SoC},I)$ and capacities $Q(I)$ of the same cell, expressed in C-rate
+so that they apply to any capacity, solves $P=V(\mathrm{SoC},I)\,I$ for the
+current and decreases the SoC by $I\,t/Q(I)$. At constant power, the discharge
+then accelerates near the reserve, which is where the battery constraint binds.
 
-\textbf{Communication.}
-The phones use LTE. A transfer of $s$~MB costs $e_{\mathrm{dl}}=0.98\,\mathrm{J/MB}$
-in download and $e_{\mathrm{ul}}=2.96\,\mathrm{J/MB}$ in upload. These are the
-energy-per-throughput fits of~\cite{narayanan2021variegated} at the median
-Italian 4G throughputs of 25.1 and 10~Mbps~\cite{opensignal2018italy}.
-Each isolated transfer also opens a radio session: a promotion
-(1.21~W for 265~ms~\cite{huang2012lte,narayanan2021variegated})
-and a tail (178~mW for 10.2~s~\cite{narayanan2021variegated}),
-that is $E_{\mathrm{s}}\approx2.1\,\mathrm{J}$ whatever the payload. The tail costs
-energy but does not delay the round. Exchanging ResNet-18 (44.9~MB each
-way) costs
+The phones use LTE. Each megabyte costs $e_{\mathrm{dl}}=0.98\,\mathrm{J}$ in
+download and $e_{\mathrm{ul}}=2.96\,\mathrm{J}$ in upload, the fits
+of~\cite{narayanan2021variegated} at the median Italian 4G throughputs of 25.1
+and 10~Mbps~\cite{opensignal2018italy}. Each isolated transfer also opens a
+radio session, with a promotion (1.21~W for
+265~ms~\cite{huang2012lte,narayanan2021variegated}) and a tail (178~mW for
+10.2~s~\cite{narayanan2021variegated}), i.e.,
+$\epsilon_{\mathrm{s}}\approx2.1\,\mathrm{J}$ regardless of the payload.
+Exchanging ResNet-18, $x_{\mathrm{m}}=44.9$~MB each way, takes about 50~s and
+costs
 \begin{equation}
-  E_{\mathrm{model}} = s\,(e_{\mathrm{dl}}+e_{\mathrm{ul}}) + 2E_{\mathrm{s}}
-  \approx 181\,\mathrm{J},
+  \epsilon_{\mathrm{model}} = x_{\mathrm{m}}\,(e_{\mathrm{dl}}+e_{\mathrm{ul}})
+  + 2\epsilon_{\mathrm{s}} \approx 181\,\mathrm{J}.
   \label{eq:comm}
 \end{equation}
-with about 50~s of transfer. A control message (1~KB round
-trip) costs a full session, $E_{\mathrm{s}}$, when it is isolated. It costs
-almost nothing (about 2~mJ) when it shares the session of the model
-download that follows. Each exchange delays the round by
-$t_{\mathrm{c}}\approx0.33\,\mathrm{s}$ (promotion, RTT and transfer).
+A control message (1~KB round trip) costs $\epsilon_{\mathrm{s}}$ when isolated
+and about 2~mJ when it shares an open session, and delays the round by
+$t_{\mathrm{c}}\approx0.33\,\mathrm{s}$.
 
-\textbf{User behavior.}
 Initial SoCs are drawn from a normal distribution with mean 0.75 and standard
 deviation 0.15, truncated to $[0.3,1]$. During a round of length $\Delta t$, a
 phone is put on the charger with probability
 $p = 1-\exp\!\left(-\lambda\,(1-\mathrm{SoC})\,\Delta t\right)$, with
-$\lambda=0.126\,\mathrm{h}^{-1}$. This value gives one charging session per day at
-the average SoC of 67\% observed in~\cite{ferreira2011battery}. A phone
-charges at 1C until it is full, and it stays selectable meanwhile, training at
-no cost for its battery. Real users rarely let the phone go below
-30\%~\cite{ferreira2011battery}; ours do, so the scenario is pessimistic on
-purpose.
+$\lambda=0.126\,\mathrm{h}^{-1}$, which gives one charging session per day at
+the average SoC of 67\% observed in~\cite{ferreira2011battery}. A phone charges
+at 1C until it is full, and it stays selectable meanwhile, training at no cost
+for its battery. Unlike real users, who rarely let the phone go below
+30\%~\cite{ferreira2011battery}, simulated phones can drain further, which
+makes the scenario deliberately pessimistic.
 
 % =====================================================================
 \subsection{SAGE-smart}\label{sec:smart}
 
-SAGE-smart splits the decision in two. The server chooses \emph{who}
-participates, from what it knows. Each selected client chooses \emph{how
-much} it trains, from what only it knows, at the moment training starts.
+In SAGE-smart, the server selects the participants based on its last view of
+the clients, while each selected client sets its local workload $(E, B)$ at
+training time, based on its current state. The algorithm in
 Fig.~\ref{alg:smart} summarizes one round.
 
-\textbf{What the server knows.}
-At enrollment, each client registers its static data: tier, capacity, battery
-type, dataset size $n_i$ and label distribution, from which the server computes
-the Jensen--Shannon divergence $D_i$ from the global label distribution, as in
-SAGE~\cite{savoia2026sage}. Afterwards, the server only knows the last report
-of each client: SoC, load $w$, charging status and the time $t_i^{\mathrm{rep}}$
-at which they were read. Before ranking, it extrapolates the SoC with the idle
-drain of Eq.~\eqref{eq:idle} through the battery model of the device:
+\textbf{Server side.}
+At enrollment, each client registers its static data (tier, battery capacity
+and model, dataset size $n_i$) and its current SoC. Afterwards, the server
+knows each client only through its last report, i.e., the SoC, load and
+charging status read by the client at time $t_i^{\mathrm{rep}}$, which arrives
+with every reply to a proposal and with every update. Before ranking, the
+server extrapolates the SoC with the idle drain of Eq.~\eqref{eq:idle},
+through the battery model of the device:
 \begin{equation}
   \widehat{\mathrm{SoC}}_i = \mathrm{SoC}_i^{\mathrm{rep}}
-  - \Delta\mathrm{SoC}_i\!\left(P^{\mathrm{idle}}_i(w_i^{\mathrm{rep}}),\,
-    t - t_i^{\mathrm{rep}}\right).
+  - \Delta\mathrm{SoC}_i\!\left(P^{\mathrm{idle}}_i(\bar{w}_i),\,
+    t - t_i^{\mathrm{rep}}\right),
   \label{eq:estimate}
 \end{equation}
-A client that was charging at the last report is assumed unchanged. The
-estimate does not see recharges or changes of load since the report: this is
-the information that only the client has.
+where $\bar{w}_i$ is the mean of the loads reported so far, which predicts the
+drain over tens of minutes better than the last value. Before the first report,
+the server assumes the average load of the population: an optimistic estimate
+is corrected by the first proposal, while a pessimistic one would keep the
+client at the bottom of the ranking. For a client that was charging at the
+last report, the server assumes the SoC unchanged. Recharges and changes of
+load since the report remain known only to the client.
 
-\textbf{Selection.}
-Clients are ranked by
+Clients are then ranked by
 \begin{equation}
   s_i = a\,\widehat{\mathrm{SoC}}_i + b\,D_i
       + c\,\min\!\left(1, \eta_i/\eta_{\max}\right), \quad a+b=1,
   \label{eq:score}
 \end{equation}
-where $\eta_i$ is the number of rounds since client $i$ was last contacted. The
-staleness term gives a chance to clients that the first two terms would never
-pick: a client with low divergence, or one that drains slowly and stays
-charged, would otherwise be excluded or selected at every round. We use $c=0.3$
-and $\eta_{\max}=25$, and $a,b$ tuned per data distribution. As in SAGE, the
-number of selected clients grows by one per round from two, up to 20\% of the
-clients still alive. With non-negative scores and only cardinality
-constraints, the selection ILP of SAGE reduces to taking the top-ranked
+where $D_i$ is the mean Jensen--Shannon divergence between the label
+distribution of client $i$, reported with its updates, and those of the other
+clients, as in SAGE~\cite{savoia2026sage}, and $\eta_i$ is the number of rounds
+since client $i$ was last selected or refused a proposal. The staleness term,
+with $c=0.3$ and $\eta_{\max}=25$, prevents a client with low divergence from
+never being selected, and one that stays charged from being selected at every
+round; $a$ and $b$ are tuned per data distribution. As in SAGE, the number of
+selected clients $k_r$ grows by one per round from two, up to 20\% of
+$|\mathcal{A}_r|$, and the selection reduces to taking the $k_r$ top-ranked
 clients.
 
-\textbf{Envelope.}
-Instead of a fixed $(E,B)$, each selected client receives an envelope
-$\mathcal{E}_i$: an epoch range $[E_{\mathrm{lo}},E_{\mathrm{hi}}^i]$, a set of
-batch sizes $\mathcal{B}=\{16,32,64,128\}$, a round deadline $T$ and a battery
-reserve $\mathrm{SoC}_{\min}=0.2$. The deadline is the median, over all
-clients, of the nominal training time of the baselines ($E_0=5$, $B_0=128$, no
-load). It bounds the stragglers, and thus the idle energy that the other
-clients spend waiting for them. The lower bound $E_{\mathrm{lo}}=2$ is the
-smallest useful update. The upper bound is
+Instead of a fixed $(E,B)$, each candidate receives a set of bounds, the
+envelope $\mathcal{E}_i$: an epoch range $[E_{\mathrm{lo}},E_{\mathrm{hi}}^i]$ with
+$E_{\mathrm{lo}}=2$, the batch sizes $\mathcal{B}=\{16,32,64,128\}$, a round
+deadline $T$ and a battery reserve $\mathrm{SoC}_{\min}=0.2$. The deadline is
+the median nominal training time of the baselines ($E_0=5$, $B_0=128$, no
+load), 132~s in our setup, and bounds the idle that the other clients spend
+waiting for stragglers. The upper bound is
 \begin{equation}
   \begin{aligned}
   E_{\mathrm{hi}}^i = \min\biggl(&2E_0,\;
-    \left\lfloor \frac{T}{t_i(1,B_{\mathrm{fast}},w_i)} \right\rfloor,\\
+    \left\lfloor \frac{T}{t_i(1,B_{\mathrm{fast}},w_i^{\mathrm{rep}})} \right\rfloor,\\
   &\left\lfloor \frac{\widehat{\mathrm{SoC}}_i - \mathrm{SoC}_{\min}
-    - \delta^{\mathrm{up}}_i}{k_i\,\delta^{\mathrm{ep}}_i} \right\rfloor \biggr),
+    - \kappa_i\,\delta^{\mathrm{up}}_i}{\kappa_i\,\delta^{\mathrm{ep}}_i} \right\rfloor \biggr),
   \end{aligned}
   \label{eq:ehi}
 \end{equation}
-clipped to at least $E_{\mathrm{lo}}$. The three terms are a cap at twice the
-standard work, the deadline at the fastest batch size, and the energy left
-above the reserve. Here $\delta^{\mathrm{ep}}_i$ and $\delta^{\mathrm{up}}_i$
-are linear estimates of the SoC spent by one epoch at $\min\mathcal{B}$ and by
-the upload, and $k_i$ is a correction factor learned from the consumption the
-client reports. The envelope is deliberately loose: the server knows neither
-the current load nor the true battery curve, and being precise is the job of
-the client.
+clipped to at least $E_{\mathrm{lo}}$: twice the standard work, the epochs that
+fit the deadline at the fastest batch size under the last reported load, and
+the energy left above the reserve. The latter uses linear estimates of the SoC
+spent by one epoch at $\min\mathcal{B}$, $\delta^{\mathrm{ep}}_i$, and by the
+upload, $\delta^{\mathrm{up}}_i$, corrected by a factor $\kappa_i$ learned
+from the consumption the client reports, and it is dropped for a client that
+was charging at its last report. The envelope is deliberately loose, since
+being precise is the job of the client.
 
-\textbf{Proposal.}
-Before the model, the server sends each of the top-ranked clients a proposal
-with its envelope, but no model. The client reads its state and accepts if it
-can run $E_{\mathrm{lo}}$ epochs at some $B\in\mathcal{B}$ without crossing its
-reserve. It always replies with its SoC, load and charging status, which become
-its new report. A refusing client is replaced by the next one in the ranking,
-for at most two waves. Its $\eta_i$ is reset, so it does not return to the top
-of the ranking at the next round. The model is sent only to the clients that
-accepted, so a refusal never wastes a download.
+The server sends the envelope, without the model, as a proposal to the
+top-ranked clients. A candidate accepts if it can run $E_{\mathrm{lo}}$ epochs
+at some $B\in\mathcal{B}$ without crossing its reserve. It also refuses if
+$E_{\mathrm{lo}}$ misses the deadline under its current load but would meet it
+with no load, since the phone may be free at a later round, while a slow phone
+with many samples, which misses the deadline even with no load, accepts and
+performs partial work. Either way, the candidate replies with its SoC, load and
+charging status, which become its new report. Refusing clients are replaced by
+the next ones in the ranking, with at most $\nu_{\max}=2$ waves of proposals
+per round, and their $\eta_i$ is reset. The model, with an envelope recomputed
+from the new reports, goes only to the clients that accepted.
 
-\textbf{Client decision.}
-When the model arrives, the client binds its work (late binding). It reads its
-SoC, load and charging status, and evaluates the loss $L$ of the global model
-on 256 local samples. Then it computes
+\textbf{Client side.}
+When the model arrives, the client reads its state again, since its load and
+charging status may have changed since its reply (late binding). If not even
+$E_{\mathrm{lo}}$ fits its reserve, it withdraws from the round (opt-out).
+Otherwise, it evaluates the loss $L$ of the global model on 256 local samples
+and computes
 \begin{equation}
   \begin{gathered}
-  u = \min\!\left(1, \frac{L}{\ln C}\right), \qquad
+  u = \min\!\left(1, \frac{L}{\ln|\mathcal{Y}|}\right), \qquad
   h = \frac{\mathrm{SoC}-\mathrm{SoC}_{\min}}{1-\mathrm{SoC}_{\min}},\\
   E^\ast = E_{\mathrm{lo}} + \left\lfloor (E_{\mathrm{hi}}-E_{\mathrm{lo}})\,u\,h \right\rceil,
   \end{gathered}
   \label{eq:decision}
 \end{equation}
-where $C$ is the number of classes and $\lfloor\cdot\rceil$ rounds to the
-nearest integer. $\ln C$ is the loss of a random guess, so $u\approx1$ means
-that the global model has learned nothing yet on these data, and $h=1$ while
-the phone is charging. Much loss and much charge yield many epochs; little of
-either yields few. The client then tries the smallest batch size first and
-lowers $E$ from $E^\ast$ towards $E_{\mathrm{lo}}$ until two conditions hold
-on the predicted trajectory, not on the current state. The SoC at the end of
-the round, upload included, must stay above the reserve, and the training time
-under the current load must fit the deadline. Only if not even $E_{\mathrm{lo}}$
-fits does it move to the next batch size. If the deadline cannot be met at any
-batch size, it runs $E_{\mathrm{lo}}$ at the fastest one and declares it. If not
-even $E_{\mathrm{lo}}$ fits the reserve, it withdraws from the round (opt-out).
-During training, a guard stops the client if it reaches its energy budget, even
-in the middle of an epoch.
+where $\mathcal{Y}$ is the set of classes, $\ln|\mathcal{Y}|$ is the loss of a
+random guess, $\lfloor\cdot\rceil$ rounds to the nearest integer, and $h=1$
+while the phone is charging, so that much loss and much charge yield many
+epochs. Starting from the smallest batch size, the client lowers $E$ from
+$E^\ast$ towards $E_{\mathrm{lo}}$, moving to the next batch size only if not
+even $E_{\mathrm{lo}}$ fits, until the predicted trajectory satisfies two
+conditions: the SoC at the end of the round, upload included, stays above the
+reserve, and the training time under the current load fits the deadline. The
+prediction uses the battery model of the device, as a fuel gauge would. If no
+$E\geq E_{\mathrm{lo}}$ meets the deadline, the client performs partial work:
+at the smallest batch size its reserve allows, it runs the largest number of
+SGD steps that fits the deadline. During training, a guard stops the client at
+its energy budget, even in the middle of an epoch.
 
-\textbf{Aggregation and update.}
-The client returns the update together with the chosen $(E,B)$, the number of
-SGD steps, its initial and final SoC, and its loss. The server discards updates
-outside the envelope, charges the declared work to the device, and averages
-the updates weighted by $n_i$, as in FedAvg~\cite{mcmahan2017fedavg}. The final
-SoC becomes the new report, and $k_i$ is updated as a moving average of the
-ratio between the observed and the linearly predicted drain.
+The client returns the update with $(E,B)$, its number of SGD steps $\tau_i$,
+and its final SoC, load, loss and label distribution. The server discards the
+updates outside the envelope, charges the declared work to the device and
+averages the updates as in FedAvg~\cite{mcmahan2017fedavg}, weighted by the
+samples actually processed, $\min(n_i,\tau_iB_i)$, which equals $n_i$ for every
+client that completed an epoch. The final SoC becomes the new report, and
+$\kappa_i$ is updated as a moving average of the ratio between the observed and
+the predicted drain.
 
 \begin{figure}[t]
 \small
 \begin{algorithmic}[1]
 \REQUIRE last reports, static profiles, round $r$, target size $k_r$
 \STATE \textbf{Server:} estimate $\widehat{\mathrm{SoC}}_i$ (Eq.~\ref{eq:estimate}) and rank by $s_i$ (Eq.~\ref{eq:score})
-\STATE $S \gets \emptyset$, $W \gets 0$
-\WHILE{$|S| < k_r$ \AND $W < W_{\max}$}
-  \STATE send proposal $\mathcal{E}_i$ (no model) to the next $k_r-|S|$ ranked clients
+\STATE $S_r \gets \emptyset$, $\nu \gets 0$
+\WHILE{$|S_r| < k_r$ \AND $\nu < \nu_{\max}$}
+  \STATE send proposal $\mathcal{E}_i$ (no model) to the next $k_r-|S_r|$ ranked clients
   \FOR{each reply of client $i$}
     \STATE update the report of $i$
-    \IF{$i$ accepts} \STATE $S \gets S\cup\{i\}$ \ELSE \STATE $\eta_i \gets 0$ \ENDIF
+    \IF{$i$ accepts} \STATE $S_r \gets S_r\cup\{i\}$ \ELSE \STATE $\eta_i \gets 0$ \ENDIF
   \ENDFOR
-  \STATE $W \gets W+1$
+  \STATE $\nu \gets \nu+1$
 \ENDWHILE
-\STATE send the model and $\mathcal{E}_i$ to every $i\in S$
-\STATE \textbf{Client $i\in S$:} read SoC, $w$, charging; compute $L$ on 256 samples
-\STATE compute $u$, $h$, $E^\ast$ (Eq.~\ref{eq:decision})
+\STATE recompute $\mathcal{E}_i$ from the new reports; send it with the model to every $i\in S_r$
+\STATE \textbf{Client $i\in S_r$:} read SoC, $w$, charging; opt out if $E_{\mathrm{lo}}$ does not fit the reserve
+\STATE compute $L$ on 256 samples, then $u$, $h$, $E^\ast$ (Eq.~\ref{eq:decision})
 \FOR{$B\in\mathcal{B}$ in increasing order}
   \FOR{$E = E^\ast$ \textbf{down to} $E_{\mathrm{lo}}$}
     \IF{predicted SoC $\geq \mathrm{SoC}_{\min}$ \AND predicted time $\leq T$}
@@ -254,8 +256,8 @@ ratio between the observed and the linearly predicted drain.
     \ENDIF
   \ENDFOR
 \ENDFOR
-\STATE if no $(E,B)$ fits: $E_{\mathrm{lo}}$ at the fastest $B$ if only the deadline fails, otherwise opt out
-\STATE \textbf{Server:} average the replies whose $(E,B)\in\mathcal{E}_i$, weighted by $n_i$
+\STATE if no $(E,B)$ meets the deadline: train the SGD steps that fit in $T$ (partial work) and reply
+\STATE \textbf{Server:} average the replies whose $(E,B)\in\mathcal{E}_i$, weighted by $\min(n_i,\tau_i B_i)$
 \end{algorithmic}
 \caption{One round of SAGE-smart. The client stops at the first feasible
 $(E,B)$.}
@@ -263,74 +265,28 @@ $(E,B)$.}
 \end{figure}
 
 % =====================================================================
-\subsection{Protocols and Cost of Information}\label{sec:protocols}
+\subsection{Messages and Their Cost}\label{sec:protocols}
 
-The client state can enter the decision in three ways. They differ in what
-travels on the network, in who pays for it, and in how fresh the state is when
-the work is decided. Table~\ref{tab:protocols} counts them per round for $N_a$
-alive clients, $k$ selected, $r$ refusals and a fraction $\rho$ of clients that
-do not answer a request (out of coverage, switched off); we use $N_a=100$,
-$k=20$ and $\rho=0.1$.
-
-\textbf{P1, model-first negotiation.} The server sends the model and an
-envelope to the selected clients, which accept, reduce the work, or refuse, and
-report their choice with the update. A refusal wastes a download,
-$s\,e_{\mathrm{dl}}+E_{\mathrm{s}}\approx46\,\mathrm{J}$. Replacing the client
-requires another download and delays the round by its transfer time.
-
-\textbf{P2, lightweight negotiation (SAGE-smart).} The proposal travels before
-the model, so a refusal costs an isolated control session, about 2.1~J.
-For a client that accepts, the proposal shares the session of the download
-that follows. Each wave delays the round by $t_{\mathrm{c}}\approx0.33\,\mathrm{s}$.
-The client still binds its work at training time, as in P1.
-
-\textbf{P3, state broadcast.} At the start of the round, the server asks every
-alive client for its state and decides $(E,B)$ itself; the client executes. The
-cost is fixed. Every responder that is not selected pays a session,
-$((1-\rho)N_a-k)\,E_{\mathrm{s}}\approx150\,\mathrm{J}$ per round (about
-10~Wh over 250 rounds), and a timeout (1~s) for the clients that do
-not answer extends the round. There are no refusals, but the work is decided
-on the state at the broadcast. A change of load or a charger plugged in before
-training is not seen.
-
-\begin{table}[t]
-\centering
-\caption{Information cost of the three protocols per round ($N_a=100$, $k=20$,
-$\rho=0.1$, $r$ refusals). Energy of the control messages only; the model
-exchange (Eq.~\ref{eq:comm}) is the same for all.}
-\label{tab:protocols}
-\footnotesize
-\setlength{\tabcolsep}{3pt}
-\begin{tabular}{lccc}
-\hline
-& P1 model-first & P2 lightweight & P3 broadcast \\
-\hline
-Who decides $(E,B)$     & client          & client          & server \\
-State used              & at training     & at training     & at broadcast \\
-Messages before model   & 0               & $k+r$           & $N_a$ \\
-Energy per refusal      & 46~J      & 2.1~J     & -- \\
-Fixed energy per round  & 0               & $\approx 0$     & 150~J \\
-Added latency           & 1 download/refusal & 0.33~s/wave & 1.33~s \\
-\hline
-\end{tabular}
-\end{table}
-
-P2 costs less energy than P1 whenever a refusal occurs, by a factor of about
-20. P1 costs less than P3 as long as fewer than
-$150/46\approx3$ clients per round refuse. P2 costs less than P3 unless about
-70 clients refuse in the same round. The broadcast pays a fixed price for a
-state that is fresh at the start of the round. The two negotiations pay only
-when a client declines, and they use the state at the moment of training. How
-often clients decline depends on the load (Sec.~\ref{sec:results}).
-
-In the experiments of Sec.~\ref{sec:results}, the broadcast is enabled for all
-the strategies that select on the device state (SAGE, ESCS and SAGE-smart), so
-that all of them pay the same cost for their view of the clients; SAGE-smart
-runs P2 on top of it. In simulation, the clients have no life of their own
-outside the simulator, so the broadcast cannot return anything the simulator
-does not already know. We use it to charge its cost, and SAGE-smart ranks with
-the estimate of Eq.~\eqref{eq:estimate}.
-\rev{[Update if the protocols become a parameter of the experiments.]}
+A round of SAGE-smart involves three exchanges. First, as for SAGE and ESCS,
+the server asks every alive client for its state. A fraction $\rho=0.1$ of the
+clients does not answer (out of coverage, switched off) and is left out of the
+round after a timeout of 1~s. Every responder pays a radio session, so the
+clients that are not selected spend
+$((1-\rho)|\mathcal{A}_r|-k_r)\,\epsilon_{\mathrm{s}}\approx150\,\mathrm{J}$
+per round with $|\mathcal{A}_r|=100$ and $k_r=20$, about 10~Wh over 250
+rounds. SAGE and ESCS need this broadcast, since they rank the clients on the
+state it returns. SAGE-smart does not, since it ranks with
+Eq.~\eqref{eq:estimate} and replaces a candidate that does not answer a
+proposal as one that refuses. We charge it the same broadcast anyway, so that
+all strategies pay the same price for their view of the clients, and use it
+only to skip the unreachable clients; the energy figures of SAGE-smart are
+therefore conservative. Second, the proposals travel in the radio session that
+the broadcast has just opened, so each costs about 2~mJ, and each wave delays
+the round by $t_{\mathrm{c}}$. Third, the accepted clients exchange the model
+(Eq.~\eqref{eq:comm}). Since the proposal precedes the model, a client that
+cannot afford the work refuses at the cost of a control message, instead of
+downloading the model and wasting
+$x_{\mathrm{m}}e_{\mathrm{dl}}+\epsilon_{\mathrm{s}}\approx46\,\mathrm{J}$.
 % NOTE: the estimate uses the same battery model as the simulator, so it is
 % wrong only because of recharges and load changes; on real phones it would
 % also be wrong because of the model. State it as a limitation.

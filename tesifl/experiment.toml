@@ -56,9 +56,13 @@ algorithms = [
   "sage_lin",
   "sage_peuk",
   "sage_nm",
-  "sage_smart_lin",
-  "sage_smart_peuk",
-  "sage_smart_nm",
+  # 09/11: SAGE-smart del paper = plus4 (rifiuto per deadline solo se colpa
+  # del carico, stima col workload medio, lavoro parziale, workload medio
+  # all'iscrizione). Le run vecchie sage_smart_{lin,peuk,nm} restano nella
+  # cartella; le baseline gia' presenti vengono saltate da run.sh.
+  "sage_smart_plus4_lin",
+  "sage_smart_plus4_peuk",
+  "sage_smart_plus4_nm",
   "escs_sd_lin",
   "escs_sd_peuk",
   "escs_sd_nm",

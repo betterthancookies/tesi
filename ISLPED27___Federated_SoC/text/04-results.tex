@@ -11,14 +11,14 @@
 %     \label{fig:sandia}
 % \end{figure}
 
-\begin{figure}[t]
-    \centering
-    \includegraphics[width=0.99\linewidth]{images/sandia-new.pdf}
-    \vspace{-0.5cm}
-    \caption{Results on Sandia dataset with different physic loss}
-    \vspace{-0.5cm}
-    \label{fig:sandia}
-\end{figure}
+%\begin{figure}[t]
+%    \centering
+%    \includegraphics[width=0.99\linewidth]{images/sandia-new.pdf}
+%    \vspace{-0.5cm}
+%    \caption{Results on Sandia dataset with different physic loss}
+%    \vspace{-0.5cm}
+%    \label{fig:sandia}
+%\end{figure}
 %This section presents the results. 
 \subsection{Results on the Sandia Dataset}
 \vspace{-0.1cm}
@@ -40,14 +40,14 @@ Moreover, comparing the performance of PINN-All to Physics-Only reveals a consis
 %
 % \revtwo{This phenomenon is probably due to the fact that, for the Sandia dataset, the current is approximately constant and the network learns only to associate the SoC estimation to the time elapsed. Therefore, the non-linear behavior of charge/discharge cycle which should be extrapolated from the training dataset is not learned by the network and the overall MAE increases. \textbf{DP: non mi convince questa giustificazione}}
 
-\begin{figure}[t]
-    \centering
-    \includegraphics[width=.99\linewidth]{images/lg-new.pdf}
-    \vspace{-0.5cm}
-    \caption{Results on LG dataset with different physic loss}
-    \vspace{-0.6cm}
-    \label{fig:LG}
-\end{figure}
+%\begin{figure}[t]
+%    \centering
+%    \includegraphics[width=.99\linewidth]{images/lg-new.pdf}
+%    \vspace{-0.5cm}
+%    \caption{Results on LG dataset with different physic loss}
+%    \vspace{-0.6cm}
+%    \label{fig:LG}
+%\end{figure}
 \subsection{Results on the LG Dataset}
 \label{sec:lg-results}
 Given the limited charge/discharge conditions (i.e., constant current) of the Sandia dataset, we also benchmark our approach on the LG dataset, which contains more complex charge and discharge patterns with varying currents.
@@ -89,14 +89,14 @@ Compared to \cite{Dang23}, we obtain 4.2$\times$ lower MAE than their best solut
 We argue that we achieve better performance thanks to the introduced moving average on input windows, used as pre-processing before feeding the data to Branch 1. This allows the network to account for I, V, and T information of the last 30 seconds instead of their noisy instantaneous values.
 % \vspace{-0.1cm}
 \subsection{Full discharge analysis}
-\begin{figure*}[ht]
-    \centering
-    \includegraphics[width=\linewidth]{images/Battery_Cycles_Subplots_with_Output.pdf}
-    % \vspace{-0.4cm}
-    \caption{Auto-regressive inference with our networks, on the four driving cycles of the LG dataset, at 25°C.}
-    \vspace{-0.2cm}
-    \label{fig:full-discharge}
-\end{figure*}
+%\begin{figure*}[ht]
+%    \centering
+%    \includegraphics[width=\linewidth]{images/Battery_Cycles_Subplots_with_Output.pdf}
+%    % \vspace{-0.4cm}
+%    \caption{Auto-regressive inference with our networks, on the four driving cycles of the LG dataset, at 25°C.}
+%    \vspace{-0.2cm}
+%    \label{fig:full-discharge}
+%\end{figure*}
 In this final section, we illustrate the estimation of a complete discharge cycle, leveraging the autoregressive application of our model, depicted in Fig.~\ref{fig:nn-autoregressive}. We target the entire four ``driving'' cycles of the LG test dataset. 
 We highlight that this is a critical task, i.e., predicting the battery lifetime given a target workload, that can not be solved by SoA methods, given that they require instantaneous voltage information, whereas we use voltage as input \textit{only at the first timestamp}.
 % On the other hand, solving this task allows for the prediction of the battery lifetime given a target workload and, therefore, its optimization.

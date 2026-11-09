@@ -14,6 +14,7 @@ from device.compute_model import probe_time_s, training_time_s
 from device.communication_model import ctrl_latency_s
 from device.constants import V_NOMINAL
 from device.fuel_gauge import DeviceReading
+from device.workload import stationary_utilization
 from device.world_state import (
     BATTERY_NAMES, battery_delta_soc, effective_profile, idle_power_w,
     training_power_w,
@@ -204,6 +205,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         refuse_load_only: bool = False,
         partial_work: bool = False,
         load_estimate: str = "last",
+        enroll_load: str = "max",
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -246,6 +248,8 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
             raise ValueError(f"soc_source: 'estimate' o 'report', non {soc_source!r}")
         if load_estimate not in ("last", "mean"):
             raise ValueError(f"load_estimate: 'last' o 'mean', non {load_estimate!r}")
+        if enroll_load not in ("max", "mean"):
+            raise ValueError(f"enroll_load: 'max' o 'mean', non {enroll_load!r}")
         self.soc_source = soc_source
         self.negotiation = bool(negotiation)
         self.fednova = bool(fednova)
@@ -278,6 +282,24 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         # uno che si scopre occupato. Segue workload-scale (04/11): a scale 1
         # e' 0.30 come prima.
         self.w_busy = self.world.workload.max_utilization()
+        # [B] 09/11, enroll_load: il workload che il server assume per un
+        # client che non ha ancora mai riportato il proprio (iscrizione).
+        #   "max"  il caso peggiore w_busy, come fino alla v2 e al plus3;
+        #   "mean" la media della POPOLAZIONE: media delle utilizzazioni
+        #          stazionarie delle tre catene, assegnate in parti uguali
+        #          (0.118 a x1). E' un dato aggregato, non del singolo client.
+        # Col massimo, a beta 1.0 (a = 0.9) chi non era mai contattato veniva
+        # stimato scaricarsi al carico massimo dal tempo 0, finiva in fondo alla
+        # classifica e non veniva piu' interrogato: 6 client mai scelti a x1
+        # (plus3), 26 a x3. Un errore ottimista lo corregge la prima proposta;
+        # uno pessimista non viene corretto mai.
+        self.enroll_load = enroll_load
+        if enroll_load == "mean":
+            wl = self.world.workload
+            self.w_enroll = (float(np.mean(list(stationary_utilization(wl.scale).values())))
+                             if wl.enabled else 0.0)
+        else:
+            self.w_enroll = self.w_busy
 
         self._last_seen: dict[int, int] = {}       # cid -> ultimo round scelto
         self._plan: dict[int, Envelope] = {}       # cid -> envelope del round
@@ -319,7 +341,9 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
                                                                  if self.refuse_load_only else ""),
                                        self.refuse_deadline),
                                       ("lavoro parziale", self.partial_work),
-                                      ("workload medio", self.load_estimate == "mean"))
+                                      ("workload medio", self.load_estimate == "mean"),
+                                      (f"workload medio all'iscrizione ({self.w_enroll:.3f})",
+                                       self.enroll_load == "mean"))
               if flag]
         # [B] dal 30/10 FedNova e' spento di default: si segnala quando e' acceso
         return (f"sage-smart-{self.world.battery}"
@@ -364,8 +388,9 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         cids = list(self._node_to_cid.values())
         for c in cids:
             # il primo "report" e' l'iscrizione, al tempo 0, workload ignoto
-            # (non entra nella media dei workload: non e' una lettura vera)
-            self._record(c, self._sensor_soc(c), self.w_busy, False, 0.0,
+            # (non entra nella media dei workload: non e' una lettura vera).
+            # [B] 09/11: il workload assunto e' w_enroll (vedi enroll_load)
+            self._record(c, self._sensor_soc(c), self.w_enroll, False, 0.0,
                          measured=False)
             self._k_cal[c] = 1.0
         nominal = [
@@ -414,7 +439,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         dt = max(0.0, self._clock_s - self._t_rep.get(cid, 0.0))
         if dt <= 0.0:
             return float(soc)
-        w = self._w_rep.get(cid, self.w_busy)
+        w = self._w_rep.get(cid, self.w_enroll)
         if self.load_estimate == "mean" and self._w_cnt.get(cid):
             # media dei workload riportati: su un intervallo di decine di
             # minuti il workload cambia stato, l'ultimo valore non dura
@@ -642,7 +667,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         prof = self.world.profile(cid)          # statico: dalla Fase 0
         batches = self._batches_for(cid)
         b_ref = self._batch_for(cid)
-        peff = effective_profile(prof, self._w_known.get(cid, self.w_busy))
+        peff = effective_profile(prof, self._w_known.get(cid, self.w_enroll))
         e_lo, e_cap = int(self.epochs_min), int(self.epochs_cap)
         n = self._n_of(cid)
 

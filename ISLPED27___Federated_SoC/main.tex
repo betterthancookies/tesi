@@ -15,24 +15,25 @@
 
 \newcommand{\rev}[1]{{\color{red}#1}}
 \newcommand{\revtwo}[1]{{\color{blue}#1}}
+\newcommand{\carlo}[1]{\begingroup\color{magenta}#1\endgroup}
 \renewcommand{\baselinestretch}{0.975}
 \begin{document}
 \bstctlcite{IEEEexample:BSTcontrol}
 \title{Coupling Neural Networks and Physics Equations For Li-Ion Battery State-of-Charge Prediction
 % {\footnotesize \textsuperscript{*}Note: Sub-titles are not captured in Xplore and
 % should not be used}
-\thanks{This publication is part of the project PNRR-NGEU which has received funding from the MUR – DM 117/2023.}
+\thanks{This publication is NOT part of the project PNRR-NGEU which has received funding from the MUR – DM 117/2023.}
 }
 \input{text/authors}
 \maketitle
-\input{text/00-abstract}
+{\color{lightgray}\input{text/00-abstract}}  %old papaer
 
 \begin{IEEEkeywords}
-Deep Learning, Physics Informed Neural Networks, Batteries
+\color{lightgray}Deep Learning, Physics Informed Neural Networks, Batteries
 \end{IEEEkeywords}
 \vspace{-0.5cm}
 \input{text/01-introduction}
-{\color{lightgray}\input{text/02-background}}   % old paper
+\input{text/02-background}
 \input{text/03-methods}
 {\color{lightgray}\input{text/04-results}}      % old paper
 {\color{lightgray}\input{text/05-conclusions}}  % old paper

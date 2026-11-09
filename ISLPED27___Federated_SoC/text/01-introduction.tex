@@ -1,75 +1,68 @@
 \section{Introduction}\label{sec:intro}
 
 Federated Learning (FL) trains a shared model on data that never leaves the
-devices that produced it~\cite{mcmahan2017fedavg}. On smartphones, every
-participation is paid in battery: a selected phone downloads the global model,
-trains it on its local data, and uploads the update over the cellular network.
-Battery life is a primary concern of smartphone users~\cite{ferreira2011battery},
-and a phone that runs out of charge leaves the federation, together with its
-data.
+devices that produced it~\cite{mcmahan2017fedavg}. On battery-powered devices,
+every participation has an energy cost: a selected client downloads the global
+model, trains it on its local data, and uploads the update. Smartphones are a
+particularly critical case, since battery life is a primary concern of their
+users~\cite{ferreira2011battery} and the transfers go over the cellular
+network. A phone that runs out of charge leaves the federation, together with
+its data.
 
-\textbf{State of the art.}
-Energy-aware FL mostly acts at the server, by choosing \emph{who} trains.
-SAGE~\cite{savoia2026sage} ranks clients by state of charge (SoC) and data
-divergence and selects them by integer programming; ESCS~\cite{maciel2024escs}
-filters clients by residual battery and network quality and weighs them by
-their loss. Once selected, however, clients run the same local work, or a
-reduced amount decided by the server: SAGE, for instance, halves the epochs of
-selected clients with low energy. FedProx~\cite{li2020fedprox} tolerates
-heterogeneous local work through a proximal term, but as a nuisance to
-correct, not as a knob to save energy.
+Recent energy-aware FL works act at the server, by selecting which clients
+train. SAGE~\cite{savoia2026sage} ranks clients by state of charge (SoC) and
+data divergence, while ESCS~\cite{maciel2024escs} filters them by residual
+battery and network quality and weighs them by their loss. Once selected,
+however, clients run the same local work, or a reduced amount decided by the
+server; SAGE, for instance, halves the epochs of the selected clients with low
+energy. FedProx~\cite{li2020fedprox} does tolerate heterogeneous local work,
+through a proximal term, but treats it as a nuisance to correct rather than as
+a way to save energy.
 
-\textbf{Motivation.}
-How much local work a phone should do in a round depends on two things: how
-much work it \emph{can afford}, given its charge, the load of the other
-applications and whether it is plugged in, and how much work is \emph{worth
-doing}, given how poorly the current global model fits its data. Both are
-known exactly only on the device, and only when training starts. The server
-sees them through reports that are old by construction, since a client is
-contacted only once every few rounds. Refreshing this view is not free:
-polling every device at each round costs a radio session per phone, and
-sending the model to a phone that then declines wastes a full download. With
-a fixed local workload, many phones run out of battery before training is
-over (Sec.~\ref{sec:results}).
+With a fixed local workload, many phones run out of battery before training is
+over (Sec.~\ref{sec:results}). The right amount of local work depends on two
+factors. The first is how much the phone can afford, which depends on its
+charge, on the load of other applications, and on whether it is charging; the
+second is how much it can gain, i.e., how poorly the global model fits its
+local data. Only the device knows these quantities accurately, and only when
+training starts. The server, instead, relies on the last report of each client,
+which may be several rounds old, and keeping these reports up to date would
+require contacting every device at each round, at an energy cost for all of
+them.
 
-\textbf{Approach.}
-We propose SAGE-smart, a client-driven assignment of the local work. The server
-keeps the decision it can take well: who participates, from a ranking that
-balances SoC, data divergence and the time since the last participation.
-Instead of a fixed workload, it sends an \emph{envelope}: a range of epochs, a
-set of batch sizes, a round deadline and a battery reserve. The client chooses
-its epochs and batch size inside the envelope when training starts (late
-binding), using its fresh state and the loss of the global model on a sample
-of its data. A lightweight proposal, sent before the model, lets a phone that
-cannot afford even the minimum work decline at the cost of a control message
-instead of a model download.
+We propose SAGE-smart, which splits this decision between client and server.
+The server still selects the participants, balancing SoC, data divergence and
+the time since the last participation. Instead of a fixed workload, however, it
+sends each of them a set of bounds: a range of epochs, a set of batch sizes, a
+round deadline and a battery reserve. Each client then chooses its epochs and
+batch size within these bounds when training starts, based on its current
+state and on the loss of the global model on its data. Before the model, the
+server sends a lightweight proposal, so that a phone that cannot afford even
+the minimum work can decline without wasting a model download.
 
-\textbf{Contributions.} In detail, our main contributions are:
+Our main contributions are the following:
 \begin{itemize}
-  \item A client-driven local work assignment for FL on battery-powered
-  devices: the server selects the participants and proposes an envelope, and
-  each client binds its epochs and batch size at training time, within its
-  battery reserve and the round deadline (Sec.~\ref{sec:methodology}).
-  \item A characterization, in messages and joules, of three ways to bring
-  the client state into this decision: model-first negotiation, lightweight
-  negotiation, and state broadcast with a server-side decision. Sending the
-  proposal before the model makes a refusal an order of magnitude cheaper
-  than a wasted download, with no fixed cost per round
-  (Sec.~\ref{sec:protocols}).
-  \item An energy-faithful FL simulator built on Flower~\cite{beutel2020flower},
+  \item SAGE-smart, a client-driven assignment of the local work for FL on
+  battery-powered devices, in which the server selects the participants and
+  bounds their work, and each client sets its epochs and batch size at training
+  time, within its battery reserve and the round deadline. A proposal sent
+  before the model lets a phone that cannot afford the work decline at the cost
+  of a control message instead of a model download
+  (Sec.~\ref{sec:methodology}).
+  \item An FL simulator built on Flower~\cite{beutel2020flower} that charges
+  every joule a device spends, from training to idle, to its battery. It is
   based on the speed and power of real smartphones~\cite{xu2022mandheling},
   three battery models, the LTE radio~\cite{huang2012lte,narayanan2021variegated},
   a background workload and the recharge habits of real
-  users~\cite{ferreira2011battery}. Every joule spent by a device, from
-  training to idle, is charged to its battery (Sec.~\ref{sec:system}).
+  users~\cite{ferreira2011battery} (Sec.~\ref{sec:system}).
   % TODO mention the code release, if we release it
   \item An evaluation with ResNet-18 on CIFAR-100 against FedAvg, FedProx,
   SAGE and ESCS, under different battery models and levels of data
   heterogeneity. With respect to FedAvg, SAGE-smart \rev{uses 40\% less energy
   and depletes 8 phones instead of 58, with 2.8 more accuracy points}; with
   respect to SAGE and ESCS, on average, it \rev{gains 9.7 accuracy points with
-  39\% less energy} (Sec.~\ref{sec:results}).
-  % TODO add the workload stress test (when the negotiation pays off)
+  39\% less energy} (Sec.~\ref{sec:results}). \rev{ste cose sono in rosso perchè sono provvisorie}
+  % TODO add the workload stress test
 \end{itemize}
 % NOTE: results from campaign v2 (3 seeds, datasheet battery, mean of the three
 % beta, SAGE-smart without FedNova). SAGE and ESCS = mean of sage_nm and the

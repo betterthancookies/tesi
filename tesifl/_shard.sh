@@ -120,6 +120,12 @@ sage_smart_nonova|sage_smart_b128)
       # di arrivare in ritardo; nella media pesa per i campioni visti.
       sage_smart_plus3) algo="sage_smart"
                   extra="sage-a=${QA} sage-b=${QB} smart-ablation='dlload+loadavg+partial'" ;;
+      # [B] 09/11 "plus4" = SAGE-smart del paper: plus3 + all'iscrizione il
+      # server assume il workload MEDIO della popolazione (0.118 a x1) invece
+      # del massimo. Col massimo, a beta 1.0, chi non era mai contattato veniva
+      # stimato scarico e non veniva piu' interrogato (6 mai scelti a x1).
+      sage_smart_plus4) algo="sage_smart"
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='dlload+loadavg+partial+enrollmean'" ;;
       # [B] 06/11 ablazione CUMULATA del plus3 (ABL_PLUS3=1 bash
       # ablation_cum.sh). I gradini 0-3 sono sage_smart_cum0..3 (gia' fatti
       # a x1), poi: 4 = gradino 3 + lavoro parziale; 5 = + negoziazione, col

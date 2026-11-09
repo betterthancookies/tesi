@@ -123,6 +123,72 @@ Numeri dell'introduzione aggiornati con la v2.
      ABL_PLUS3=1 bash ablation_cum.sh = 36 run (~33 h a 3300 s/run) in
      results_ablation_cum_plus3_ResNet18_C100; copiando i 4 plus3 b01 dal
      workload si salta a 32 run (~29 h).
+   - [07/11 15:15] cumulata plus3 a 23/32 (beta 0.1 e 0.5 complete; scratchpad
+     abl_plus3.py). IPOTESI NON CONFERMATA: col lavoro parziale negoziazione
+     e stima non danno contributo. Negoziazione (5-4): -0.7/-1.4/-1.1/-0.8
+     punti a x3/x2/x1.5/x1, energia -0.5..-1.8%, morti misti; stima (6-5):
+     +1.2/+0.1/+0.8/-0.2 punti, energia +0.2..+5.4%. Tutto il guadagno sta
+     nel gradino 4 (parziale): x1 b01 51.2/1267/12 -> 53.4/1117/5, b05
+     55.0/1217/7 -> 57.9/1104/5; ritardi 0 gia' senza negoziazione. La
+     negoziazione aggiunge rifiuti (8-41%) e alza il Gini (x3 0.44 -> 0.52).
+     Con la negoziazione l'errore sul SoC e' 0 (la risposta porta lo stato
+     fresco): la stima cambia solo l'ordine delle proposte. Da guardare: x3
+     b10 plus3 ha 26 mai scelti (13 vivi), contro 4 a b01/b05.
+     [09/11] CORREZIONE: l'errore giusto e' smart_info_err (smart_soc_err e'
+     dichiarato contro vero, sempre ~0): ultimo report 1.0 (x1) .. 3-4 (x3)
+     punti di SoC; la negoziazione lo abbassa un po', la stima ancora un po'
+     a b01, ma lo ALZA a b10.
+   - [09/11] cumulata plus3 COMPLETA (36/36). Medie sui 3 beta:
+     negoziazione -0.1/-1.4/-0.9/-0.8 punti (x3/x2/x1.5/x1), energia
+     -0.5..-1.2%; stima -0.6/-0.5/+0.2/-0.2 punti, energia 0..+2.8%.
+     DIFETTO DELLA STIMA a beta 1.0: mai scelti 6/12/16/26 (x1..x3), errore
+     2.2/5.6/6.5/11.2 contro 1.5-2.8 senza stima. Causa: all'iscrizione il
+     server registra w = w_busy (massimo) per tutti (sage_smart.py:368) e la
+     media dei workload non conta l'iscrizione; chi non e' mai contattato
+     viene stimato scaricarsi al carico massimo dal tempo 0, senza ricariche
+     -> stima ~0 -> con a = 0.9 a beta 1.0 resta in fondo e non viene mai
+     interrogato. x3 b10: 13 vivi mai scelti, SoC0 0.46-0.70, 9 catena bassa,
+     SoC finale fino a 0.98. C'e' anche nella v2 (probabile causa dei mai
+     scelti a beta 1.0 del report 14). Correzioni proposte, NON fatte.
+   - [09/11] SAGE ed ESCS NON hanno pausa fra i round: ESCS (eq. 11 e codice
+     degli autori) idle = latenza massima del round; SAGE idle = potenza idle
+     x durata del round, ricarica ogni 10 round.
+   - [09/11] PERCHE' NEGOZIAZIONE E STIMA NON DANNO NULLA (gradino 4, x1,
+     seed 2026, scratchpad why_noinfo.py: contatti ricostruiti dal .devsoc
+     col workload rigiocato). Il server SBAGLIA, ma sbagliare non costa:
+     1) il SoC si muove pochissimo: batterie da 17.7-18.5 Wh; idle per round
+        0.02 / 0.1 / 0.2-0.38 punti (w = 0 / 0.1 / 0.3); un training costa
+        0.52 punti in media (max 0.86);
+     2) il report e' recente: eta' mediana 4-5 round, 90% 12-17 -> errore
+        medio 0.96 / 1.10 / 1.74 punti (log, beta 0.1/0.5/1.0), mediana 0.25-0.31;
+     3) l'errore grosso e' solo di chi e' in carica (3% dei casi, +3.7 punti a
+        round a 1C, errore medio ~26 punti): il server lo crede piu' scarico,
+        e' l'errore innocuo (si perde al massimo un training gratis);
+     4) i client differiscono di molto di piu': deviazione standard del SoC
+        nel pool 16 punti contro 1 di errore. Classifica col SOLO SoC (caso
+        peggiore, nel punteggio ci sono anche D e anzianita'), senza chi e' in
+        carica: 19.2-19.7 dei primi 20 uguali col SoC noto e col vero;
+     5) il lavoro (E, B, parziale, riserva 20%) lo decide il client col SoC
+        VERO: l'errore del server non puo' far morire nessuno.
+     Quindi la stima corregge 0.1 punti a round di idle che non cambiano la
+     scelta, e non corregge la carica (la assume ferma); la negoziazione da'
+     lo stato fresco ai candidati, ma la scelta e' gia' la stessa, e i suoi
+     rifiuti (8-15%) tolgono client lenti o carichi -> -0.8 punti, Gini piu'
+     alto. L'informazione conterebbe con un training che costa una frazione
+     grande della batteria o con un SoC che cambia in fretta fra i contatti.
+   - [09/11] SAGE-smart DEL PAPER = "plus4" = plus3 + all'iscrizione il server
+     assume il workload MEDIO della popolazione (0.118 a x1, media stazionaria
+     delle tre catene) invece del massimo (ok dell'utente). Interruttore
+     enrollmean (server_app), enroll_load in sage_smart.py, etichetta
+     sage_smart_plus4 in _shard.sh; le etichette vecchie restano identiche.
+     Dopo la v2 e' cambiato solo SAGE-smart (diff f283388..HEAD): le baseline
+     della v2 restano valide. Da rifare: 27 run plus4 (3 mondi x 3 beta x 3
+     seed, ~25 h) nella cartella della v2, come campagna vera: in
+     experiment.toml sage_smart_{lin,peuk,nm} -> sage_smart_plus4_{...}, le
+     altre 153 run ci sono gia' e run.sh le salta:
+       FT_ALGO=sage_smart_plus4_lin bash run.sh --fastTest
+       nohup bash run.sh > v2_plus4.log 2>&1 &
+     Metodologia del paper gia' scritta per plus4.
 
 [06/11] REPORT 14 SCRITTO: 14_report_week_02_11.tex, figure in report14_figs/
 (script nello scratchpad: r14_stats.py, r14_figs.py). Dentro: v2, distribuzione
