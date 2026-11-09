@@ -219,6 +219,14 @@ def main(grid: Grid, context: Context) -> None:
             # [B] 09/11: all'iscrizione il server assume il workload medio
             # della popolazione invece del massimo; etichetta sage_smart_plus4
             "enrollmean": {"enroll_load": "mean"},
+            # [B] 09/11 SAGE-smart 2 (etichette sage_smart2* in _shard.sh):
+            # previsione di SoC con ricariche attese e di workload, classifica
+            # pesata per 1 - w atteso (stima 2); proposte a una rosa di 1.5 k
+            # e scelta sullo stato fresco, rinviati senza perdere anzianita'
+            # (negoziazione 2); broadcast spento, non risposte sulle proposte
+            "forecast": {"forecast": True},
+            "pick":     {"shortlist": 1.5},
+            "nobcast":  {"proposal_nonresp": True},
         }
         # [B] 04/11: per l'esperimento sul workload l'etichetta sage_smart_noinfo
         # (_shard.sh) passa "noneg+noest": senza negoziazione e senza stima,
@@ -232,6 +240,12 @@ def main(grid: Grid, context: Context) -> None:
                              f"(usa {', '.join(ablations)}, uniti da '+')")
         for p in parts:
             smart.update(ablations[p])
+        if "nobcast" in parts:
+            # [B] SAGE-smart 2: non chiede lo stato a tutti; chi e'
+            # raggiungibile lo scopre dalle risposte alle proposte
+            bcast = dict(bcast, broadcast=False)
+            print("[strategy] SAGE-smart 2: broadcast spento, "
+                  f"{bcast['broadcast_nonresp']:.0%} di non risposte sulle proposte")
         strategy = PhysicalSAGESmart(
             sage_a=float(context.run_config["sage-a"]),
             sage_b=float(context.run_config["sage-b"]),

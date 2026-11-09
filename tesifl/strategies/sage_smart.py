@@ -12,7 +12,7 @@ from device.battery_model import energy_wh_linear
 from device.communication_model import comm_power_w, comm_time_s
 from device.compute_model import probe_time_s, training_time_s
 from device.communication_model import ctrl_latency_s
-from device.constants import V_NOMINAL
+from device.constants import CHARGE_C_RATE, RECHARGE_RATE_PER_H, V_NOMINAL
 from device.fuel_gauge import DeviceReading
 from device.workload import stationary_utilization
 from device.world_state import (
@@ -206,9 +206,47 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         partial_work: bool = False,
         load_estimate: str = "last",
         enroll_load: str = "max",
+        forecast: bool = False,
+        shortlist: float = 1.0,
+        proposal_nonresp: bool = False,
+        load_tau_s: float = 450.0,
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
+        # [B] 09/11, SAGE-smart 2 (spenti di default: tutte le etichette di
+        # prima restano identiche; li accende sage_smart2 in _shard.sh).
+        # L'idea e' quella di pagina 1 della proposta: il server PREVEDE
+        # l'utilita' di ogni client e la RETTIFICA quando lo contatta. Finora
+        # la negoziazione diceva solo SE un client partecipa (accetta/rifiuta)
+        # e la stima correggeva solo l'idle: nessuna delle due cambiava CHI
+        # veniva scelto (19.5 su 20 uguali). Qui decidono la scelta.
+        #   forecast True:   stima 2. Oltre all'idle, il SoC atteso tiene conto
+        #                    delle ricariche attese (stesso modello orario degli
+        #                    utenti, Ferreira 2011) e il workload atteso decade
+        #                    dall'ultimo valore riportato verso la media del
+        #                    client con costante load_tau_s. La classifica e'
+        #                    pesata per (1 - w atteso): il lavoro utile che il
+        #                    telefono puo' fare adesso per unita' di batteria.
+        #   shortlist > 1:   negoziazione 2. Le proposte vanno a una rosa di
+        #                    shortlist * k candidati; il server sceglie i k con
+        #                    lo stato FRESCO delle risposte (SoC, carica,
+        #                    workload). Chi accetta e non viene scelto non perde
+        #                    l'anzianita': e' rinviato, non escluso. Il client
+        #                    rifiuta solo per energia (niente dlload).
+        #   proposal_nonresp True: senza broadcast nessuno ha verificato chi e'
+        #                    raggiungibile: la frazione broadcast_nonresp dei
+        #                    contattati non risponde (proposta o modello), come
+        #                    nel broadcast. Va con broadcast spento ("nobcast").
+        if shortlist < 1.0:
+            raise ValueError(f"shortlist >= 1, non {shortlist}")
+        if shortlist > 1.0 and not negotiation:
+            raise ValueError("shortlist > 1 richiede la negoziazione")
+        if forecast and soc_source != "estimate":
+            raise ValueError("forecast richiede soc_source='estimate'")
+        self.forecast = bool(forecast)
+        self.shortlist = float(shortlist)
+        self.proposal_nonresp = bool(proposal_nonresp)
+        self.load_tau_s = float(load_tau_s)
         # [B] 19/10, ABLAZIONE (smart-ablation in server_app): i default sono
         # SAGE-smart completo; ogni interruttore toglie un solo componente.
         #   soc_source "report": il server usa l'ultimo SoC riportato, senza
@@ -331,6 +369,18 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         self._n_queried = 0
         self._n_refused = 0
         self._info_err = float("nan")
+        # SAGE-smart 2: workload atteso (classifica), rinviati, non raggiunti,
+        # attesa del timeout per chi non risponde, errore sul workload (verifica)
+        self._w_fc: dict[int, float] = {}
+        self._n_deferred = 0
+        self._n_noreply = 0
+        self._extra_wait_s = 0.0
+        self._w_err = float("nan")
+
+    @property
+    def _smart2(self) -> bool:
+        """Almeno un componente di SAGE-smart 2 acceso: colonne in piu' nel CSV."""
+        return self.forecast or self.shortlist > 1.0 or self.proposal_nonresp
 
     @property
     def variant(self) -> str:
@@ -343,7 +393,13 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
                                       ("lavoro parziale", self.partial_work),
                                       ("workload medio", self.load_estimate == "mean"),
                                       (f"workload medio all'iscrizione ({self.w_enroll:.3f})",
-                                       self.enroll_load == "mean"))
+                                       self.enroll_load == "mean"),
+                                      (f"previsione di SoC (ricariche attese) e workload "
+                                       f"(tau {self.load_tau_s:g} s)", self.forecast),
+                                      (f"rosa di {self.shortlist:g} k scelta sullo stato fresco",
+                                       self.shortlist > 1.0),
+                                      ("senza broadcast, non risposte sulle proposte",
+                                       self.proposal_nonresp))
               if flag]
         # [B] dal 30/10 FedNova e' spento di default: si segnala quando e' acceso
         return (f"sage-smart-{self.world.battery}"
@@ -452,18 +508,86 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
                                                    dt / n, prof, soc))
         return float(min(1.0, soc))
 
+    def _forecast(self, cid: int) -> tuple[float, float]:
+        """SAGE-smart 2, Fase 2a: SoC e workload ATTESI adesso.
+
+            w(t)   = w_med + (w_rep - w_med) * exp(-(t - t_rep) / tau)
+            SoC(t) = valore atteso su tre rami, a passi di _ESTIMATE_STEP_S:
+                     in scarica (idle con w(t)), in carica (C-rate fino al
+                     100%), carica finita e di nuovo in scarica.
+
+        w_med e' la media dei workload riportati dal client (prima del primo
+        report, quella della popolazione). Dal ramo in scarica passa in carica,
+        a ogni passo, la frazione p = 1 - exp(-lambda (1 - SoC) dt): e' il
+        modello orario degli utenti (Ferreira 2011), un dato di POPOLAZIONE
+        che il server conosce come conosce la batteria del device. Un client
+        in carica all'ultimo report resta in carica fino al 100%.
+
+        [B] PERCHE'. La stima di prima scaricava sempre e non ricaricava mai:
+        un client non contattato da ore scendeva in classifica anche se nel
+        frattempo, in media, aveva ricaricato (+2 punti l'ora a SoC 0.6). E il
+        workload restava l'ultimo valore per sempre, mentre dopo 5 round lo
+        stato e' lo stesso solo nel 51% dei casi.
+        """
+        soc0 = float(self._soc_rep[cid])
+        dt = max(0.0, self._clock_s - self._t_rep.get(cid, 0.0))
+        w_rep = float(self._w_rep.get(cid, self.w_enroll))
+        w_med = (self._w_sum[cid] / self._w_cnt[cid]) if self._w_cnt.get(cid) else self.w_enroll
+        if dt <= 0.0:
+            return soc0, w_rep
+        prof = self.world.profile(cid)
+        bat = self.world.battery
+        recharge = bool(getattr(self.world, "_recharge_enabled", False))
+        n = max(1, math.ceil(dt / _ESTIMATE_STEP_S))
+        h = dt / n
+        # masse e SoC dei tre rami: scarica (d), in carica (c), carica finita (f)
+        if self._chg_rep.get(cid, False):
+            m_d, s_d, m_c, s_c = 0.0, soc0, 1.0, soc0
+        else:
+            m_d, s_d, m_c, s_c = 1.0, soc0, 0.0, soc0
+        m_f, s_f = 0.0, 1.0
+        for i in range(n):
+            w = w_med + (w_rep - w_med) * math.exp(-(i + 0.5) * h / self.load_tau_s)
+            p_idle = idle_power_w(prof, w)
+            if recharge and m_d > 0.0:
+                moved = m_d * (1.0 - math.exp(-RECHARGE_RATE_PER_H * (1.0 - s_d) * h / 3600.0))
+                if moved > 0.0:
+                    s_c = (m_c * s_c + moved * s_d) / (m_c + moved)
+                    m_c, m_d = m_c + moved, m_d - moved
+            if m_d > 0.0:
+                s_d = max(0.0, s_d + battery_delta_soc(bat, p_idle, h, prof, s_d))
+            if m_f > 1e-9:
+                s_f = max(0.0, s_f + battery_delta_soc(bat, p_idle, h, prof, s_f))
+            if m_c > 0.0:
+                s_c = min(1.0, s_c + CHARGE_C_RATE * h / 3600.0)
+                if s_c >= 1.0:
+                    s_f = (m_f * s_f + m_c) / (m_f + m_c)
+                    m_f, m_c = m_f + m_c, 0.0
+        soc = m_d * s_d + m_c * s_c + m_f * s_f
+        w_now = w_med + (w_rep - w_med) * math.exp(-dt / self.load_tau_s)
+        return float(min(1.0, max(0.0, soc))), float(w_now)
+
     def _refresh_state(self, available: list[int]) -> None:
         """Fase 2a: lo stato con cui il server ordina i client."""
         for c in self._node_to_cid.values():
-            self._soc_known[c] = self._estimate(c)
+            if self.forecast:
+                soc, w = self._forecast(c)
+                self._soc_known[c], self._w_known[c] = soc, w
+                self._w_fc[c] = w
+            else:
+                self._soc_known[c] = self._estimate(c)
+                self._w_known[c] = self._w_rep[c]
             self._chg_known[c] = self._chg_rep[c]
-            self._w_known[c] = self._w_rep[c]
         # [B] verifica, non input: quanto lo stato noto si discosta da quello
         # che il device leggerebbe adesso, sul pool selezionabile
         pool = [self._node_to_cid[n] for n in available]
         if pool:
             self._info_err = float(np.mean(
                 [abs(self._soc_known[c] - self._sensor_soc(c)) for c in pool]))
+            if self._smart2:
+                self._w_err = float(np.mean(
+                    [abs(self._w_known[c] - self.world.workload.utilization(c))
+                     for c in pool]))
 
     def _propose(self, nodes: list[int],
                  envs: dict[int, Envelope]) -> dict[int, Message]:
@@ -473,6 +597,16 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         si addebita qui: dipende da chi verra' selezionato (sessione radio
         condivisa col download del modello o no), vedi _charge_control.
         """
+        if self.proposal_nonresp:
+            # [B] SAGE-smart 2 senza broadcast: nessuno ha verificato prima chi
+            # e' raggiungibile. La frazione broadcast_nonresp non riceve la
+            # proposta (fuori copertura, spento), come nel broadcast: non paga
+            # nulla, non risponde, e l'ondata si chiude al timeout.
+            lost = {n for n in nodes if self._bcast_rng.random() < self.bcast_nonresp}
+            if lost:
+                self._n_noreply += len(lost)
+                self._extra_wait_s += max(0.0, self.bcast_timeout_s - ctrl_latency_s())
+                nodes = [n for n in nodes if n not in lost]
         msgs: list[Message] = []
         for n in nodes:
             cid = self._node_to_cid[n]
@@ -553,6 +687,9 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         self._waves = 0
         self._n_queried = 0
         self._n_refused = 0
+        self._n_deferred = 0
+        self._n_noreply = 0
+        self._extra_wait_s = 0.0
         if not k or not available:
             log(INFO, "%s round %s: pool vuoto", self.variant, server_round)
             return []
@@ -572,6 +709,12 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
             + self.stale_w * self._staleness(cid_of[n], server_round)
             for n in pool
         }
+        if self.forecast:
+            # [B] SAGE-smart 2: pesato per il lavoro utile atteso adesso,
+            # 1 - w atteso (a parita' di potenza un telefono occupato al 30%
+            # fa il 30% di passi in meno nella deadline e paga di piu' ogni passo)
+            score = {n: s * (1.0 - self._w_fc.get(cid_of[n], self.w_enroll))
+                     for n, s in score.items()}
 
         prob = pulp.LpProblem("SAGE_Smart_Select", pulp.LpMaximize)
         y = [pulp.LpVariable(f"y_{i}", cat="Binary") for i in range(m)]
@@ -591,12 +734,22 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         # la prima ondata di proposte e' esattamente la sua scelta, i
         # rimpiazzi sono i successivi nella stessa classifica
         ranking = sorted(pool, key=lambda n: -score[n])
-        if self.negotiation:
+        if self.negotiation and self.shortlist > 1.0:
+            selected = self._negotiate_pick(ranking, len(selected), server_round)
+        elif self.negotiation:
             selected = self._negotiate(ranking, len(selected), server_round)
         else:
             # ablazione: la prima ondata senza chiedere, nessun rimpiazzo e
             # nessuno scambio di controllo (waves = 0, overhead 0)
             selected = ranking[:len(selected)]
+            if self.proposal_nonresp:
+                # [B] SAGE-smart 2 senza broadcast e senza proposte: chi non e'
+                # raggiungibile non riceve il modello e il suo posto resta
+                # vuoto (il round dura comunque fino alla deadline)
+                lost = {n for n in selected
+                        if self._bcast_rng.random() < self.bcast_nonresp}
+                self._n_noreply += len(lost)
+                selected = [n for n in selected if n not in lost]
         if not selected:
             self._charge_control([])
             log(INFO, "%s round %s: nessun candidato ha accettato in %s "
@@ -605,7 +758,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
             return []
 
         self._charge_control(selected)
-        self._overhead_s = self._waves * ctrl_latency_s()
+        self._overhead_s = self._waves * ctrl_latency_s() + self._extra_wait_s
         for n in selected:
             self._last_seen[cid_of[n]] = server_round
         # envelope con lo stato appena riportato dai client che hanno accettato
@@ -615,11 +768,66 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         never = sum(1 for c in cid_of.values() if c not in self._last_seen)
         log(INFO, "%s round %s: pool %s, %s selezionati (cap %s) | "
             "E_hi %s-%s (medio %.1f) | mai visti %s | interrogati %s, "
-            "rifiuti %s, ondate %s",
+            "rifiuti %s, ondate %s%s",
             self.variant, server_round, m, len(selected), hi, min(E), max(E),
             float(np.mean(E)), never, self._n_queried, self._n_refused,
-            self._waves)
+            self._waves,
+            (f" | rinviati {self._n_deferred}, non raggiunti {self._n_noreply}, "
+             f"errore w {self._w_err:.3f}") if self._smart2 else "")
         return selected
+
+    def _fresh_score(self, cid: int, server_round: int) -> float:
+        """SAGE-smart 2: lo score con lo stato APPENA riportato dal client.
+
+        Stessa forma della classifica, ma con SoC, carica e workload della
+        risposta alla proposta: un telefono in carica conta come pieno (la
+        batteria non paga), e il punteggio e' pesato per 1 - w, il lavoro
+        utile che puo' fare adesso.
+        """
+        soc = 1.0 if self._chg_rep.get(cid, False) else float(self._soc_rep[cid])
+        base = (self.a * soc + self.b * self._divergence(cid)
+                + self.stale_w * self._staleness(cid, server_round))
+        return base * (1.0 - float(self._w_rep.get(cid, self.w_enroll)))
+
+    def _negotiate_pick(self, ranking: list[int], slots: int,
+                        server_round: int) -> list[int]:
+        """SAGE-smart 2, Fase 2b: rosa piu' larga dei posti, scelta sullo
+        stato fresco.
+
+        Ondata 1: proposte ai primi ceil(shortlist * slots) della classifica
+        (stima). Chi accetta entra nella rosa; chi rifiuta (solo per energia)
+        perde l'anzianita' come prima; chi non risponde non e' raggiungibile
+        e non conta come contatto. Se i posti non sono coperti, ondata 2 coi
+        successivi, ancora shortlist volte quelli che mancano. Poi il server
+        sceglie i `slots` migliori per _fresh_score: gli altri della rosa sono
+        RINVIATI, tengono l'anzianita' e restano in cima al round dopo.
+        """
+        cid_of = self._node_to_cid
+        accepted: list[int] = []
+        asked: set[int] = set()
+        need = slots
+        while need > 0 and self._waves < self.max_waves:
+            batch = [n for n in ranking if n not in asked][: int(math.ceil(self.shortlist * need))]
+            if not batch:
+                break
+            self._waves += 1
+            asked.update(batch)
+            envs = {cid_of[n]: self._assign_work(cid_of[n]) for n in batch}
+            replies = self._propose(batch, envs)
+            for n in batch:
+                r = replies.get(n)
+                if r is None:
+                    continue
+                if int(self._rep(r, "smart-accept", 0)) == 1:
+                    accepted.append(n)
+                else:
+                    self._n_refused += 1
+                    self._last_seen[cid_of[n]] = server_round
+            need = slots - len(accepted)
+        picked = sorted(accepted,
+                        key=lambda n: -self._fresh_score(cid_of[n], server_round))[:slots]
+        self._n_deferred = len(accepted) - len(picked)
+        return picked
 
     def _negotiate(self, ranking: list[int], slots: int,
                    server_round: int) -> list[int]:
@@ -646,6 +854,10 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
                 r = replies.get(n)
                 if r is not None and int(self._rep(r, "smart-accept", 0)) == 1:
                     accepted.append(n)
+                elif r is None and self.proposal_nonresp:
+                    # [B] SAGE-smart 2 senza broadcast: non raggiunto, ne'
+                    # rifiuto ne' contatto (come in _negotiate_pick)
+                    continue
                 else:
                     self._n_refused += 1
                     # [B] contattato: l'anzianita' riparte da zero, cosi' non
@@ -905,6 +1117,12 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         if self.partial_work:
             # [B] solo con il lavoro parziale: le altre run hanno le colonne di prima
             st["smart_n_partial"] = int(sum(1 for r in done if r.get("partial")))
+        if self._smart2:
+            # [B] solo SAGE-smart 2: rinviati (accettato ma non scelto), non
+            # raggiunti senza broadcast, errore medio del workload noto (verifica)
+            st["smart_n_deferred"] = int(self._n_deferred)
+            st["smart_n_noreply"] = int(self._n_noreply)
+            st["smart_w_err"] = float(self._w_err)
         log(INFO, "%s: %s risposte | E eseguite %.1f (min %.2f, max %.2f) "
             "| E_hi medio %.1f (energia %s, deadline %s) | opt-out %s | "
             "fuori deadline %s | errore SoC %.1e | errore stato noto %.3f",

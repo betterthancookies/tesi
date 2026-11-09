@@ -40,7 +40,35 @@
 set -u
 cd "$(dirname "$0")"
 
-if [ "${ABL_PLUS3:-0}" = "1" ]; then
+if [ "${ABL_SMART2:-0}" = "1" ]; then
+  # [B] 09/11 CUMULATA SAGE-smart CONTRO SAGE-smart 2, come quella del report
+  # 13 ma senza il gradino di FedNova (scartato) e tutta col codice di oggi:
+  # mondo nm, x1, seed 2026, i 3 beta di experiment.toml.
+  #   0  sage_smart_cum0      nessun componente: E=5 e B=128 fissi, niente
+  #                           negoziazione, SoC = ultimo report
+  #   1  sage_smart_cum1      + anzianita' (c)
+  #   2  sage_smart_cum2      + E adattivo (scelto dal client)
+  #   3  sage_smart_cum3      + B piccolo (scelto dal client, 16-128)
+  #   4  sage_smart_pcum4     + lavoro parziale                  (comune)
+  #   SAGE-smart (plus4, quella della campagna principale):
+  #   5  sage_smart_pcum5     + negoziazione (rifiuto se colpa del carico)
+  #   6  sage_smart_plus4     + stima del SoC (workload medio, anche
+  #                           all'iscrizione)
+  #   SAGE-smart 2:
+  #   5' sage_smart2_noinfo   - broadcast (10% non raggiungibili)
+  #   6' sage_smart2_nofc     + negoziazione 2 (rosa 1.5 k, scelta fresca)
+  #   7' sage_smart2          + previsione (ricariche attese, workload)
+  # 10 gradini x 3 beta = 30 run. Etichette col suffisso _x1 (identico a
+  # senza): pcum4/pcum5 _x1 si possono copiare dalla cumulata del plus3 e
+  # plus4 dalla campagna principale, codice identico per quelle etichette.
+  DEF_NAME="ablation_cum_smart2_ResNet18_C100"
+  DEF_ALGOS=""
+  for v in sage_smart_cum0_nm sage_smart_cum1_nm sage_smart_cum2_nm sage_smart_cum3_nm \
+           sage_smart_pcum4_nm sage_smart_pcum5_nm sage_smart_plus4_nm \
+           sage_smart2_noinfo_nm sage_smart2_nofc_nm sage_smart2_nm; do
+    DEF_ALGOS="${DEF_ALGOS:+$DEF_ALGOS }${v}_x1"
+  done
+elif [ "${ABL_PLUS3:-0}" = "1" ]; then
   # [B] 06/11 cumulata del PLUS3: solo i gradini nuovi, a ogni carico del
   # workload (dal piu' alto), seed 2026, i 3 beta di experiment.toml.
   # 3 gradini x 4 carichi x 3 beta = 36 run. Gradini 0-3: vecchia cartella.

@@ -126,6 +126,25 @@ sage_smart_nonova|sage_smart_b128)
       # stimato scarico e non veniva piu' interrogato (6 mai scelti a x1).
       sage_smart_plus4) algo="sage_smart"
                   extra="sage-a=${QA} sage-b=${QB} smart-ablation='dlload+loadavg+partial+enrollmean'" ;;
+      # [B] 09/11 SAGE-smart 2: la stima PREVEDE (SoC con le ricariche
+      # attese, workload che torna verso la media del client) e la
+      # negoziazione RETTIFICA: proposte a una rosa di 1.5 k, il server sceglie
+      # i k migliori sullo stato fresco pesando per 1 - w; chi resta fuori e'
+      # rinviato senza perdere anzianita'. Il client rifiuta solo per energia
+      # (niente dlload), lavoro parziale come plus4. Broadcast spento: chi e'
+      # raggiungibile si scopre dalle risposte (10% non risponde).
+      #   sage_smart2          completo
+      #   sage_smart2_nopick   senza rosa: proposte ai soli k (negoziazione 1)
+      #   sage_smart2_nofc     senza previsione: classifica sull'ultimo report
+      #   sage_smart2_noinfo   senza entrambe: ultimo report, niente proposte
+      sage_smart2) algo="sage_smart"
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='partial+enrollmean+forecast+pick+nobcast'" ;;
+      sage_smart2_nopick) algo="sage_smart"
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='partial+enrollmean+forecast+nobcast'" ;;
+      sage_smart2_nofc) algo="sage_smart"
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='noest+partial+enrollmean+pick+nobcast'" ;;
+      sage_smart2_noinfo) algo="sage_smart"
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='noest+noneg+partial+enrollmean+nobcast'" ;;
       # [B] 06/11 ablazione CUMULATA del plus3 (ABL_PLUS3=1 bash
       # ablation_cum.sh). I gradini 0-3 sono sage_smart_cum0..3 (gia' fatti
       # a x1), poi: 4 = gradino 3 + lavoro parziale; 5 = + negoziazione, col

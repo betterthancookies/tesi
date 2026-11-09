@@ -189,6 +189,29 @@ Numeri dell'introduzione aggiornati con la v2.
        FT_ALGO=sage_smart_plus4_lin bash run.sh --fastTest
        nohup bash run.sh > v2_plus4.log 2>&1 &
      Metodologia del paper gia' scritta per plus4.
+   - [09/11] SAGE-smart 2 SCRITTO (non ancora girato). La stima PREVEDE e la
+     negoziazione RETTIFICA (pagina 1 della proposta), cosi' decidono CHI viene
+     scelto e non solo se un client partecipa:
+       forecast  SoC atteso con le ricariche attese (modello orario di
+                 Ferreira) e workload che torna verso la media del client
+                 (tau 450 s); classifica pesata per 1 - w atteso
+       pick      proposte a una rosa di 1.5 k, scelta dei k sullo stato fresco
+                 (in carica = pieno, peso 1 - w); chi resta fuori e' RINVIATO
+                 senza perdere anzianita'; il client rifiuta solo per energia
+       nobcast   broadcast spento; 10% dei contattati non raggiungibile
+     Etichette: sage_smart2, _nopick, _nofc, _noinfo (_shard.sh). Controlli
+     puri: previsione contro Monte Carlo del mondo, errore entro +-2 punti
+     fino a 4 h, la stima del plus4 sbaglia di -4..-14 punti a 2-4 h (non
+     vede le ricariche). Margine dalla scelta sul workload fresco (rosa 30 su
+     20, stato che cambia al round dopo): +6% di passi a x1, +10% x1.5, +14%
+     x2, +25% x3. Script nello scratchpad: s2_potential2.py, s2_forecast_check.py.
+     CUMULATA SAGE-smart contro SAGE-smart 2 (come il report 13, senza FedNova,
+     x1, seed 2026, 3 beta, 30 run): ABL_SMART2=1 in ablation_cum.sh, cartella
+     results_ablation_cum_smart2_ResNet18_C100. pcum4/pcum5 _x1 si copiano dalla
+     cumulata del plus3, plus4 dalla campagna principale (codice identico):
+     restano 21 run. NON lanciare mentre gira la campagna plus4: run.sh
+     riavvia il SuperLink e uccide la run in corso (vale anche per il fastTest).
+     Poi, per lo stress test: WL_SMART2=1 WL_MULTS=x3 bash workload_sweep.sh.
 
 [06/11] REPORT 14 SCRITTO: 14_report_week_02_11.tex, figure in report14_figs/
 (script nello scratchpad: r14_stats.py, r14_figs.py). Dentro: v2, distribuzione

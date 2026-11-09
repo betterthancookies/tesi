@@ -43,6 +43,11 @@
 #   WL_PLUS=3 nohup bash workload_sweep.sh > workload_plus3.log 2>&1 &
 #   etichetta sage_smart_plus3_nm a x3 e x1 = 2 run.
 #
+# SAGE-smart 2 (09/11), WL_SMART2=1: completo e senza informazione a x1 e x3,
+# beta 0.1 / 0.5 / 1.0, seed 2026 = 12 run in results_smart2_ResNet18_C100/.
+#   WL_SMART2=1 nohup bash workload_sweep.sh > smart2.log 2>&1 &
+#   FT_ALGO=sage_smart2_nm_x1 bash run.sh --fastTest    prova prima
+#
 # Come ablation_cum.sh: experiment.toml derivato (sweeps/experiment_workload.toml)
 # che cambia SOLO nome, GPU, seed, beta e algoritmi; fisica, [algo] e [model]
 # restano quelli della campagna principale. Il moltiplicatore viaggia nel nome
@@ -57,7 +62,17 @@ GPUS_WL=${WL_GPUS:-"2"}
 SEEDS_WL=${WL_SEEDS:-"2026"}
 BETAS_WL=${WL_BETAS:-"0.1"}
 MULTS=${WL_MULTS:-"x3 x2 x1p5 x1"}
-if [ "${WL_PLUS:-0}" = "3" ]; then
+if [ "${WL_SMART2:-0}" = "1" ]; then
+  # [B] 09/11 SAGE-smart 2 (vedi _shard.sh): completo e senza informazione,
+  # a x1 e x3, nei tre beta, seed 2026 = 12 run (~11 h), cartella propria.
+  # Il riferimento e' sage_smart_plus3 della cumulata (stessi carichi e beta,
+  # results_ablation_cum_plus3_ResNet18_C100). Per le due ablazioni a meta':
+  #   WL_SMART2=1 WL_VARIANTS="sage_smart2_nopick_nm sage_smart2_nofc_nm" ...
+  NAME=${WL_NAME:-"smart2_ResNet18_C100"}
+  BETAS_WL=${WL_BETAS:-"0.1 0.5 1.0"}
+  MULTS=${WL_MULTS:-"x1 x3"}
+  VARIANTS=${WL_VARIANTS:-"sage_smart2_nm sage_smart2_noinfo_nm"}
+elif [ "${WL_PLUS:-0}" = "3" ]; then
   # [B] 06/11 QUARTO GIRO, plus3: plus2 + lavoro parziale per chi non sta
   # nella deadline nemmeno con E_lo. Stessi due carichi del terzo giro.
   MULTS=${WL_MULTS:-"x3 x1"}
