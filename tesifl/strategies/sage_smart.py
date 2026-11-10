@@ -210,6 +210,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         shortlist: float = 1.0,
         proposal_nonresp: bool = False,
         load_tau_s: float = 450.0,
+        forecast_load_rank: bool = True,
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -237,6 +238,15 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         #                    raggiungibile: la frazione broadcast_nonresp dei
         #                    contattati non risponde (proposta o modello), come
         #                    nel broadcast. Va con broadcast spento ("nobcast").
+        # [B] 10/11, forecast_load_rank False (token "socfc"): previsione del
+        # solo SoC in classifica. La cumulata del 09/11 (beta 0.1) ha mostrato
+        # che pesare la classifica per (1 - w atteso) esclude per sempre i
+        # telefoni con la catena di workload "high": il w atteso tende alla
+        # loro media e non scende mai, quindi la penalita' (x0.79) colpisce
+        # anche l'anzianita' e non si recupera. Catena high scelta 21 volte
+        # contro 40, 4 telefoni mai scelti, -1.5 punti di accuratezza. Il carico
+        # resta solo nella scelta finale (_fresh_score), dove e' quello appena
+        # riportato e quindi transitorio: e' la parte che funziona.
         if shortlist < 1.0:
             raise ValueError(f"shortlist >= 1, non {shortlist}")
         if shortlist > 1.0 and not negotiation:
@@ -247,6 +257,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         self.shortlist = float(shortlist)
         self.proposal_nonresp = bool(proposal_nonresp)
         self.load_tau_s = float(load_tau_s)
+        self.forecast_load_rank = bool(forecast_load_rank)
         # [B] 19/10, ABLAZIONE (smart-ablation in server_app): i default sono
         # SAGE-smart completo; ogni interruttore toglie un solo componente.
         #   soc_source "report": il server usa l'ultimo SoC riportato, senza
@@ -395,7 +406,11 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
                                       (f"workload medio all'iscrizione ({self.w_enroll:.3f})",
                                        self.enroll_load == "mean"),
                                       (f"previsione di SoC (ricariche attese) e workload "
-                                       f"(tau {self.load_tau_s:g} s)", self.forecast),
+                                       f"(tau {self.load_tau_s:g} s)",
+                                       self.forecast and self.forecast_load_rank),
+                                      ("previsione del solo SoC in classifica (ricariche "
+                                       "attese e consumo; workload solo nella scelta finale)",
+                                       self.forecast and not self.forecast_load_rank),
                                       (f"rosa di {self.shortlist:g} k scelta sullo stato fresco",
                                        self.shortlist > 1.0),
                                       ("senza broadcast, non risposte sulle proposte",
@@ -709,7 +724,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
             + self.stale_w * self._staleness(cid_of[n], server_round)
             for n in pool
         }
-        if self.forecast:
+        if self.forecast and self.forecast_load_rank:
             # [B] SAGE-smart 2: pesato per il lavoro utile atteso adesso,
             # 1 - w atteso (a parita' di potenza un telefono occupato al 30%
             # fa il 30% di passi in meno nella deadline e paga di piu' ogni passo)

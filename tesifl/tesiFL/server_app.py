@@ -227,6 +227,11 @@ def main(grid: Grid, context: Context) -> None:
             "forecast": {"forecast": True},
             "pick":     {"shortlist": 1.5},
             "nobcast":  {"proposal_nonresp": True},
+            # [B] 10/11: previsione del solo SoC in classifica, il workload
+            # pesa solo nella scelta finale (stato fresco): "forecast" pesava
+            # la classifica per 1 - w atteso ed escludeva la catena high.
+            # Etichetta sage_smart2_socfc in _shard.sh
+            "socfc":    {"forecast": True, "forecast_load_rank": False},
         }
         # [B] 04/11: per l'esperimento sul workload l'etichetta sage_smart_noinfo
         # (_shard.sh) passa "noneg+noest": senza negoziazione e senza stima,

@@ -145,6 +145,12 @@ sage_smart_nonova|sage_smart_b128)
                   extra="sage-a=${QA} sage-b=${QB} smart-ablation='noest+partial+enrollmean+pick+nobcast'" ;;
       sage_smart2_noinfo) algo="sage_smart"
                   extra="sage-a=${QA} sage-b=${QB} smart-ablation='noest+noneg+partial+enrollmean+nobcast'" ;;
+      # [B] 10/11 SAGE-smart 2 CORRETTO: previsione del solo SoC in classifica
+      # (token socfc). sage_smart2 pesava la classifica per 1 - w atteso ed
+      # escludeva la catena di workload high (-1.5 punti a beta 0.1, 4
+      # telefoni mai scelti); qui il workload pesa solo nella scelta finale.
+      sage_smart2_socfc) algo="sage_smart"
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='partial+enrollmean+socfc+pick+nobcast'" ;;
       # [B] 06/11 ablazione CUMULATA del plus3 (ABL_PLUS3=1 bash
       # ablation_cum.sh). I gradini 0-3 sono sage_smart_cum0..3 (gia' fatti
       # a x1), poi: 4 = gradino 3 + lavoro parziale; 5 = + negoziazione, col

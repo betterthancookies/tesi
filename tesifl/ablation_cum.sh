@@ -57,15 +57,19 @@ if [ "${ABL_SMART2:-0}" = "1" ]; then
   #   SAGE-smart 2:
   #   5' sage_smart2_noinfo   - broadcast (10% non raggiungibili)
   #   6' sage_smart2_nofc     + negoziazione 2 (rosa 1.5 k, scelta fresca)
-  #   7' sage_smart2          + previsione (ricariche attese, workload)
+  #   7' sage_smart2_socfc    + previsione del solo SoC (ricariche attese,
+  #                           consumo); il workload pesa solo nella scelta
+  #                           finale. [B] 10/11: sostituisce sage_smart2, che
+  #                           pesava la classifica per 1 - w atteso ed
+  #                           escludeva la catena high (-1.5 punti a beta 0.1)
   # 10 gradini x 3 beta = 30 run. Etichette col suffisso _x1 (identico a
-  # senza): pcum4/pcum5 _x1 si possono copiare dalla cumulata del plus3 e
-  # plus4 dalla campagna principale, codice identico per quelle etichette.
+  # senza). ABL_BETAS="0.1" per un solo beta (le run gia' presenti nella
+  # cartella si saltano, --force le rifa').
   DEF_NAME="ablation_cum_smart2_ResNet18_C100"
   DEF_ALGOS=""
   for v in sage_smart_cum0_nm sage_smart_cum1_nm sage_smart_cum2_nm sage_smart_cum3_nm \
            sage_smart_pcum4_nm sage_smart_pcum5_nm sage_smart_plus4_nm \
-           sage_smart2_noinfo_nm sage_smart2_nofc_nm sage_smart2_nm; do
+           sage_smart2_noinfo_nm sage_smart2_nofc_nm sage_smart2_socfc_nm; do
     DEF_ALGOS="${DEF_ALGOS:+$DEF_ALGOS }${v}_x1"
   done
 elif [ "${ABL_PLUS3:-0}" = "1" ]; then
@@ -87,14 +91,19 @@ NAME=${ABL_NAME:-"$DEF_NAME"}
 GPUS_ABL=${ABL_GPUS:-"2"}
 SEEDS_ABL=${ABL_SEEDS:-"2026"}
 ALGOS=${ABL_ALGOS:-"$DEF_ALGOS"}
+# [B] 10/11: ABL_BETAS="0.1" restringe i beta (vuoto = quelli di experiment.toml)
+BETAS_ABL=${ABL_BETAS:-""}
 F="sweeps/experiment_ablation_cum.toml"
 
 mkdir -p sweeps
-python3 - "$NAME" "$F" "$ALGOS" "$GPUS_ABL" "$SEEDS_ABL" <<'PY' || exit 1
+python3 - "$NAME" "$F" "$ALGOS" "$GPUS_ABL" "$SEEDS_ABL" "$BETAS_ABL" <<'PY' || exit 1
 import re, sys, tomllib
 name, out, algos = sys.argv[1], sys.argv[2], sys.argv[3].split()
 gpus = [int(g) for g in sys.argv[4].split()]
 seeds = [int(s) for s in sys.argv[5].split()]
+# repr del float: 1.0 resta "1.0" (con "1" il beta diventerebbe intero e il
+# nome dei file "_b1_" invece di "_b10_")
+betas = [float(b) for b in sys.argv[6].split()] or None
 src = open("experiment.toml", encoding="utf-8").read()
 camp, rest = src.split("[world]", 1)          # nome, GPU, seed e algoritmi stanno prima
 camp = re.sub(r'(?m)^name\s*=\s*"[^"]*"', f'name = "{name}"', camp, count=1)
@@ -102,6 +111,9 @@ camp = re.sub(r'(?m)^gpus\s*=\s*\[[^\]\n]*\]',
               "gpus = [" + ", ".join(map(str, gpus)) + "]", camp, count=1)
 camp = re.sub(r'(?m)^seeds\s*=\s*\[[^\]\n]*\]',
               "seeds = [" + ", ".join(map(str, seeds)) + "]", camp, count=1)
+if betas:
+    camp = re.sub(r'(?m)^betas\s*=\s*\[[^\]\n]*\]',
+                  "betas = [" + ", ".join(repr(b) for b in betas) + "]", camp, count=1)
 # lista degli algoritmi: dalla riga "algorithms = [" alla prima riga che e'
 # solo "]", sostituita per righe (niente regex non greedy sui commenti)
 lines = camp.split("\n")
@@ -117,12 +129,17 @@ assert c["campaign"]["name"] == name
 assert c["campaign"]["gpus"] == gpus
 assert c["campaign"]["seeds"] == seeds
 assert c["campaign"]["algorithms"] == algos
+if betas:
+    changed.add(("campaign", "betas"))
+    assert c["campaign"]["betas"] == betas
+    assert all(isinstance(b, float) for b in c["campaign"]["betas"])
 for sec in orig:
     for k, v in orig[sec].items():
         if (sec, k) not in changed:
             assert c[sec][k] == v, (sec, k)
 open(out, "w", encoding="utf-8", newline="\n").write(txt)
-print(f"  {out}: campagna {name}, GPU {gpus}, seed {seeds}, {len(algos)} etichette")
+print(f"  {out}: campagna {name}, GPU {gpus}, seed {seeds}, beta {c['campaign']['betas']}, "
+      f"{len(algos)} etichette")
 PY
 
 EXP_TOML="$F" bash run.sh "$@"
