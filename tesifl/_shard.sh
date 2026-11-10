@@ -90,6 +90,12 @@ sage_smart_nonova|sage_smart_b128)
                   extra="sage-a=${QA} sage-b=${QB} smart-ablation='noest+noneg+e5+nonova+b128'" ;;
       sage_smart_cum2) algo="sage_smart"
                   extra="sage-a=${QA} sage-b=${QB} smart-ablation='noest+noneg+nonova+b128'" ;;
+      # [B] 10/11 gradino 2 col lavoro parziale dentro l'E adattivo (il client
+      # decide quanto lavorare, anche meno di un'epoca se E = 2 non sta nella
+      # deadline), per la cumulata di SAGE-smart 2 a sei gradini: 2 = cum2p,
+      # 3 = pcum4 (= cum3 + lavoro parziale), 4 = nofc, 5 = socfc
+      sage_smart_cum2p) algo="sage_smart"
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='noest+noneg+nonova+b128+partial'" ;;
       sage_smart_cum3) algo="sage_smart"
                   extra="sage-a=${QA} sage-b=${QB} smart-ablation='noest+noneg+nonova'" ;;
       sage_smart_cum4) algo="sage_smart"

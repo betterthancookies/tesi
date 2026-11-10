@@ -265,6 +265,26 @@ Numeri dell'introduzione aggiornati con la v2.
      (perso dallo scratchpad) e' stato recuperato dal transcript.
      SoC finale di nofc 35.3 contro 40.2 del plus4: 4 ricariche in meno (47
      contro 51), stessa energia; fino al round 150 i SoC medi sono uguali.
+     [10/11 12:24] SAGE-SMART 2 CORRETTO (socfc), beta 0.1: acc 52.0 (nofc
+     53.9, plus4 53.1), 1117 Wh, 3 scarichi (nofc 5), SoC finale 40.7, mai
+     scelti 0, Gini 0.29 (il piu' uniforme), errore SoC 0.52 (nofc 0.73),
+     telefoni in carica scelti +25% (1.43 contro 1.14 a round), SoC medio
+     ultimi 50 round 43.5 contro 39.5. Indietro di 1.5-2.5 punti dal round 50
+     in poi. Un seed solo (SAGE-smart a beta 0.1 fra seed: 49.4-52.8).
+     La stima del SoC ora ha un ruolo, ma sulla batteria, non sull'accuratezza.
+     Figura completa: report15_figs/fig_cumulative_ablation_b01.png.
+     Figura di SAGE-smart 2 da solo (scala dell'utente + lavoro parziale come
+     gradino 4; 5 = negoziazione che sostituisce il broadcast, pcum4 -> nofc;
+     6 = stima del SoC, socfc): report15_figs/fig_cumulative_ablation_smart2_b01.png
+     [10/11] L'utente vuole ESATTAMENTE 6 gradini (0 base, 1 +c, 2 +E
+     adattivo, 3 +B adattivo, 4 +negoziazione, 5 +stima SoC). Il lavoro
+     parziale entra nell'E adattivo: etichetta nuova sage_smart_cum2p (cum2 +
+     partial, 'noest+noneg+nonova+b128+partial'), 3 = pcum4, 4 = nofc (che ha
+     anche enrollmean e niente broadcast), 5 = socfc. Manca solo cum2p (1 run):
+       ABL_SMART2=1 FT_ALGO=sage_smart_cum2p_nm_x1 bash ablation_cum.sh --fastTest
+       ABL_SMART2=1 ABL_BETAS=0.1 nohup bash ablation_cum.sh > ablation_smart2_b01.log 2>&1 &
+     Da decidere: in campagna 6' (nofc, accuratezza) o 7' (socfc, batteria);
+     controllo proposto: nofc e socfc a beta 0.1 coi seed 42 e 73 (4 run, ~4 h).
 
 [06/11] REPORT 14 SCRITTO: 14_report_week_02_11.tex, figure in report14_figs/
 (script nello scratchpad: r14_stats.py, r14_figs.py). Dentro: v2, distribuzione

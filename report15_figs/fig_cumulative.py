@@ -35,6 +35,28 @@ steps = [
     ("6' +negotiation 2", "sage_smart2_nofc_nm_x1", TEAL, 8.4),
     ("7' +SoC forecast\n(SAGE-smart 2)", "sage_smart2_socfc_nm_x1", DARK_TEAL, 9.4),
 ]
+# [10/11] solo SAGE-smart 2, con la scala del report 13 chiesta dall'utente
+# (0 base, 1 +c, 2 +E adattivo, 3 +B adattivo, 4 +negoziazione, 5 +stima SoC)
+# piu' il lavoro parziale come gradino a se': fa parte di SAGE-smart 2 e
+# senza il suo gradino il suo guadagno (+2.7 punti) finirebbe sulla
+# negoziazione. La negoziazione di SAGE-smart 2 (rosa di 1.5 k, scelta
+# fresca) prende il posto del broadcast dello stato: 4 -> 5 e' pcum4 -> nofc.
+# [10/11] l'utente vuole ESATTAMENTE i sei gradini del report 13. Il lavoro
+# parziale entra nell'E adattivo (il client decide quanto lavorare, anche
+# meno di un'epoca), cosi' ogni gradino e' un solo componente:
+# 2 = cum2p (cum2 + lavoro parziale), 3 = pcum4 (cum3 + lavoro parziale),
+# 4 = nofc (negoziazione, che prende il posto del broadcast), 5 = socfc.
+steps2 = [
+    ("0 base", "sage_smart_cum0_nm_x1", "#bbbbbb", 0.0),
+    ("1 +staleness (c)", "sage_smart_cum1_nm_x1", TEAL, 1.0),
+    ("2 +adaptive E", "sage_smart_cum2p_nm_x1", TEAL, 2.0),
+    ("3 +adaptive B", "sage_smart_pcum4_nm_x1", TEAL, 3.0),
+    ("4 +negotiation", "sage_smart2_nofc_nm_x1", TEAL, 4.0),
+    ("5 +SoC estimate\n(SAGE-smart 2)", "sage_smart2_socfc_nm_x1", DARK_TEAL, 5.0),
+]
+NOTE2 = ("Adaptive E includes partial work: a client that cannot meet the deadline even with E = 2 "
+         "sends the SGD steps that fit, weighted by the samples seen. Steps 0-3 poll the state "
+         "with a broadcast; from step 4 the negotiation replaces it.")
 ref = {"FedAvg (linear battery)": os.path.join(MAIN, f"fedavg_b{B}_seed2026.csv"),
        "SAGE ablation": os.path.join(MAIN, f"sage_nm_b{B}_seed2026.csv")}
 
@@ -50,46 +72,61 @@ def final(path):
 
 metrics = ["Final accuracy (%)", "Energy (Wh)", "Depleted devices", "Mean final SoC (%)"]
 fmt = ["{:.1f}", "{:.0f}", "{:d}", "{:.1f}"]
-vals = {}
-for name, lab, _, _ in steps:
-    p = os.path.join(CUM, f"{lab}_b{B}_seed2026.csv")
-    vals[name] = final(p) if os.path.exists(p) else None
 refv = {name: final(p) for name, p in ref.items()}
 
-fig, ax = plt.subplots(1, 4, figsize=(19, 4.8))
-for k in range(4):
-    a = ax[k]
-    for name, _, col, x in steps:
-        v = vals[name]
-        if v is None:      # run non ancora finita: segnaposto (coordinate dell'asse)
-            a.text(x, 0.03, "running", rotation=90, ha="center", va="bottom", fontsize=8,
-                   color="#777777", transform=a.get_xaxis_transform())
-            continue
-        a.bar(x, v[k], color=col, alpha=0.85)
-        a.text(x, v[k], fmt[k].format(v[k]), ha="center", va="bottom", fontsize=7)
-    for (rname, rv), rc in zip(refv.items(), ("#444444", "#e377c2")):
-        a.axhline(rv[k], color=rc, ls="--", lw=1.2, label=rname)
-    a.axvline(6.7, color="#999999", ls=":", lw=1)       # fra i due rami
-    a.set_xticks([x for _, _, _, x in steps])
-    a.set_xticklabels([n for n, _, _, _ in steps], rotation=45, ha="right", fontsize=8)
-    a.set_title(metrics[k])
-    a.grid(axis="y", alpha=0.3)
-ax[0].set_ylim(30, 60)
-ax[3].set_ylim(0, 50)
-ax[2].legend(fontsize=7.5, loc="center right")
-fig.suptitle("Cumulative ablation of SAGE-smart (purple) and SAGE-smart 2 (teal) from the same step 4 "
-             "(datasheet battery, $\\beta$ = 0.1, seed 2026): dashed = references")
-fig.tight_layout()
-os.makedirs(OUT, exist_ok=True)
-out = os.path.join(OUT, "fig_cumulative_ablation_b01.png")
-fig.savefig(out, dpi=150)
 
-print(f"{'gradino':34s}   acc     Wh  scarichi  SoC finale")
-for name, _, _, _ in steps:
-    v = vals[name]
-    label = name.replace("\n", " ")
-    print(f"  {label:32s} " + ("  in corso" if v is None else
-                               f"{v[0]:5.1f} {v[1]:6.0f} {v[2]:6d} {v[3]:8.1f}"))
-for name, v in refv.items():
-    print(f"  {name:32s} {v[0]:5.1f} {v[1]:6.0f} {v[2]:6d} {v[3]:8.1f}")
-print("figura:", out)
+def draw(steps, fname, title, sep=None, figsize=(19, 4.8), note=None):
+    vals = {}
+    for name, lab, _, _ in steps:
+        p = os.path.join(CUM, f"{lab}_b{B}_seed2026.csv")
+        vals[name] = final(p) if os.path.exists(p) else None
+    fig, ax = plt.subplots(1, 4, figsize=figsize)
+    for k in range(4):
+        a = ax[k]
+        for name, _, col, x in steps:
+            v = vals[name]
+            if v is None:      # run non ancora finita: segnaposto (coordinate dell'asse)
+                a.text(x, 0.03, "running", rotation=90, ha="center", va="bottom", fontsize=8,
+                       color="#777777", transform=a.get_xaxis_transform())
+                continue
+            a.bar(x, v[k], color=col, alpha=0.85)
+            a.text(x, v[k], fmt[k].format(v[k]), ha="center", va="bottom", fontsize=7)
+        for (rname, rv), rc in zip(refv.items(), ("#444444", "#e377c2")):
+            a.axhline(rv[k], color=rc, ls="--", lw=1.2, label=rname)
+        if sep is not None:
+            a.axvline(sep, color="#999999", ls=":", lw=1)       # fra i due rami
+        a.set_xticks([x for _, _, _, x in steps])
+        a.set_xticklabels([n for n, _, _, _ in steps], rotation=45, ha="right", fontsize=8)
+        a.set_title(metrics[k])
+        a.grid(axis="y", alpha=0.3)
+    ax[0].set_ylim(30, 60)
+    ax[3].set_ylim(0, 50)
+    ax[2].legend(fontsize=7.5, loc="center right")
+    fig.suptitle(title)
+    if note:
+        fig.text(0.5, 0.01, note, ha="center", va="bottom", fontsize=8.5, color="#444444")
+        fig.tight_layout(rect=(0, 0.05, 1, 1))
+    else:
+        fig.tight_layout()
+    os.makedirs(OUT, exist_ok=True)
+    out = os.path.join(OUT, fname)
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+
+    print(f"{'gradino':34s}   acc     Wh  scarichi  SoC finale")
+    for name, _, _, _ in steps:
+        v = vals[name]
+        label = name.replace("\n", " ")
+        print(f"  {label:32s} " + ("  in corso" if v is None else
+                                   f"{v[0]:5.1f} {v[1]:6.0f} {v[2]:6d} {v[3]:8.1f}"))
+    for name, v in refv.items():
+        print(f"  {name:32s} {v[0]:5.1f} {v[1]:6.0f} {v[2]:6d} {v[3]:8.1f}")
+    print("figura:", out, "\n")
+
+
+draw(steps, "fig_cumulative_ablation_b01.png",
+     "Cumulative ablation of SAGE-smart (purple) and SAGE-smart 2 (teal) from the same step 4 "
+     "(datasheet battery, $\\beta$ = 0.1, seed 2026): dashed = references", sep=6.7)
+draw(steps2, "fig_cumulative_ablation_smart2_b01.png",
+     "Cumulative ablation of SAGE-smart 2, one component per step (datasheet battery, "
+     "$\\beta$ = 0.1, seed 2026): dashed = references", figsize=(14, 4.9), note=NOTE2)

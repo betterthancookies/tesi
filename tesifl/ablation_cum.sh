@@ -65,9 +65,13 @@ if [ "${ABL_SMART2:-0}" = "1" ]; then
   # 10 gradini x 3 beta = 30 run. Etichette col suffisso _x1 (identico a
   # senza). ABL_BETAS="0.1" per un solo beta (le run gia' presenti nella
   # cartella si saltano, --force le rifa').
+  # [B] 10/11 figura a sei gradini di SAGE-smart 2 (0 base, 1 +c, 2 +E
+  # adattivo, 3 +B adattivo, 4 +negoziazione, 5 +stima SoC): il lavoro
+  # parziale entra nell'E adattivo, quindi serve anche sage_smart_cum2p
+  # (cum2 + lavoro parziale); il 3 e' pcum4, il 4 nofc, il 5 socfc.
   DEF_NAME="ablation_cum_smart2_ResNet18_C100"
   DEF_ALGOS=""
-  for v in sage_smart_cum0_nm sage_smart_cum1_nm sage_smart_cum2_nm sage_smart_cum3_nm \
+  for v in sage_smart_cum0_nm sage_smart_cum1_nm sage_smart_cum2_nm sage_smart_cum2p_nm sage_smart_cum3_nm \
            sage_smart_pcum4_nm sage_smart_pcum5_nm sage_smart_plus4_nm \
            sage_smart2_noinfo_nm sage_smart2_nofc_nm sage_smart2_socfc_nm; do
     DEF_ALGOS="${DEF_ALGOS:+$DEF_ALGOS }${v}_x1"
