@@ -1,0 +1,226 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{siunitx}
+\usepackage{multirow}
+\usepackage{float}
+\usepackage[autostyle]{csquotes}
+\usepackage[hidelinks]{hyperref}
+\usepackage{graphicx}
+
+\sisetup{detect-weight=true}
+
+\title{\bfseries Marocco FL thesis --- week 09/11 update}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\vspace{-3.2em}
+\begin{center}
+\emph{Client-Driven Local Work Assignment in Battery-Constrained Federated Learning}
+\end{center}
+\vspace{1em}
+
+%======================================================================
+\section{How SAGE-smart 2 works}
+\label{sec:protocol}
+
+\subsection{Round 0: enrollment (no training)}
+
+Every phone registers with the server and sends:
+\begin{itemize}
+  \item its static data: compute speed (tier), battery capacity and number of
+        local samples;
+  \item its initial state of charge (SoC).
+\end{itemize}
+The server 
+assumes the mean load of the population, $w = 0.118$, for everybody. And from the static data the server fixes the \textbf{round deadline}: the median,
+over the phones, of the time needed for the standard local work (5 epochs with
+$B = 128$). It is \SI{132}{s} and stays fixed for the whole run.
+
+\subsection{Every round, in seven steps}
+
+\paragraph{1. Forecast (server-side SoC estimate).}
+For every phone the server keeps the last state it received and when it
+received it. It forecasts:
+\begin{itemize}
+  \item the discharge since the last report;
+  \item the probability that in the meantime the owner has plugged the phone in (if it was in charge how much it recharged).
+\end{itemize}
+
+\paragraph{2. Ranking.}
+Every phone gets a score
+\begin{equation*}
+  \text{score} = a \cdot \widehat{\mathrm{SoC}} + b \cdot D + c \cdot S ,
+\end{equation*}
+
+\paragraph{3. Number of slots.}
+Round $r$ has $r + 1$ slots: 2 at round 1, 3 at round 2, up to 20 from
+round 19 on. The cap is 20\,\% of the phones still alive.
+
+\paragraph{4. Proposals (negotiation).}
+The server does not send the model to the first 20 of the ranking: it sends a
+\textbf{proposal} to the first $\lceil 1.5 \times \text{slots} \rceil$, that
+is 30 phones once the ramp is over.
+\begin{itemize}
+  \item About 10\,\% of them are unreachable (out of coverage or switched off).
+  \item A phone that answers sends its current state (SoC, load, whether it is
+        charging) and accepts or refuses.
+  \item A phone refuses only for energy: when the minimum work (2 epochs) would
+        take it below the 20\,\% battery reserve. A charging phone always
+        accepts.
+  \item If the acceptances do not fill the slots, a second wave of proposals
+        goes to the next phones of the ranking (at most two waves).
+\end{itemize}
+
+\paragraph{5. Fresh choice.}
+Among the phones that accepted, the server keeps the best ones, as many as
+the slots, with the state they \emph{have just sent}:
+\begin{equation*}
+  \text{fresh score} = \bigl(a \cdot \mathrm{SoC}_{\text{now}} + b \cdot D
+                        + c \cdot S\bigr) \cdot \bigl(1 - w_{\text{now}}\bigr).
+\end{equation*}
+\begin{itemize}
+  \item A charging phone counts as $\mathrm{SoC} = 1$: training does not cost
+        its battery anything.
+  \item A busy phone weighs less: within the deadline it would do fewer steps.
+  \item The other phones that accepted are \textbf{deferred}: they keep their
+        staleness and are at the top of the ranking in the next round.
+\end{itemize}
+
+\paragraph{6. Envelope and local training.}
+The selected phones receive the model and an \textbf{envelope}: $E$ between 2
+and a maximum computed for that phone (at most 10, limited by the deadline
+with its current load and by its battery above the reserve), $B$ among 16, 32,
+64 and 128, the deadline (\SI{132}{s}) and the reserve (20\,\%). The phone then:
+\begin{itemize}
+  \item measures the loss of the model on 256 of its samples: a high loss means
+        that its data are new for the model, so it is worth working more;
+  \item chooses $E$ in proportion to that loss and to the battery it has above
+        the reserve;
+  \item chooses $B$ starting from the smallest one, because a small batch gives
+        more SGD steps in the same time;
+  \item if not even 2 epochs fit in the deadline, does only the SGD steps that
+        fit (partial work);
+  \item sends back the updated model and a report: steps done, label
+        histogram, final SoC.
+\end{itemize}
+
+\paragraph{7. Aggregation and updates.}
+The server:
+\begin{itemize}
+  \item averages the models with FedAvg, weighting each update by the samples
+        actually seen (a partial update weighs less);
+  \item updates, for the phones that trained, the divergence $D$, the known
+        state and the staleness (back to 0);
+  \item evaluates the global model on the test set.
+\end{itemize}
+
+\newpage
+
+%======================================================================
+\section{Cumulative ablation of SAGE-smart 2}
+\label{sec:ablation}
+
+Starting from a stripped-down protocol, one component is added at each step.
+All runs use seed 2026, the datasheet battery, the nominal load of the other
+apps and 250 rounds; the bars of Figure~\ref{fig:cum} and the values of
+Table~\ref{tab:cum} are the mean over $\beta = 0.1$, $0.5$ and $1.0$.
+
+\begin{itemize}
+  \item[0] \textbf{Base}: score $a \cdot \mathrm{SoC} + b \cdot D$, $E = 5$ and
+        $B = 128$ fixed, no negotiation, SoC from the last report (no estimate),
+        FedAvg, state broadcast to all phones at every round.
+  \item[1] + staleness term ($c$).
+  \item[2] + adaptive $E$, chosen by the client within the envelope; it
+        includes partial work.
+  \item[3] + adaptive $B$, chosen by the client among 16, 32, 64 and 128.
+  \item[4] + negotiation and server-side SoC estimate together, as described
+        in Section~\ref{sec:protocol}. This is SAGE-smart 2.
+\end{itemize}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\textwidth]{fig_cumulative_ablation_smart2.png}
+  \label{fig:cum}
+\end{figure}
+
+\begin{table}[H]
+ 
+  \label{tab:cum}
+  \begin{tabular}{lcccc}
+    \toprule
+    Step & Accuracy (\%) & Depleted devices & Mean final SoC (\%) & Energy (Wh) \\
+    \midrule
+    0 base                & 41.9          & 33.7           & 35.7          & 2016 \\
+    1 + staleness         & 47.5 (+5.6)   & 31.0 ($-$2.7)  & 34.5 ($-$1.2) & 2024 (+0.4\,\%) \\
+    2 + adaptive $E$      & 45.0 ($-$2.5) & 3.7 ($-$27.3)  & 38.3 (+3.8)   & 1098 ($-$45.7\,\%) \\
+    3 + adaptive $B$      & 56.5 (+11.5)  & 5.0 (+1.3)     & 39.5 (+1.2)   & 1106 (+0.7\,\%) \\
+    4 + negotiation + estimate & 56.1 ($-$0.4) & 3.3 ($-$1.7) & 39.0 ($-$0.5) & 1101 ($-$0.5\,\%) \\
+    \midrule
+    FedAvg (reference)    & 51.1          & 66.0           & 14.4          & 1984 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\newpage
+
+\subsection{Why negotiation and SoC estimate make sense now}
+
+\begin{table}[H]
+  \centering
+  \caption{Step 3 (state broadcast, no negotiation, SoC from the last report)
+  against step 4 (SAGE-smart 2), mean over the three $\beta$.}
+  \label{tab:negest}
+  \begin{tabular}{lcc}
+    \toprule
+    & Step 3 & Step 4 (SAGE-smart 2) \\
+    \midrule
+    Control energy (Wh per run)                     & 10.3  & 1.0 \\
+    Error of the SoC used to rank (points)          & 1.27  & 0.73 \\
+    Charging phones selected per round              & 1.14  & 1.44 \\
+    Refused proposals                               & ---   & 0.5\,\% \\
+    Deferred phones per round (keep their staleness) & ---  & 6.7 \\
+    Depleted devices                                & 5.0   & 3.3 \\
+    Accuracy (\%)                                   & 56.5  & 56.1 \\
+    Energy (Wh)                                     & 1106  & 1101 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{itemize}
+  \item \textbf{No broadcast.} The server no longer contacts all 100 phones at
+        every round only to know who is reachable: the answers to the proposals
+        give both reachability and state. The control energy drops by 90\,\%
+        (10.3 to \SI{1.0}{Wh}).
+  \item \textbf{Better knowledge with fewer messages.} Thanks to the forecast
+        and the answers, the SoC that the server uses to rank the phones is
+        closer to the true one: 0.73 points of error against 1.27.
+  \item \textbf{The final choice uses the state of now.} The fresh choice
+        avoids the phones that are busy right now and prefers the charging ones,
+        whose training costs no battery: 26\,\% more charging phones are
+        selected (1.44 against 1.14 per round).
+  \item \textbf{Asking costs nothing to the phone that is asked.} Refusals are
+        rare (0.5\,\%), because a phone refuses only for energy, and the 6.7
+        deferred phones per round keep their staleness. This is the opposite of
+        SAGE-smart, where being asked and refusing pushed a phone back.
+\end{itemize}
+The result is the same accuracy and the same energy with 34\,\% fewer depleted
+devices, a cheaper protocol and more accurate information. The accuracy change
+($-$0.4 points on average: $-$1.4, $-$0.4 and +0.6 for the three $\beta$) is
+within the noise of a single seed: two variants that select the same phones
+with the same work in rounds 1 and 2 already differ in accuracy at round 1
+(2.02\,\% against 1.51\,\%), and from there the two runs follow different
+trajectories. With one seed, differences below about 2 points between two
+variants are not significant.
+
+\section{To do now}
+\begin{itemize}
+    \item 
+\end{itemize}
+
+\end{document}

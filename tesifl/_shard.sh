@@ -157,6 +157,15 @@ sage_smart_nonova|sage_smart_b128)
       # telefoni mai scelti); qui il workload pesa solo nella scelta finale.
       sage_smart2_socfc) algo="sage_smart"
                   extra="sage-a=${QA} sage-b=${QB} smart-ablation='partial+enrollmean+socfc+pick+nobcast'" ;;
+      # [B] 12/11 cumulata di SAGE-smart 2 in ORDINE INVERSO (l'ordine conta:
+      # dopo l'E adattivo negoziazione e stima hanno poco da correggere).
+      # 0 cum0, 1 cum1, 2 = cum1 + negoziazione e stima (E = 5, B = 128
+      # fissi), 3 = + E adattivo col lavoro parziale, 4 = + B adattivo =
+      # sage_smart2_socfc (stessi token)
+      sage_smart2_rev2) algo="sage_smart"
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='e5+nonova+b128+enrollmean+socfc+pick+nobcast'" ;;
+      sage_smart2_rev3) algo="sage_smart"
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='nonova+b128+partial+enrollmean+socfc+pick+nobcast'" ;;
       # [B] 06/11 ablazione CUMULATA del plus3 (ABL_PLUS3=1 bash
       # ablation_cum.sh). I gradini 0-3 sono sage_smart_cum0..3 (gia' fatti
       # a x1), poi: 4 = gradino 3 + lavoro parziale; 5 = + negoziazione, col

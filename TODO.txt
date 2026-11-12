@@ -283,6 +283,61 @@ Numeri dell'introduzione aggiornati con la v2.
      anche enrollmean e niente broadcast), 5 = socfc. Manca solo cum2p (1 run):
        ABL_SMART2=1 FT_ALGO=sage_smart_cum2p_nm_x1 bash ablation_cum.sh --fastTest
        ABL_SMART2=1 ABL_BETAS=0.1 nohup bash ablation_cum.sh > ablation_smart2_b01.log 2>&1 &
+     [10/11 sera] PERCHE' socfc E' SOTTO nofc DI 1.9 PUNTI: quasi certamente
+     rumore di traiettoria, non la stima. Nei round 1-2 le due run scelgono
+     gli stessi telefoni con lo stesso lavoro (SoC dei 100 telefoni identici
+     nel .devsoc) ma l'accuratezza e' gia' diversa al round 1 (2.02 contro
+     1.51): il modello cambia per l'ordine dei client, non per chi si sceglie.
+     Dal round 3 cambiano 2 telefoni, dal round 8 tutto. Poi il distacco
+     cresce fino al round 75 e resta ~2 punti; training identico (432 Wh).
+     Run della stessa etichetta invece deterministiche (pcum4/pcum5 x1
+     identici al quarto decimale fra 06/11 e 09/11). Quindi a seed fisso fra
+     due varianti c'e' una parte caotica di ~2 punti: i gradini piccoli della
+     figura (negoziazione +0.5, stima -1.9) sono dentro il rumore.
+     [10/11 sera] SWEEP DEL CARICO A BETA 0.1 (chiesto dall'utente): x1, x1.5,
+     x2, x2.5, x3 con pcum4, nofc, socfc, plus4; x1 c'e' gia'; pcum4 a
+     x1.5/x2/x3 copiati dalla cumulata del plus3 -> 13 run, ~12 h.
+     [11/11 17:21] SWEEP DEL CARICO A BETA 0.1 FATTO (13 run complete).
+     acc20 x1/x1.5/x2/x2.5/x3:
+       pcum4        53.4 51.9 51.3 47.1 45.4
+       SAGE-smart   53.1 48.9 46.0 45.2 42.9
+       nofc         53.9 50.2 46.9 46.1 45.1
+       SAGE-smart 2 52.0 50.8 47.7 46.6 44.1
+     SAGE-smart 2 batte SAGE-smart a ogni carico da x1.5 (+1.9 +1.7 +1.4 +1.2).
+     Ma pcum4 (niente negoziazione ne' stima) e' il migliore o pari a ogni
+     carico: preferire i telefoni liberi toglie copertura alla catena high
+     (x2: partecipazioni medie high 41.0 pcum4, 34.5 SS2, 25.1 nofc, 23.3 SS;
+     acc nello stesso ordine). A x2.5-x3 SS2/nofc arrivano al 40% prima
+     (130-133 round contro 146-157) con il 7-9% di energia in meno.
+     Rifiuti di SAGE-smart da 7.7% (x1) a 33% (x3). Morti: niente di netto.
+     Proposta (da approvare): nella scelta fresca l'anzianita' fuori dal
+     fattore (1 - w), cosi' un telefono carico ma trascurato viene ripreso.
+     [11/11] L'utente lascia stare il moltiplicatore. Figura di SAGE-smart 2
+     a CINQUE gradini (negoziazione e stima uniti nel 4 = socfc), ai tre beta
+     come il report 13: report15_figs/fig_cumulative_ablation_smart2.png
+     (draw_multi: barre = media sui beta presenti per tutti i gradini).
+     Per beta 0.5 e 1.0 mancano cum0, cum1, cum2p, socfc (8 run); pcum4 b05
+     c'e', pcum4 b10 si copia dalla cumulata del plus3:
+       ABL_SMART2=1 ABL_BETAS="0.5 1.0" ABL_ALGOS="sage_smart2_socfc_nm_x1 sage_smart_cum0_nm_x1 sage_smart_cum1_nm_x1 sage_smart_cum2p_nm_x1 sage_smart_pcum4_nm_x1" nohup bash ablation_cum.sh > ablation_smart2_b05_b10.log 2>&1 &
+     [12/11] CUMULATA DI SAGE-SMART 2 AI TRE BETA FATTA (8 run complete).
+     Media dei 3 beta (acc / Wh / morti / SoC finale):
+       0 base 41.9/2016/33.7/35.7, 1 +c 47.5/2024/31.0/34.5, 2 +E adattivo
+       45.0/1098/3.7/38.3, 3 +B adattivo 56.5/1106/5.0/39.5, 4 +negoz.+stima
+       (SAGE-smart 2) 56.1/1101/3.3/39.0. Gradino 4 per beta: -1.4/-0.4/+0.6.
+     SAGE-smart 2 a beta 0.5: 57.5 (plus4 57.3); a beta 1.0: 58.9.
+     Figura: report15_figs/fig_cumulative_ablation_smart2.png.
+     [12/11] REPORT 15 SCRITTO: 15_report_week_09_11.tex (due sezioni:
+     protocollo di SAGE-smart 2 round per round; cumulata ai tre beta con
+     tabella per gradino e perche' negoziazione + stima hanno senso ora:
+     controllo 10.3 -> 1.0 Wh, errore SoC 1.27 -> 0.73, in carica +26%,
+     morti 5.0 -> 3.3, accuratezza pari entro il rumore). Da compilare
+     (qui non c'e' LaTeX).
+     [12/11] ORDINE INVERSO a beta 0.1 (l'utente chiede se il poco effetto di
+     negoziazione e stima dipende dall'ordine: ai gradini 0-1 il server
+     sbaglia il SoC di 4-15 punti e i round durano ~370 s, dopo l'E adattivo
+     1-1.7 punti e 130 s). Etichette sage_smart2_rev2 (cum1 + negoz. + stima,
+     E 5 e B 128 fissi) e sage_smart2_rev3 (+ E adattivo col parziale); il 4
+     e' socfc. 2 run. Figura: fig_cumulative_ablation_smart2_reverse.png.
      Da decidere: in campagna 6' (nofc, accuratezza) o 7' (socfc, batteria);
      controllo proposto: nofc e socfc a beta 0.1 coi seed 42 e 73 (4 run, ~4 h).
 

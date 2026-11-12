@@ -57,8 +57,26 @@ steps2 = [
 NOTE2 = ("Adaptive E includes partial work: a client that cannot meet the deadline even with E = 2 "
          "sends the SGD steps that fit, weighted by the samples seen. Steps 0-3 poll the state "
          "with a broadcast; from step 4 the negotiation replaces it.")
-ref = {"FedAvg (linear battery)": os.path.join(MAIN, f"fedavg_b{B}_seed2026.csv"),
-       "SAGE ablation": os.path.join(MAIN, f"sage_nm_b{B}_seed2026.csv")}
+# [11/11] l'utente unisce gli ultimi due gradini (negoziazione e stima lavorano
+# insieme: la stima decide a chi chiedere, la negoziazione sceglie fra chi
+# accetta): il 4 e' direttamente SAGE-smart 2 (socfc). Ai tre beta (seed 2026)
+# come la figura del report 13: barre = media sui beta presenti per TUTTI i
+# gradini, punti = ogni beta.
+steps3 = [
+    ("0 base", "sage_smart_cum0_nm_x1", "#bbbbbb", 0.0),
+    ("1 +staleness (c)", "sage_smart_cum1_nm_x1", TEAL, 1.0),
+    ("2 +adaptive E", "sage_smart_cum2p_nm_x1", TEAL, 2.0),
+    ("3 +adaptive B", "sage_smart_pcum4_nm_x1", TEAL, 3.0),
+    ("4 +negotiation\n+SoC estimate\n(SAGE-smart 2)", "sage_smart2_socfc_nm_x1", DARK_TEAL, 4.0),
+]
+NOTE3 = ("Adaptive E includes partial work: a client that cannot meet the deadline even with E = 2 "
+         "sends the SGD steps that fit, weighted by the samples seen.\nStep 4 adds negotiation and "
+         "server-side SoC estimate together: the estimate ranks whom to ask, the negotiation (which "
+         "replaces the state broadcast of steps 0-3) picks among those who accept.")
+BETAS = (("01", "0.1", "#1f77b4"), ("05", "0.5", "#ff7f0e"), ("10", "1.0", "#2ca02c"))
+REF = {"FedAvg (linear battery)": os.path.join(MAIN, "fedavg_b{b}_seed2026.csv"),
+       "SAGE ablation": os.path.join(MAIN, "sage_nm_b{b}_seed2026.csv")}
+ref = {name: p.format(b=B) for name, p in REF.items()}
 
 
 def final(path):
@@ -124,9 +142,94 @@ def draw(steps, fname, title, sep=None, figsize=(19, 4.8), note=None):
     print("figura:", out, "\n")
 
 
+def draw_multi(steps, fname, note=None, figsize=(13, 5.2), it=False):
+    """Come la figura del report 13: barre = media sui beta, punti = ogni beta.
+
+    Le barre usano solo i beta presenti per TUTTI i gradini (una barra non
+    deve mediare su beta diversi dalle altre); con un beta solo niente punti.
+    """
+    vals = {}
+    for name, lab, _, _ in steps:
+        vals[name] = {}
+        for b, _, _ in BETAS:
+            p = os.path.join(CUM, f"{lab}_b{b}_seed2026.csv")
+            if os.path.exists(p):
+                vals[name][b] = final(p)
+    common = [b for b, _, _ in BETAS if all(b in v for v in vals.values())]
+    if not common:
+        print("nessun beta comune a tutti i gradini:", {n: sorted(v) for n, v in vals.items()})
+        return
+    # [12/11] solo FedAvg come riferimento (la linea di SAGE ablation tolta)
+    refs = {name: [final(p.format(b=b)) for b in common] for name, p in REF.items()
+            if name.startswith("FedAvg")}
+    shown = ", ".join(bl for b, bl, _ in BETAS if b in common)
+    fig, ax = plt.subplots(1, 4, figsize=figsize)
+    xs = [x for _, _, _, x in steps]
+    for k in range(4):
+        a = ax[k]
+        for name, _, col, x in steps:
+            m = sum(vals[name][b][k] for b in common) / len(common)
+            a.bar(x, m, color=col, alpha=0.85)
+            # etichetta col fondo bianco sopra i punti, cosi' resta leggibile
+            txt = fmt[k].format(round(m) if k == 2 else m)
+            a.text(x, m, txt.replace(".", ",") if it else txt, ha="center", va="bottom",
+                   fontsize=7, zorder=5, bbox=dict(boxstyle="round,pad=0.1", fc="white",
+                                                   ec="none", alpha=0.8))
+        if len(common) > 1:
+            for j, (b, bl, bc) in enumerate(BETAS):
+                if b in common:      # punti sfalsati per beta, come colonne affiancate
+                    a.scatter([x + 0.25 * (j - 1) for x in xs],
+                              [vals[n][b][k] for n, _, _, _ in steps], s=14, zorder=3,
+                              color=bc, label=f"$\\beta$={bl.replace('.', ',') if it else bl}")
+        for (rname, rv), rc in zip(refs.items(), ("#444444", "#e377c2")):
+            a.axhline(sum(v[k] for v in rv) / len(rv), color=rc, ls="--", lw=1.2,
+                      label="FedAvg (batteria lineare)" if it else rname)
+        a.set_xticks(xs)
+        a.set_xticklabels([n for n, _, _, _ in steps], rotation=45, ha="right", fontsize=8)
+        a.set_title(METRICS_IT[k] if it else metrics[k])
+        a.grid(axis="y", alpha=0.3)
+    ax[0].set_ylim(30, 62)
+    ax[3].set_ylim(0, 50)
+    ax[2].legend(fontsize=7.5, loc="center right")
+    what = ("bars = mean over the three $\\beta$, dots = each $\\beta$" if len(common) == 3
+            else (f"bars = mean over $\\beta$ = {shown}, dots = each $\\beta$" if len(common) > 1
+                  else f"$\\beta$ = {shown}"))
+    if it:
+        what = ("barre = media sui tre $\\beta$, punti = ogni $\\beta$" if len(common) == 3
+                else f"$\\beta$ = {shown}".replace(".", ","))
+        fig.suptitle(f"Ablazione cumulata di SAGE-smart 2 (batteria da datasheet, seed 2026): {what}")
+    else:
+        fig.suptitle(f"Cumulative ablation of SAGE-smart 2 (datasheet battery, seed 2026): {what}")
+    if note:
+        fig.text(0.5, 0.01, note, ha="center", va="bottom", fontsize=8.5, color="#444444")
+        fig.tight_layout(rect=(0, 0.08, 1, 1))
+    else:
+        fig.tight_layout()
+    out = os.path.join(OUT, fname)
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+    print(f"beta nelle barre: {shown}")
+    print(f"{'gradino':34s}   acc     Wh  scarichi  SoC finale   (per beta: acc)")
+    for name, _, _, _ in steps:
+        v = vals[name]
+        mm = [sum(v[b][k] for b in common) / len(common) for k in range(4)]
+        per = "  ".join(f"b{b}:{v[b][0]:.1f}" for b, _, _ in BETAS if b in v)
+        print(f"  {name.replace(chr(10), ' '):32s} {mm[0]:5.1f} {mm[1]:6.0f} {mm[2]:6.1f} {mm[3]:8.1f}   ({per})")
+    print("figura:", out, "\n")
+
+
 draw(steps, "fig_cumulative_ablation_b01.png",
      "Cumulative ablation of SAGE-smart (purple) and SAGE-smart 2 (teal) from the same step 4 "
      "(datasheet battery, $\\beta$ = 0.1, seed 2026): dashed = references", sep=6.7)
-draw(steps2, "fig_cumulative_ablation_smart2_b01.png",
-     "Cumulative ablation of SAGE-smart 2, one component per step (datasheet battery, "
-     "$\\beta$ = 0.1, seed 2026): dashed = references", figsize=(14, 4.9), note=NOTE2)
+draw_multi(steps3, "fig_cumulative_ablation_smart2.png", figsize=(13, 4.6))
+# [12/11] la stessa scala in ORDINE INVERSO (negoziazione e stima subito dopo
+# l'anzianita'), beta 0.1: stesso inizio e stessa fine (socfc)
+steps_rev = [
+    ("0 base", "sage_smart_cum0_nm_x1", "#bbbbbb", 0.0),
+    ("1 +staleness (c)", "sage_smart_cum1_nm_x1", TEAL, 1.0),
+    ("2 +negotiation\n+SoC estimate", "sage_smart2_rev2_nm_x1", TEAL, 2.0),
+    ("3 +adaptive E", "sage_smart2_rev3_nm_x1", TEAL, 3.0),
+    ("4 +adaptive B\n(SAGE-smart 2)", "sage_smart2_socfc_nm_x1", DARK_TEAL, 4.0),
+]
+draw_multi(steps_rev, "fig_cumulative_ablation_smart2_reverse.png", figsize=(13, 4.6))
+METRICS_IT = ["Accuratezza finale (%)", "Energia (Wh)", "Dispositivi scarichi", "SoC medio finale (%)"]

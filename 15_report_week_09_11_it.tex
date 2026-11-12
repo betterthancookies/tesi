@@ -1,0 +1,231 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[italian]{babel}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{siunitx}
+\usepackage{multirow}
+\usepackage{float}
+\usepackage[autostyle]{csquotes}
+\usepackage[hidelinks]{hyperref}
+\usepackage{graphicx}
+
+\sisetup{detect-weight=true}
+
+\title{\bfseries Tesi FL Marocco --- aggiornamento della settimana del 09/11}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\vspace{-3.2em}
+\begin{center}
+\emph{Client-Driven Local Work Assignment in Battery-Constrained Federated Learning}
+\end{center}
+\vspace{1em}
+
+%======================================================================
+\section{Come funziona SAGE-smart 2}
+\label{sec:protocol}
+
+\subsection{Round 0: iscrizione (nessun training)}
+
+Ogni telefono si iscrive presso il server e gli invia:
+\begin{itemize}
+  \item i suoi dati statici: velocità di calcolo (tier), capacità della
+        batteria e numero di campioni locali;
+  \item il suo stato di carica (SoC) iniziale.
+\end{itemize}
+Il server
+assume per tutti il carico medio della popolazione, $w = 0.118$. Inoltre, dai dati statici il server fissa la \textbf{scadenza del round}: la mediana,
+sui telefoni, del tempo necessario per il lavoro locale standard (5 epoche con
+$B = 128$). Vale \SI{132}{s} e resta fissa per tutta la run.
+
+\subsection{Ogni round, in sette passi}
+
+\paragraph{1. Previsione (stima del SoC lato server).}
+Per ogni telefono il server conserva l'ultimo stato ricevuto e il momento in
+cui l'ha ricevuto. Prevede:
+\begin{itemize}
+  \item la scarica dall'ultimo report;
+  \item la probabilità che nel frattempo il proprietario abbia messo il telefono in carica (se era in carica, quanto si è ricaricato).
+\end{itemize}
+
+\paragraph{2. Classifica.}
+Ogni telefono riceve un punteggio
+\begin{equation*}
+  \text{punteggio} = a \cdot \widehat{\mathrm{SoC}} + b \cdot D + c \cdot S ,
+\end{equation*}
+
+\paragraph{3. Numero di posti.}
+Il round $r$ ha $r + 1$ posti: 2 al round 1, 3 al round 2, fino a 20 dal
+round 19 in poi. Il tetto è il 20\,\% dei telefoni ancora vivi.
+
+\paragraph{4. Proposte (negoziazione).}
+Il server non manda il modello ai primi 20 della classifica: manda una
+\textbf{proposta} ai primi $\lceil 1.5 \times \text{posti} \rceil$, cioè
+30 telefoni una volta finita la rampa.
+\begin{itemize}
+  \item Circa il 10\,\% di loro non è raggiungibile (fuori copertura o spento).
+  \item Un telefono che risponde invia il suo stato attuale (SoC, carico, se
+        è in carica) e accetta o rifiuta.
+  \item Un telefono rifiuta solo per energia: quando il lavoro minimo (2 epoche)
+        lo porterebbe sotto la riserva del 20\,\% di batteria. Un telefono in
+        carica accetta sempre.
+  \item Se le accettazioni non riempiono i posti, una seconda ondata di proposte
+        va ai telefoni successivi della classifica (al massimo due ondate).
+\end{itemize}
+
+\paragraph{5. Scelta fresca.}
+Fra i telefoni che hanno accettato, il server tiene i migliori, tanti quanti
+i posti, con lo stato che \emph{hanno appena inviato}:
+\begin{equation*}
+  \text{punteggio fresco} = \bigl(a \cdot \mathrm{SoC}_{\text{ora}} + b \cdot D
+                        + c \cdot S\bigr) \cdot \bigl(1 - w_{\text{ora}}\bigr).
+\end{equation*}
+\begin{itemize}
+  \item Un telefono in carica conta come $\mathrm{SoC} = 1$: il training non
+        costa nulla alla sua batteria.
+  \item Un telefono occupato pesa meno: entro la scadenza farebbe meno passi.
+  \item Gli altri telefoni che avevano accettato sono \textbf{rinviati}:
+        mantengono la loro anzianità e sono in cima alla classifica nel round
+        successivo.
+\end{itemize}
+
+\paragraph{6. Envelope e training locale.}
+I telefoni scelti ricevono il modello e un \textbf{envelope}: $E$ fra 2 e un
+massimo calcolato per quel telefono (al più 10, limitato dalla scadenza con il
+suo carico attuale e dalla sua batteria sopra la riserva), $B$ fra 16, 32, 64
+e 128, la scadenza (\SI{132}{s}) e la riserva (20\,\%). Poi il telefono:
+\begin{itemize}
+  \item misura la loss del modello su 256 dei suoi campioni: una loss alta
+        significa che i suoi dati sono nuovi per il modello, quindi conviene
+        lavorare di più;
+  \item sceglie $E$ in proporzione a quella loss e alla batteria che ha sopra
+        la riserva;
+  \item sceglie $B$ partendo dal più piccolo, perché un batch piccolo dà più
+        passi di SGD nello stesso tempo;
+  \item se nemmeno 2 epoche stanno nella scadenza, fa solo i passi di SGD che
+        ci stanno (lavoro parziale);
+  \item rimanda il modello aggiornato e un report: passi fatti, istogramma
+        delle classi, SoC finale.
+\end{itemize}
+
+\paragraph{7. Aggregazione e aggiornamenti.}
+Il server:
+\begin{itemize}
+  \item fa la media dei modelli con FedAvg, pesando ogni update per i campioni
+        visti davvero (un update parziale pesa meno);
+  \item aggiorna, per i telefoni che si sono allenati, la divergenza $D$, lo
+        stato noto e l'anzianità (che torna a 0);
+  \item valuta il modello globale sul test set.
+\end{itemize}
+
+\newpage
+
+%======================================================================
+\section{Ablazione cumulata di SAGE-smart 2}
+\label{sec:ablation}
+
+Partendo da un protocollo ridotto all'osso, a ogni gradino si aggiunge un
+componente. Tutte le run usano il seed 2026, la batteria da datasheet, il
+carico nominale delle altre app e 250 round; le barre della
+Figura~\ref{fig:cum} e i valori della Tabella~\ref{tab:cum} sono la media su
+$\beta = 0.1$, $0.5$ e $1.0$.
+
+\begin{itemize}
+  \item[0] \textbf{Base}: punteggio $a \cdot \mathrm{SoC} + b \cdot D$, $E = 5$ e
+        $B = 128$ fissi, niente negoziazione, SoC dall'ultimo report (nessuna
+        stima), FedAvg, broadcast dello stato a tutti i telefoni a ogni round.
+  \item[1] + termine di anzianità ($c$).
+  \item[2] + $E$ adattivo, scelto dal client dentro l'envelope; comprende il
+        lavoro parziale.
+  \item[3] + $B$ adattivo, scelto dal client fra 16, 32, 64 e 128.
+  \item[4] + negoziazione e stima del SoC lato server insieme, come descritto
+        nella Sezione~\ref{sec:protocol}. Questo è SAGE-smart 2.
+\end{itemize}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\textwidth]{fig_cumulative_ablation_smart2.png}
+  \label{fig:cum}
+\end{figure}
+
+\begin{table}[H]
+
+  \label{tab:cum}
+  \begin{tabular}{lcccc}
+    \toprule
+    Gradino & Accuratezza (\%) & Dispositivi scarichi & SoC medio finale (\%) & Energia (Wh) \\
+    \midrule
+    0 base                & 41.9          & 33.7           & 35.7          & 2016 \\
+    1 + anzianità         & 47.5 (+5.6)   & 31.0 ($-$2.7)  & 34.5 ($-$1.2) & 2024 (+0.4\,\%) \\
+    2 + $E$ adattivo      & 45.0 ($-$2.5) & 3.7 ($-$27.3)  & 38.3 (+3.8)   & 1098 ($-$45.7\,\%) \\
+    3 + $B$ adattivo      & 56.5 (+11.5)  & 5.0 (+1.3)     & 39.5 (+1.2)   & 1106 (+0.7\,\%) \\
+    4 + negoziazione + stima & 56.1 ($-$0.4) & 3.3 ($-$1.7) & 39.0 ($-$0.5) & 1101 ($-$0.5\,\%) \\
+    \midrule
+    FedAvg (riferimento)  & 51.1          & 66.0           & 14.4          & 1984 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\newpage
+
+\subsection{Perché negoziazione e stima del SoC adesso hanno senso}
+
+\begin{table}[H]
+  \centering
+  \caption{Gradino 3 (broadcast dello stato, niente negoziazione, SoC
+  dall'ultimo report) contro gradino 4 (SAGE-smart 2), media sui tre $\beta$.}
+  \label{tab:negest}
+  \begin{tabular}{lcc}
+    \toprule
+    & Gradino 3 & Gradino 4 (SAGE-smart 2) \\
+    \midrule
+    Energia di controllo (Wh per run)                  & 10.3  & 1.0 \\
+    Errore del SoC usato per la classifica (punti)     & 1.27  & 0.73 \\
+    Telefoni in carica scelti per round                & 1.14  & 1.44 \\
+    Proposte rifiutate                                 & ---   & 0.5\,\% \\
+    Telefoni rinviati per round (mantengono l'anzianità) & --- & 6.7 \\
+    Dispositivi scarichi                               & 5.0   & 3.3 \\
+    Accuratezza (\%)                                   & 56.5  & 56.1 \\
+    Energia (Wh)                                       & 1106  & 1101 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{itemize}
+  \item \textbf{Niente broadcast.} Il server non contatta più tutti i 100
+        telefoni a ogni round solo per sapere chi è raggiungibile: le risposte
+        alle proposte danno sia la raggiungibilità sia lo stato. L'energia di
+        controllo cala del 90\,\% (da 10.3 a \SI{1.0}{Wh}).
+  \item \textbf{Informazione migliore con meno messaggi.} Grazie alla
+        previsione e alle risposte, il SoC che il server usa per ordinare i
+        telefoni è più vicino a quello vero: 0.73 punti di errore contro 1.27.
+  \item \textbf{La scelta finale usa lo stato di adesso.} La scelta fresca evita
+        i telefoni occupati in quel momento e preferisce quelli in carica, il cui
+        training non costa batteria: si scelgono il 26\,\% di telefoni in carica
+        in più (1.44 contro 1.14 per round).
+  \item \textbf{Essere interpellato non costa nulla al telefono.} I rifiuti sono
+        rari (0.5\,\%), perché un telefono rifiuta solo per energia, e i 6.7
+        telefoni rinviati per round mantengono la loro anzianità. È l'opposto di
+        SAGE-smart, dove essere interpellato e rifiutare faceva retrocedere un
+        telefono.
+\end{itemize}
+Il risultato è la stessa accuratezza e la stessa energia con il 34\,\% di
+dispositivi scarichi in meno, un protocollo più economico e un'informazione più
+precisa. La variazione di accuratezza ($-$0.4 punti in media: $-$1.4, $-$0.4 e
++0.6 per i tre $\beta$) è dentro il rumore di un singolo seed: due varianti che
+scelgono gli stessi telefoni con lo stesso lavoro nei round 1 e 2 hanno già
+un'accuratezza diversa al round 1 (2.02\,\% contro 1.51\,\%), e da lì le due
+run seguono traiettorie diverse. Con un solo seed, differenze sotto circa 2
+punti fra due varianti non sono significative.
+
+\section{Cose da fare adesso}
+\begin{itemize}
+    \item
+\end{itemize}
+
+\end{document}

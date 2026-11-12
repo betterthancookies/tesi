@@ -69,6 +69,10 @@ if [ "${ABL_SMART2:-0}" = "1" ]; then
   # adattivo, 3 +B adattivo, 4 +negoziazione, 5 +stima SoC): il lavoro
   # parziale entra nell'E adattivo, quindi serve anche sage_smart_cum2p
   # (cum2 + lavoro parziale); il 3 e' pcum4, il 4 nofc, il 5 socfc.
+  # [B] 12/11 ORDINE INVERSO (beta 0.1): 2 = sage_smart2_rev2 (cum1 +
+  # negoziazione e stima, E = 5 e B = 128 fissi), 3 = sage_smart2_rev3 (+ E
+  # adattivo col lavoro parziale), 4 = socfc. Lancio:
+  #   ABL_SMART2=1 ABL_BETAS=0.1 ABL_ALGOS="sage_smart2_rev2_nm_x1 sage_smart2_rev3_nm_x1" bash ablation_cum.sh
   DEF_NAME="ablation_cum_smart2_ResNet18_C100"
   DEF_ALGOS=""
   for v in sage_smart_cum0_nm sage_smart_cum1_nm sage_smart_cum2_nm sage_smart_cum2p_nm sage_smart_cum3_nm \
