@@ -120,14 +120,15 @@ def main(grid: Grid, context: Context) -> None:
         fraction_evaluate=fraction_evaluate,
     )
     # broadcast dello stato a inizio round: solo per chi seleziona sullo
-    # stato (SAGE, ESCS, SAGE-smart). FedAvg e FedProx scelgono a caso.
+    # stato (SAGE, ESCS). FedAvg e FedProx scelgono a caso; SAGE-smart lo
+    # sostituisce con la negoziazione (stampa nel suo ramo, sotto).
     bcast = dict(
         broadcast=bool(context.run_config["broadcast"]),
         broadcast_nonresp=float(context.run_config["broadcast-nonresp"]),
         broadcast_timeout_s=float(context.run_config["broadcast-timeout-s"]),
         broadcast_top_m=int(context.run_config["broadcast-top-m"]),
     )
-    if bcast["broadcast"] and not algorithm.startswith(("fedavg", "fedprox")):
+    if bcast["broadcast"] and not algorithm.startswith(("fedavg", "fedprox", "sage_smart")):
         print(f"[strategy] broadcast dello stato: {bcast['broadcast_nonresp']:.0%} "
               f"non risponde, timeout {bcast['broadcast_timeout_s']} s, "
               f"{'tutti' if bcast['broadcast_top_m'] <= 0 else 'primi ' + str(bcast['broadcast_top_m'])}")
@@ -185,59 +186,24 @@ def main(grid: Grid, context: Context) -> None:
             epochs_min=int(context.run_config["smart-epochs-min"]),
             batch_min=int(context.run_config["smart-batch-min"]),
             batch_max=int(context.run_config["smart-batch-max"]),
-            # [B] 30/10, dopo la call: FedNova TOLTO di default. E' un
-            # contributo esterno, non nostro, e nelle due ablazioni (leave-one-
-            # out e cumulata) la media pesata per i dati va uguale o meglio
-            # (FedNova -0.9 / -1.0 punti). "nova" lo riaccende (campagne fino
-            # a cap_aug).
-            fednova=False,
         )
-        # [B] 19/10, ABLAZIONE leave-one-out: smart-ablation toglie UN
-        # componente, il resto resta SAGE-smart completo. Un solo parametro
-        # (e non i singoli valori) perche' --run-config non ammette chiavi
-        # ripetute e quelle singole sono gia' in ALGOCFG.
+        # [B] 16/11: SAGE-smart e' l'ex SAGE-smart 2 (vedi la docstring di
+        # PhysicalSAGESmart): previsione del SoC, negoziazione con rosa e
+        # scelta fresca, niente broadcast, lavoro parziale sono i default.
+        # smart-ablation SPEGNE componenti, per le ablazioni (piu' componenti
+        # uniti da "+", es. "noest+noneg"). Un solo parametro (e non i singoli
+        # valori) perche' --run-config non ammette chiavi ripetute e quelle
+        # singole sono gia' in ALGOCFG.
         ablation = str(context.run_config["smart-ablation"])
         ablations = {
-            "none":    {},
-            "nostale": {"stale_weight": 0.0},                    # niente c
-            "noest":   {"soc_source": "report"},                 # niente stima SoC
-            "noneg":   {"negotiation": False},                   # niente proposte
-            "e5":      {"epochs_min": epochs, "epochs_cap_mult": 1},  # E = 5 fisso
-            "nonova":  {"fednova": False},                       # media FedAvg (ora default)
-            "b128":    {"batch_min": batch_size, "batch_max": batch_size},  # B = 128
-            "nova":    {"fednova": True},                        # FedNova come fino a cap_aug
-            # [B] 05/11, AGGIUNTE dopo l'esperimento sul workload (non tolgono,
-            # accendono): etichette sage_smart_plus* in _shard.sh
-            "dlrefuse": {"refuse_deadline": True},              # rifiuto anche per deadline
-            "loadavg":  {"load_estimate": "mean"},              # stima col workload medio
-            # [B] 06/11: rifiuto per deadline solo se colpa del carico (a
-            # riposo ci starebbe); etichetta sage_smart_plus2
-            "dlload":   {"refuse_deadline": True, "refuse_load_only": True},
-            # [B] 06/11: chi non sta nella deadline nemmeno con E_lo fa i passi
-            # che ci stanno (lavoro parziale); etichetta sage_smart_plus3
-            "partial":  {"partial_work": True},
-            # [B] 09/11: all'iscrizione il server assume il workload medio
-            # della popolazione invece del massimo; etichetta sage_smart_plus4
-            "enrollmean": {"enroll_load": "mean"},
-            # [B] 09/11 SAGE-smart 2 (etichette sage_smart2* in _shard.sh):
-            # previsione di SoC con ricariche attese e di workload, classifica
-            # pesata per 1 - w atteso (stima 2); proposte a una rosa di 1.5 k
-            # e scelta sullo stato fresco, rinviati senza perdere anzianita'
-            # (negoziazione 2); broadcast spento, non risposte sulle proposte
-            "forecast": {"forecast": True},
-            "pick":     {"shortlist": 1.5},
-            "nobcast":  {"proposal_nonresp": True},
-            # [B] 10/11: previsione del solo SoC in classifica, il workload
-            # pesa solo nella scelta finale (stato fresco): "forecast" pesava
-            # la classifica per 1 - w atteso ed escludeva la catena high.
-            # Etichetta sage_smart2_socfc in _shard.sh
-            "socfc":    {"forecast": True, "forecast_load_rank": False},
+            "none":      {},
+            "nostale":   {"stale_weight": 0.0},                       # niente c
+            "noest":     {"forecast": False},                         # SoC dell'ultimo report
+            "noneg":     {"negotiation": False},                      # niente proposte
+            "e5":        {"epochs_min": epochs, "epochs_cap_mult": 1},  # E = 5 fisso
+            "b128":      {"batch_min": batch_size, "batch_max": batch_size},  # B = 128
+            "nopartial": {"partial_work": False},                     # niente lavoro parziale
         }
-        # [B] 04/11: per l'esperimento sul workload l'etichetta sage_smart_noinfo
-        # (_shard.sh) passa "noneg+noest": senza negoziazione e senza stima,
-        # che i relatori vedono come un solo componente
-        # [B] 27/10: piu' componenti spenti insieme separati da "+", per
-        # l'ablazione CUMULATA (ablation_cum.sh), es. "noest+noneg+nonova"
         parts = [p for p in ablation.split("+") if p and p != "none"]
         unknown = [p for p in parts if p not in ablations]
         if unknown:
@@ -245,12 +211,18 @@ def main(grid: Grid, context: Context) -> None:
                              f"(usa {', '.join(ablations)}, uniti da '+')")
         for p in parts:
             smart.update(ablations[p])
-        if "nobcast" in parts:
-            # [B] SAGE-smart 2: non chiede lo stato a tutti; chi e'
-            # raggiungibile lo scopre dalle risposte alle proposte
+        if smart.get("negotiation", True):
+            # chi e' raggiungibile e in che stato lo dicono le risposte alle
+            # proposte: niente broadcast, la frazione broadcast-nonresp non
+            # risponde alle proposte
             bcast = dict(bcast, broadcast=False)
-            print("[strategy] SAGE-smart 2: broadcast spento, "
+            print("[strategy] SAGE-smart: niente broadcast dello stato, "
                   f"{bcast['broadcast_nonresp']:.0%} di non risposte sulle proposte")
+        elif bcast["broadcast"]:
+            # ablazione noneg: senza proposte torna il broadcast dello stato
+            print(f"[strategy] SAGE-smart senza negoziazione: broadcast dello stato, "
+                  f"{bcast['broadcast_nonresp']:.0%} non risponde, timeout "
+                  f"{bcast['broadcast_timeout_s']} s")
         strategy = PhysicalSAGESmart(
             sage_a=float(context.run_config["sage-a"]),
             sage_b=float(context.run_config["sage-b"]),
@@ -271,8 +243,9 @@ def main(grid: Grid, context: Context) -> None:
             f"(E,B) decisi dal client | "
             f"soc_min={strategy.soc_min} E {strategy.epochs_min}-{strategy.epochs_cap} "
             f"deadline x{strategy.deadline_mult} probe={strategy.probe_samples} "
-            f"negoziazione max {strategy.max_waves} ondate | "
-            f"B in {strategy.batch_choices}"
+            + (f"rosa di {strategy.shortlist:g} k, max {strategy.max_waves} ondate | "
+               if strategy.negotiation else "")
+            + f"B in {strategy.batch_choices}"
         )
 
     elif algorithm == "sage_soc":

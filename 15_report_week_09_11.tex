@@ -128,24 +128,24 @@ The server:
 
 Starting from a stripped-down protocol, one component is added at each step.
 All runs use seed 2026, the datasheet battery, the nominal load of the other
-apps and 250 rounds; the bars of Figure~\ref{fig:cum} and the values of
-Table~\ref{tab:cum} are the mean over $\beta = 0.1$, $0.5$ and $1.0$.
+apps, 250 rounds and $\beta = 0.1$.
 
 \begin{itemize}
   \item[0] \textbf{Base}: score $a \cdot \mathrm{SoC} + b \cdot D$, $E = 5$ and
         $B = 128$ fixed, no negotiation, SoC from the last report (no estimate),
         FedAvg, state broadcast to all phones at every round.
   \item[1] + staleness term ($c$).
-  \item[2] + adaptive $E$, chosen by the client within the envelope; it
+  \item[2] + negotiation and server-side SoC estimate together, as described
+        in Section~\ref{sec:protocol}.
+  \item[3] + adaptive $E$, chosen by the client within the envelope; it
         includes partial work.
-  \item[3] + adaptive $B$, chosen by the client among 16, 32, 64 and 128.
-  \item[4] + negotiation and server-side SoC estimate together, as described
-        in Section~\ref{sec:protocol}. This is SAGE-smart 2.
+  \item[4] + adaptive $B$, chosen by the client among 16, 32, 64 and 128.
+        This is SAGE-smart 2.
 \end{itemize}
 
 \begin{figure}[H]
   \centering
-  \includegraphics[width=\textwidth]{fig_cumulative_ablation_smart2.png}
+  \includegraphics[width=\textwidth]{fig_cumulative_ablation_smart2_reverse.png}
   \label{fig:cum}
 \end{figure}
 
@@ -156,13 +156,13 @@ Table~\ref{tab:cum} are the mean over $\beta = 0.1$, $0.5$ and $1.0$.
     \toprule
     Step & Accuracy (\%) & Depleted devices & Mean final SoC (\%) & Energy (Wh) \\
     \midrule
-    0 base                & 41.9          & 33.7           & 35.7          & 2016 \\
-    1 + staleness         & 47.5 (+5.6)   & 31.0 ($-$2.7)  & 34.5 ($-$1.2) & 2024 (+0.4\,\%) \\
-    2 + adaptive $E$      & 45.0 ($-$2.5) & 3.7 ($-$27.3)  & 38.3 (+3.8)   & 1098 ($-$45.7\,\%) \\
-    3 + adaptive $B$      & 56.5 (+11.5)  & 5.0 (+1.3)     & 39.5 (+1.2)   & 1106 (+0.7\,\%) \\
-    4 + negotiation + estimate & 56.1 ($-$0.4) & 3.3 ($-$1.7) & 39.0 ($-$0.5) & 1101 ($-$0.5\,\%) \\
+    0 base                & 39.6          & 30             & 34.0          & 2040 \\
+    1 + staleness         & 45.6 (+6.0)   & 32 (+2)        & 33.2 ($-$0.8) & 1999 ($-$2.0\,\%) \\
+    2 + negotiation + estimate & 45.7 (+0.1) & 32 (0)      & 36.1 (+2.9)   & 2007 (+0.4\,\%) \\
+    3 + adaptive $E$      & 41.4 ($-$4.3) & 7 ($-$25)      & 36.4 (+0.3)   & 1111 ($-$44.6\,\%) \\
+    4 + adaptive $B$      & 52.0 (+10.6)  & 3 ($-$4)       & 40.7 (+4.3)   & 1117 (+0.5\,\%) \\
     \midrule
-    FedAvg (reference)    & 51.1          & 66.0           & 14.4          & 1984 \\
+    FedAvg (reference)    & 49.8          & 57             & 20.2          & 2077 \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -173,21 +173,21 @@ Table~\ref{tab:cum} are the mean over $\beta = 0.1$, $0.5$ and $1.0$.
 
 \begin{table}[H]
   \centering
-  \caption{Step 3 (state broadcast, no negotiation, SoC from the last report)
-  against step 4 (SAGE-smart 2), mean over the three $\beta$.}
+  \caption{Step 1 (state broadcast, no negotiation, SoC from the last report)
+  against step 2, $\beta = 0.1$.}
   \label{tab:negest}
   \begin{tabular}{lcc}
     \toprule
-    & Step 3 & Step 4 (SAGE-smart 2) \\
+    & Step 1 & Step 2 \\
     \midrule
-    Control energy (Wh per run)                     & 10.3  & 1.0 \\
-    Error of the SoC used to rank (points)          & 1.27  & 0.73 \\
-    Charging phones selected per round              & 1.14  & 1.44 \\
-    Refused proposals                               & ---   & 0.5\,\% \\
-    Deferred phones per round (keep their staleness) & ---  & 6.7 \\
-    Depleted devices                                & 5.0   & 3.3 \\
-    Accuracy (\%)                                   & 56.5  & 56.1 \\
-    Energy (Wh)                                     & 1106  & 1101 \\
+    Control energy (Wh per run)                     & 8.8   & 0.9 \\
+    Error of the SoC used to rank (points)          & 4.10  & 3.03 \\
+    Charging phones selected per round              & 0.29  & 0.72 \\
+    Refused proposals                               & ---   & 2.0\,\% \\
+    Deferred phones per round (keep their staleness) & ---  & 5.6 \\
+    Depleted devices                                & 32    & 32 \\
+    Accuracy (\%)                                   & 45.6  & 45.7 \\
+    Energy (Wh)                                     & 1999  & 2007 \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -196,23 +196,22 @@ Table~\ref{tab:cum} are the mean over $\beta = 0.1$, $0.5$ and $1.0$.
   \item \textbf{No broadcast.} The server no longer contacts all 100 phones at
         every round only to know who is reachable: the answers to the proposals
         give both reachability and state. The control energy drops by 90\,\%
-        (10.3 to \SI{1.0}{Wh}).
+        (8.8 to \SI{0.9}{Wh}).
   \item \textbf{Better knowledge with fewer messages.} Thanks to the forecast
         and the answers, the SoC that the server uses to rank the phones is
-        closer to the true one: 0.73 points of error against 1.27.
+        closer to the true one: 3.03 points of error against 4.10.
   \item \textbf{The final choice uses the state of now.} The fresh choice
         avoids the phones that are busy right now and prefers the charging ones,
-        whose training costs no battery: 26\,\% more charging phones are
-        selected (1.44 against 1.14 per round).
+        whose training costs no battery: 150\,\% more charging phones are
+        selected (0.72 against 0.29 per round).
   \item \textbf{Asking costs nothing to the phone that is asked.} Refusals are
-        rare (0.5\,\%), because a phone refuses only for energy, and the 6.7
+        rare (2.0\,\%), because a phone refuses only for energy, and the 5.6
         deferred phones per round keep their staleness. This is the opposite of
         SAGE-smart, where being asked and refusing pushed a phone back.
 \end{itemize}
-The result is the same accuracy and the same energy with 34\,\% fewer depleted
-devices, a cheaper protocol and more accurate information. The accuracy change
-($-$0.4 points on average: $-$1.4, $-$0.4 and +0.6 for the three $\beta$) is
-within the noise of a single seed: two variants that select the same phones
+The result is the same accuracy, the same energy and the same depleted
+devices, with a mean final SoC 2.9 points higher, a cheaper protocol and more
+accurate information. The accuracy change (+0.1 points) is within the noise of a single seed: two variants that select the same phones
 with the same work in rounds 1 and 2 already differ in accuracy at round 1
 (2.02\,\% against 1.51\,\%), and from there the two runs follow different
 trajectories. With one seed, differences below about 2 points between two

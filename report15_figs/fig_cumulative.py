@@ -142,7 +142,7 @@ def draw(steps, fname, title, sep=None, figsize=(19, 4.8), note=None):
     print("figura:", out, "\n")
 
 
-def draw_multi(steps, fname, note=None, figsize=(13, 5.2), it=False):
+def draw_multi(steps, fname, note=None, figsize=(13, 5.2), it=False, tag=""):
     """Come la figura del report 13: barre = media sui beta, punti = ogni beta.
 
     Le barre usano solo i beta presenti per TUTTI i gradini (una barra non
@@ -190,7 +190,9 @@ def draw_multi(steps, fname, note=None, figsize=(13, 5.2), it=False):
         a.grid(axis="y", alpha=0.3)
     ax[0].set_ylim(30, 62)
     ax[3].set_ylim(0, 50)
-    ax[2].legend(fontsize=7.5, loc="center right")
+    # [12/11] in alto a destra sotto la linea di FedAvg: li' le barre degli
+    # ultimi gradini sono basse (al centro copriva il 32 dell'ordine inverso)
+    ax[2].legend(fontsize=7.5, loc="upper right", bbox_to_anchor=(1, 0.9))
     what = ("bars = mean over the three $\\beta$, dots = each $\\beta$" if len(common) == 3
             else (f"bars = mean over $\\beta$ = {shown}, dots = each $\\beta$" if len(common) > 1
                   else f"$\\beta$ = {shown}"))
@@ -199,7 +201,7 @@ def draw_multi(steps, fname, note=None, figsize=(13, 5.2), it=False):
                 else f"$\\beta$ = {shown}".replace(".", ","))
         fig.suptitle(f"Ablazione cumulata di SAGE-smart 2 (batteria da datasheet, seed 2026): {what}")
     else:
-        fig.suptitle(f"Cumulative ablation of SAGE-smart 2 (datasheet battery, seed 2026): {what}")
+        fig.suptitle(f"Cumulative ablation of SAGE-smart 2{tag} (datasheet battery, seed 2026): {what}")
     if note:
         fig.text(0.5, 0.01, note, ha="center", va="bottom", fontsize=8.5, color="#444444")
         fig.tight_layout(rect=(0, 0.08, 1, 1))
@@ -231,5 +233,6 @@ steps_rev = [
     ("3 +adaptive E", "sage_smart2_rev3_nm_x1", TEAL, 3.0),
     ("4 +adaptive B\n(SAGE-smart 2)", "sage_smart2_socfc_nm_x1", DARK_TEAL, 4.0),
 ]
-draw_multi(steps_rev, "fig_cumulative_ablation_smart2_reverse.png", figsize=(13, 4.6))
+draw_multi(steps_rev, "fig_cumulative_ablation_smart2_reverse.png", figsize=(13, 4.6),
+           tag=", reverse order")
 METRICS_IT = ["Accuratezza finale (%)", "Energia (Wh)", "Dispositivi scarichi", "SoC medio finale (%)"]

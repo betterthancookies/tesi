@@ -1,0 +1,3419 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{textcomp}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{siunitx}
+\usepackage{multirow}
+\usepackage{float}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage[autostyle]{csquotes}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage[hidelinks]{hyperref}
+\usepackage{graphicx}
+
+\sisetup{detect-weight=true}
+
+\lstdefinelanguage{toml}{morecomment=[l]{\#}, morestring=[b]"}
+\lstdefinestyle{base}{basicstyle=\ttfamily\scriptsize, numbers=left,
+  numberstyle=\tiny\color{gray}, numbersep=6pt, breaklines=true,
+  breakatwhitespace=false, columns=fullflexible, keepspaces=true,
+  showstringspaces=false, frame=single, framerule=0.3pt, rulecolor=\color{gray!60},
+  xleftmargin=2.2em, framexleftmargin=0.3em, tabsize=4, upquote=true,
+  captionpos=t, aboveskip=6pt, belowskip=8pt}
+\lstdefinestyle{py}{style=base, language=Python, keywordstyle=\color{blue!60!black},
+  commentstyle=\color{gray!75!black}, stringstyle=}
+\lstdefinestyle{sh}{style=base, language=bash, keywordstyle=\color{blue!60!black},
+  commentstyle=\color{gray!75!black}, stringstyle=}
+\lstdefinestyle{toml}{style=base, language=toml, commentstyle=\color{gray!75!black},
+  stringstyle=}
+\renewcommand{\lstlistingname}{Code}
+\newcommand{\cf}[1]{\texttt{#1}}
+
+\title{\bfseries Marocco FL thesis --- SAGE-smart: complete specification with code}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\vspace{-3.2em}
+\begin{center}
+Client-Driven Local Work Assignment in Battery-Constrained Federated Learning
+\end{center}
+\vspace{1em}
+
+\tableofcontents
+\newpage
+
+%======================================================================
+\section{Scope and conventions}
+\label{sec:scope}
+
+This document describes every rule, parameter and computation of SAGE-smart as
+it is implemented in the simulator, together with the code that implements it.
+SAGE-smart is the protocol that the reports up to week 09/11 called
+SAGE-smart 2. Since 16/11/2026 it is the only SAGE-smart in the code: the
+previous versions were removed. The labels \cf{sage\_smart\_lin},
+\cf{sage\_smart\_peuk} and \cf{sage\_smart\_nm} run the same algorithm. They
+differ only in the battery model of the simulated phones: Ideal (linear),
+Peukert and Datasheet.
+
+The code excerpts are copied automatically from the source files, with their
+real line numbers. Line numbers refer to the code of 16/11/2026. Paths are
+relative to the root of the repository. Comments inside the code are in
+Italian, as in the sources.
+
+The implementation has three parts.
+\begin{itemize}
+  \item Server: the strategy \cf{PhysicalSAGESmart}
+        (\cf{tesifl/strategies/sage\_smart.py}). It inherits the selection
+        skeleton and the label divergence from \cf{PhysicalSAGEAblation}
+        (\cf{strategies/sage\_ablation.py}), and the round orchestration and
+        the physical accounting from \cf{PhysicalFedAvg}
+        (\cf{strategies/fedavg.py}), which extends the Flower \cf{FedAvg}.
+  \item Client: the Flower \cf{ClientApp} (\cf{tesiFL/client\_app.py}), the
+        decision policy (\cf{tesiFL/client\_policy.py}) and the view of the
+        phone on its own state (\cf{device/fuel\_gauge.py}).
+  \item Physical world: \cf{device/world\_state.py} and the models it uses
+        (compute, communication, battery, workload, recharge). It simulates
+        the phones and lives in the server process. It is not part of the
+        algorithm: the algorithm reads it only through the channels listed in
+        Section~\ref{sec:info}. The server estimates and the client
+        predictions use the same model functions as the world
+        (Section~\ref{sec:physics}).
+\end{itemize}
+
+\subsection*{Notation}
+
+\begin{longtable}{p{0.20\textwidth}p{0.74\textwidth}}
+\toprule
+Symbol & Meaning \\
+\midrule
+\endhead
+$\mathcal{N}$, $N$ & set of phones, $N = |\mathcal{N}| = 100$; $i$ indexes a phone \\
+$r$ & round, $r = 1, \dots, 250$ \\
+$\mathcal{A}_r$, $m_r$ & phones alive at round $r$ (battery not depleted), $m_r = |\mathcal{A}_r|$ \\
+$S_r$ & phones that receive the model at round $r$, $S_r \subseteq \mathcal{A}_r$ \\
+$n_i$ & training samples of phone $i$ \\
+$|\mathcal{Y}|$ & number of classes, 100 (CIFAR-100) \\
+$E$, $B$ & local epochs and batch size; $E_0 = 5$, $B_0 = 128$ of the baselines \\
+$E_{\mathrm{lo}}$, $E_{\mathrm{cap}}$, $E_{\mathrm{hi},i}$ & minimum epochs (2), maximum epochs (10), maximum epochs of phone $i$ in this round \\
+$\mathcal{B}$ & batch sizes of the envelope, $\{16, 32, 64, 128\}$ \\
+$T$ & round deadline \\
+$s_i$, $\hat{s}_i$ & true state of charge (SoC) of phone $i$, SoC known to the server \\
+$s_{\min}$ & battery reserve, 0.20 \\
+$w_i$, $\hat{w}_i$ & workload of the other apps (fraction of compute capacity), value known to the server \\
+$\bar{w}$, $w_{\max}$ & population mean workload (0.118), heaviest workload state (0.30) \\
+$\mu_i$ & compute throughput of the tier, MAC/s \\
+$P^{\mathrm{tr}}_i$, $P^{\mathrm{idle}}_0$ & training power of the tier, idle power (0.1 W) \\
+$M$, $F$, $o$ & forward MACs per sample, backward factor (3), overhead per batch (0.057 s) \\
+$Q_i$, $V_0$, $\eta$ & nominal capacity (Ah), nominal voltage (3.7 V), DC-DC efficiency (1.0) \\
+$\lambda$, $\gamma$ & recharge rate of the users (0.126 per hour), charging speed (1 SoC per hour, 1C) \\
+$a$, $b$, $c$ & score weights of SoC, divergence and staleness \\
+$D_i$, $\theta_i$, $\ell_i$ & label divergence, staleness, last round in which $i$ was selected or refused \\
+$\Theta$ & staleness scale, 25 rounds \\
+$\sigma_i$, $\phi_i$ & ranking score, fresh score \\
+$\kappa$, $W$ & shortlist factor (1.5), maximum number of proposal waves (2) \\
+$p_{\mathrm{nr}}$, $t_{\mathrm{to}}$, $t_{\mathrm{ctrl}}$ & non-response probability (0.10), timeout (1 s), control-message latency (0.335 s) \\
+$k_i$, $\alpha$ & energy calibration factor of phone $i$, its smoothing weight (0.3) \\
+$\tau$, $\delta$ & relaxation time of the workload forecast (450 s), forecast step ($\le 300$ s) \\
+$L_i$, $u_i$, $h_i$ & probe loss, statistical utility, battery headroom of phone $i$ \\
+$\nu_i$ & SGD steps executed by phone $i$ \\
+\bottomrule
+\end{longtable}
+
+\newpage
+%======================================================================
+\section{Scenario and parameters}
+\label{sec:params}
+
+\subsection{Scenario}
+
+The campaign runs $N = 100$ phones for 250 rounds. The model is ResNet-18 in its
+CIFAR variant (3$\times$3 initial convolution, no max-pool) on CIFAR-100: $M =
+555{,}468{,}800$ forward MACs per sample and 11{,}220{,}132 parameters, that is
+44.88 MB in float32. The training set is split among the phones with the
+Dirichlet partitioner of \cf{flwr-datasets} (\cf{alpha} $= \beta \in \{0.1,
+0.5, 1.0\}$, same seed as the run). Each partition is split again 80/20 into
+local training and local test; $n_i$ is the training part, 400 samples on
+average. The client trains with random crop (padding 4) and horizontal flip,
+SGD with learning rate 0.01 and momentum 0.9, cross-entropy loss. The global
+model is evaluated on the full CIFAR-100 test set after every round.
+
+\begin{lstlisting}[style=py,firstnumber=98,caption={\texttt{tesifl/tesiFL/data/partition.py}, lines 98--122}]
+def partition_sizes(num_partitions: int, beta: float, seed: int,
+                    dataset: str = "cifar10") -> dict[int, int]:
+    """Numero di campioni di TRAINING di ogni partizione, senza caricare le
+    immagini in memoria piu' del necessario.
+
+    Riproduce esattamente lo split di load_data (stesso partitioner, stesso
+    train_test_split con test_size=0.2 e stesso seed), quindi il valore
+    coincide con `num-examples` che il client riporta a fine training.
+
+    Serve alle strategie che, come ESCS, hanno bisogno della latenza di
+    training di OGNI client prima del primo round (nel paper e' un dato di
+    profilo, `total_train_latency`).
+    """
+    hf_name, label_col, _ = _spec(dataset)
+    partitioner = DirichletPartitioner(
+        num_partitions=num_partitions, partition_by=label_col, alpha=beta, seed=seed,
+    )
+    fds_local = FederatedDataset(
+        dataset=hf_name, partitioners={"train": partitioner},
+    )
+    sizes: dict[int, int] = {}
+    for pid in range(num_partitions):
+        part = fds_local.load_partition(pid)
+        sizes[pid] = len(part.train_test_split(test_size=0.2, seed=seed)["train"])
+    return sizes
+\end{lstlisting}
+
+\subsection{Where the parameters come from}
+
+The only file to edit is \cf{experiment.toml}. \cf{run.sh} reads it and passes
+the values to Flower as run configuration (\cf{--run-config}); the defaults in
+\cf{pyproject.toml} are always overridden. \cf{\_shard.sh} adds the score
+weights of the current $\beta$ and the battery of the world, taken from the
+suffix of the label. \cf{server\_app.py} builds the strategy.
+
+\begin{lstlisting}[style=toml,firstnumber=290,caption={\texttt{tesifl/experiment.toml}, lines 290--350}]
+# Ablazione di SAGE (sage_peuk, sage_nm) e SAGE-smart: pesi (a,b) per beta,
+# dalla sweep in results_findbest.
+# [B] SAGE-smart usa gli stessi dell'ablazione: il confronto fra i due isola
+# l'assegnazione dinamica di (E,B), non la taratura.
+sage_ab  = { "0.1" = [0.4, 0.6], "0.5" = [0.6, 0.4], "1.0" = [0.9, 0.1] }
+
+# SAGE-smart: il server seleziona (a*SoC + b*D + c*anzianita') e propone un
+# envelope di (E, B); il CLIENT sceglie dentro l'envelope con il proprio stato.
+# Etichette sage_smart_lin / _peuk / _nm: stesso algoritmo, cambia solo la
+# batteria dei device.
+smart_stale_weight   = 0.3    # peso (c) dell'anzianita' nel punteggio
+smart_stale_max      = 25     # round dopo i quali l'anzianita' e' al massimo
+smart_soc_min        = 0.20   # riserva che il client non intacca (vincolo 2e di SAGE)
+smart_epochs_min     = 2      # E_lo: minimo di epoche dell'envelope
+smart_deadline_mult  = 1.0    # deadline = mult * mediana dei tempi nominali (E, B di [algo])
+smart_probe_samples  = 256    # campioni locali per stimare la loss prima di decidere
+# Negoziazione prima del training (documento "Client Server Protocol" del
+# relatore, opzione 3 con l'opzione 2): il server ordina i client con la
+# previsione del SoC, propone l'envelope a una rosa di 1.5 volte i posti e
+# sceglie sullo stato appena riportato; se le accettazioni non bastano, una
+# seconda ondata (chi rifiuta lo fa solo per energia).
+smart_max_waves      = 2      # ondate di proposte per round (1 = nessun rimpiazzo)
+# B di SAGE-smart (le baseline usano batch_size = 128). L'envelope propone le
+# potenze di 2 fra smart_batch_min e smart_batch_max; il client sceglie il
+# B "piu' economico per passo di SGD": il piu' piccolo, riducendo prima E, e
+# sale al successivo solo se a quel B non ci sta nemmeno E_lo (batteria o
+# deadline). Vedi tesiFL/client_policy.py.
+# [B] B_min = 16 dallo sweep (results_sweepB*, SAGE-smart nm, 3 beta, B fisso):
+#   B     8      16     32     64     128    256
+#   acc   0.702  0.667  0.632  0.608  0.586  0.531
+#   SoC   0.500  0.543  0.575  0.574  0.578  0.576
+# l'accuracy cresce sempre al calare di B; il SoC e' piatto da 32 in su e
+# cala sotto. 16 e' il punto piu' vicino all'ideale (acc e SoC massimi).
+# [B] TETTO A 64, non 256 (14/10, quando SAGE-smart usava FedNova: spento dal
+# 30/10, tolto dal codice il 16/11). SAGE-smart aggregava con FedNova, che amplifica
+# l'update di chi fa pochi passi di tau_eff/tau_i. Col range 16-256 un client
+# fuori deadline ripiegava su B=256 e faceva ~18 passi contro ~290: spread
+# 15-16 (soglia ~6-8) e modello collassato nel fastTest del 14/10. A 64 lo
+# stesso client fa ~70 passi. Le partizioni grandi salgono a 32/64 e fanno
+# comunque un numero di passi simile ai client a 16 (3000/32 ~ 1666/16).
+smart_batch_min      = 16
+smart_batch_max      = 128    # 64 per ResNet-20; 128 richiesto per ResNet-18 (SCENARIO)
+
+# BROADCAST DELLO STATO a inizio round (opzione 1 del "Client Server
+# Protocol" del relatore, call del 16/10) per le strategie che selezionano
+# sullo stato: SAGE, ESCS, SAGE-smart (non FedAvg/FedProx, che scelgono a
+# caso). Nel simulatore non cambia l'informazione (SAGE/ESCS leggono il SoC
+# del mondo, SAGE-smart la sua stima, errore < 1 punto di SoC): serve a
+# CONTARNE IL COSTO, perche' dichiariamo di avere un SoC fidato a inizio
+# round. Chi risponde paga uno scambio di controllo (sessione 4G intera,
+# ~2.1 J, se non viene selezionato; il solo payload se viene selezionato);
+# chi non risponde e' escluso dal round; il round si allunga della latenza
+# o del timeout. Stima: ~3 Wh di broadcast + ~1 Wh di attesa su 250 round.
+# [B] 16/11: SAGE-smart NON usa il broadcast (lo sostituisce la negoziazione:
+# le risposte alle proposte danno raggiungibilita' e stato; broadcast_nonresp
+# e broadcast_timeout_s valgono per le proposte). Lo usa solo l'ablazione
+# senza negoziazione (noneg).
+broadcast            = true
+broadcast_nonresp    = 0.10   # client che non rispondono (indicazione del relatore)
+broadcast_timeout_s  = 1.0    # [ASSUNZIONE] attesa delle risposte mancanti (~3x promozione + RTT)
+broadcast_top_m      = 0      # [B] 16/11: non lo usa piu' nessuno (era solo di SAGE-smart)
+\end{lstlisting}
+
+\begin{lstlisting}[style=sh,firstnumber=73,caption={\texttt{tesifl/run.sh}, lines 73--95}]
+        "ALGOCFG": (f'model-name="{mo["name"]}" dataset="{mo["dataset"]}" '
+                f"augment={str(mo.get('augment', False)).lower()} "
+                f"local-epochs={al['local_epochs']} batch-size={al['batch_size']} "
+                f"learning-rate={al['learning_rate']} "
+                f"fraction-evaluate={al['fraction_evaluate']} "
+                f"proximal-mu={al['proximal_mu']} "
+                f"smart-stale-weight={al['smart_stale_weight']} "
+                f"smart-stale-max={al['smart_stale_max']} "
+                f"smart-soc-min={al['smart_soc_min']} "
+                f"smart-epochs-min={al['smart_epochs_min']} "
+                f"smart-deadline-mult={al['smart_deadline_mult']} "
+                f"smart-probe-samples={al['smart_probe_samples']} "
+                f"smart-max-waves={al['smart_max_waves']} "
+                f"smart-batch-min={al['smart_batch_min']} "
+                f"smart-batch-max={al['smart_batch_max']} "
+                f"broadcast={str(al['broadcast']).lower()} "
+                f"broadcast-nonresp={al['broadcast_nonresp']} "
+                f"broadcast-timeout-s={al['broadcast_timeout_s']} "
+                f"broadcast-top-m={al['broadcast_top_m']} "
+                f"escs-min-battery={al['escs_min_battery']} "
+                f"escs-min-nq={al['escs_min_nq']} "
+                f"escs-first-round-all={str(al['escs_first_round_all']).lower()} "
+                f"escs-cap-probabilistic={str(al['escs_cap_probabilistic']).lower()}"),
+\end{lstlisting}
+
+\begin{lstlisting}[style=sh,firstnumber=23,caption={\texttt{tesifl/\_shard.sh}, lines 23--32}]
+# pesi di SAGE per beta, letti da experiment.toml (o da EXP_TOML, vedi run.sh)
+read -r SA SB SC QA QB <<< "$(python3 - "$BETA" "${EXP_TOML:-experiment.toml}" <<'PY'
+import sys, tomllib
+b = sys.argv[1]
+c = tomllib.load(open(sys.argv[2], "rb"))["algo"]
+abc = c["sage_abc"].get(b, [0.5, 0.2, 0.3])
+ab = c["sage_ab"].get(b, [0.5, 0.5])
+print(*abc, *ab)
+PY
+)"
+\end{lstlisting}
+
+\begin{lstlisting}[style=sh,firstnumber=77,caption={\texttt{tesifl/\_shard.sh}, lines 77--113}]
+      # [B] 16/11: sage_smart e' l'ex SAGE-smart 2 (previsione del SoC,
+      # negoziazione con rosa e scelta fresca, niente broadcast, lavoro
+      # parziale), l'unico SAGE-smart: fra _lin, _peuk e _nm cambia solo la
+      # batteria dei device. Le altre etichette SPENGONO componenti
+      # (smart-ablation in server_app): nostale, noest, noneg, e5, b128,
+      # nopartial.
+      sage_smart) algo="sage_smart"; extra="sage-a=${QA} sage-b=${QB}" ;;
+      # ablazione leave-one-out: un componente spento, il nome e' il token
+      sage_smart_nostale|sage_smart_noest|sage_smart_noneg|sage_smart_e5|sage_smart_b128|sage_smart_nopartial)
+                  algo="sage_smart"
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='${base#sage_smart_}'" ;;
+      # ablazione CUMULATA (ablation_cum.sh), nomi delle run gia' fatte.
+      # Ordine diritto: 0 cum0, 1 cum1 (+ anzianita'), 2 cum2p (+ E adattivo
+      # col lavoro parziale), 3 pcum4 (+ B adattivo), 4 sage_smart2_nofc
+      # (+ negoziazione), 5 sage_smart (+ previsione del SoC).
+      # Ordine inverso: 0 cum0, 1 cum1, 2 sage_smart2_rev2 (+ negoziazione e
+      # previsione, E = 5 e B = 128 fissi), 3 sage_smart2_rev3 (+ E
+      # adattivo), 4 sage_smart (+ B adattivo).
+      # [B] 16/11: cum2p e pcum4 erano girate col carico MASSIMO
+      # all'iscrizione (tolto): col codice di oggi non tornano identiche.
+      # Le altre sono uguali alle run fatte fino al 12/11.
+      sage_smart_cum0) algo="sage_smart"
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='nostale+noest+noneg+e5+b128+nopartial'" ;;
+      sage_smart_cum1) algo="sage_smart"
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='noest+noneg+e5+b128+nopartial'" ;;
+      sage_smart_cum2p) algo="sage_smart"
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='noest+noneg+b128'" ;;
+      sage_smart_pcum4) algo="sage_smart"
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='noest+noneg'" ;;
+      sage_smart2_nofc) algo="sage_smart"
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='noest'" ;;
+      sage_smart2_rev2) algo="sage_smart"
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='e5+b128+nopartial'" ;;
+      sage_smart2_rev3) algo="sage_smart"
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='b128'" ;;
+      # nome di sage_smart nelle cumulate fatte fino al 12/11 (stessa run)
+      sage_smart2_socfc) algo="sage_smart"; extra="sage-a=${QA} sage-b=${QB}" ;;
+\end{lstlisting}
+
+The suffix \cf{\_lin}, \cf{\_peuk} or \cf{\_nm} of the label becomes
+\cf{world-battery}, and a suffix \cf{\_x<m>} becomes \cf{workload-scale} (1 in
+the campaign). The strategy is built as follows; the values not passed here
+are the defaults of the constructor (Section~\ref{sec:init}).
+
+\begin{lstlisting}[style=py,firstnumber=174,caption={\texttt{tesifl/tesiFL/server\_app.py}, lines 174--249}]
+    elif algorithm == "sage_smart":
+        # [B] la taglia dei dataset e' un dato di ISCRIZIONE (Fase 0 della
+        # proposta): serve al server per la deadline e per l'envelope prima
+        # che il client abbia mai risposto. Stesso partitioner di ESCS.
+        sizes = partition_sizes(
+            num_partitions=n_clients,
+            beta=float(context.run_config["beta"]),
+            seed=seed,
+            dataset=_DATASET,
+        )
+        smart = dict(
+            stale_weight=float(context.run_config["smart-stale-weight"]),
+            epochs_min=int(context.run_config["smart-epochs-min"]),
+            batch_min=int(context.run_config["smart-batch-min"]),
+            batch_max=int(context.run_config["smart-batch-max"]),
+        )
+        # [B] 16/11: SAGE-smart e' l'ex SAGE-smart 2 (vedi la docstring di
+        # PhysicalSAGESmart): previsione del SoC, negoziazione con rosa e
+        # scelta fresca, niente broadcast, lavoro parziale sono i default.
+        # smart-ablation SPEGNE componenti, per le ablazioni (piu' componenti
+        # uniti da "+", es. "noest+noneg"). Un solo parametro (e non i singoli
+        # valori) perche' --run-config non ammette chiavi ripetute e quelle
+        # singole sono gia' in ALGOCFG.
+        ablation = str(context.run_config["smart-ablation"])
+        ablations = {
+            "none":      {},
+            "nostale":   {"stale_weight": 0.0},                       # niente c
+            "noest":     {"forecast": False},                         # SoC dell'ultimo report
+            "noneg":     {"negotiation": False},                      # niente proposte
+            "e5":        {"epochs_min": epochs, "epochs_cap_mult": 1},  # E = 5 fisso
+            "b128":      {"batch_min": batch_size, "batch_max": batch_size},  # B = 128
+            "nopartial": {"partial_work": False},                     # niente lavoro parziale
+        }
+        parts = [p for p in ablation.split("+") if p and p != "none"]
+        unknown = [p for p in parts if p not in ablations]
+        if unknown:
+            raise ValueError(f"smart-ablation sconosciuta: {'+'.join(unknown)!r} "
+                             f"(usa {', '.join(ablations)}, uniti da '+')")
+        for p in parts:
+            smart.update(ablations[p])
+        if smart.get("negotiation", True):
+            # chi e' raggiungibile e in che stato lo dicono le risposte alle
+            # proposte: niente broadcast, la frazione broadcast-nonresp non
+            # risponde alle proposte
+            bcast = dict(bcast, broadcast=False)
+            print("[strategy] SAGE-smart: niente broadcast dello stato, "
+                  f"{bcast['broadcast_nonresp']:.0%} di non risposte sulle proposte")
+        elif bcast["broadcast"]:
+            # ablazione noneg: senza proposte torna il broadcast dello stato
+            print(f"[strategy] SAGE-smart senza negoziazione: broadcast dello stato, "
+                  f"{bcast['broadcast_nonresp']:.0%} non risponde, timeout "
+                  f"{bcast['broadcast_timeout_s']} s")
+        strategy = PhysicalSAGESmart(
+            sage_a=float(context.run_config["sage-a"]),
+            sage_b=float(context.run_config["sage-b"]),
+            stale_max=int(context.run_config["smart-stale-max"]),
+            partition_sizes=sizes,
+            soc_min=float(context.run_config["smart-soc-min"]),
+            deadline_mult=float(context.run_config["smart-deadline-mult"]),
+            probe_samples=int(context.run_config["smart-probe-samples"]),
+            max_waves=int(context.run_config["smart-max-waves"]),
+            **smart, **common, **bcast,
+        )
+        print(
+            f"[strategy] PhysicalSAGESmart ({strategy.variant}) "
+            f"ablazione {ablation} | "
+            f"(a={context.run_config['sage-a']}, "
+            f"b={context.run_config['sage-b']}, "
+            f"c={strategy.stale_w}) | "
+            f"(E,B) decisi dal client | "
+            f"soc_min={strategy.soc_min} E {strategy.epochs_min}-{strategy.epochs_cap} "
+            f"deadline x{strategy.deadline_mult} probe={strategy.probe_samples} "
+            + (f"rosa di {strategy.shortlist:g} k, max {strategy.max_waves} ondate | "
+               if strategy.negotiation else "")
+            + f"B in {strategy.batch_choices}"
+        )
+\end{lstlisting}
+
+\subsection{Parameters of SAGE-smart}
+
+\begin{longtable}{p{0.24\textwidth}p{0.08\textwidth}p{0.62\textwidth}}
+\toprule
+Parameter (code) & Value & Meaning and source \\
+\midrule
+\endhead
+\cf{sage\_a}, \cf{sage\_b} ($a$, $b$) & see right & SoC and divergence weights, $a + b = 1$: (0.4, 0.6) at $\beta = 0.1$, (0.6, 0.4) at 0.5, (0.9, 0.1) at 1.0. \cf{sage\_ab}, \cf{experiment.toml} line 294; same weights as the SAGE ablation \\
+\cf{stale\_weight} ($c$) & 0.3 & staleness weight; \cf{smart\_stale\_weight}, line 300 \\
+\cf{stale\_max} ($\Theta$) & 25 & rounds after which the staleness saturates at 1; line 301 \\
+\cf{soc\_min} ($s_{\min}$) & 0.20 & reserve protected by the client; line 302 \\
+\cf{epochs\_min} ($E_{\mathrm{lo}}$) & 2 & minimum epochs of the envelope; line 303 \\
+\cf{epochs} ($E_0$) & 5 & epochs of the baselines; reference work for the deadline; \cf{local\_epochs}, line 282 \\
+\cf{epochs\_cap\_mult} & 2 & $E_{\mathrm{cap}} = 2 E_0 = 10$; constructor default \\
+\cf{batch\_size} ($B_0$) & 128 & batch of the baselines; reference work for the deadline; line 283 \\
+\cf{batch\_min}, \cf{batch\_max} & 16, 128 & $\mathcal{B}$ = powers of 2 between them, $\{16, 32, 64, 128\}$; lines 330--331 \\
+\cf{deadline\_mult} & 1.0 & $T$ = this factor times the median nominal time; line 304 \\
+\cf{probe\_samples} & 256 & samples on which the client measures the loss; line 305 \\
+\cf{max\_waves} ($W$) & 2 & proposal waves per round; line 311 \\
+\cf{shortlist} ($\kappa$) & 1.5 & proposals to $\lceil \kappa \cdot \text{slots} \rceil$ phones; constructor default \\
+\cf{load\_tau\_s} ($\tau$) & 450 s & relaxation time of the workload forecast; constructor default \\
+\cf{calib\_alpha} ($\alpha$) & 0.3 & weight of the moving average of $k_i$; constructor default \\
+\cf{query\_timeout\_s} & 600 s & maximum wait of the Flower \cf{send\_and\_receive} for the replies to the proposals (simulator safeguard); constructor default \\
+\cf{sage\_k} ($k$) & 2 & slots at round 1; default of \cf{PhysicalSAGEAblation} \\
+\cf{max\_fraction} & 0.2 & slots are at most 20\% of the alive phones; default of \cf{PhysicalSAGEAblation} \\
+\cf{broadcast\_nonresp} ($p_{\mathrm{nr}}$) & 0.10 & probability that a contacted phone does not answer; line 348 \\
+\cf{broadcast\_timeout\_s} ($t_{\mathrm{to}}$) & 1.0 s & wait for missing answers; line 349 \\
+\cf{broadcast} & off & on in \cf{experiment.toml} for SAGE and ESCS; \cf{server\_app} switches it off for SAGE-smart, which uses the negotiation instead \\
+\cf{forecast}, \cf{negotiation}, \cf{partial\_work} & on & components that the ablations switch off (Section~\ref{sec:ablation}) \\
+\cf{\_ESTIMATE\_STEP\_S} & 300 s & maximum integration step of the forecast; \cf{sage\_smart.py} line 27 \\
+\cf{learning\_rate} & 0.01 & SGD of the client (momentum 0.9); line 284 \\
+\bottomrule
+\end{longtable}
+
+\subsection{Parameters of the world used by the computations of SAGE-smart}
+
+\begin{longtable}{p{0.30\textwidth}p{0.22\textwidth}p{0.40\textwidth}}
+\toprule
+Parameter & Value & Source (\cf{experiment.toml}) \\
+\midrule
+\endhead
+tiers: capacity $Q$, throughput $\mu$, training power $P^{\mathrm{tr}}$ & low 4820 mAh, 13.9 GMAC/s, 2.99 W; mid 4780 mAh, 26.6 GMAC/s, 4.00 W; high 5000 mAh, 30.5 GMAC/s, 6.15 W & \cf{[device].tiers}, line 125; one third of the phones each, permuted with the seed \\
+idle power $P^{\mathrm{idle}}_0$ & 0.1 W & line 136 \\
+initial SoC & normal (0.75, 0.15) truncated to [0.30, 1.00] & lines 150--152 \\
+$V_0$, rated C-rate, $\eta$, Peukert $n$ & 3.7 V, 0.2C, 1.0, 1.05 & \cf{[battery]}, lines 156--167 \\
+$F$, $o$ & 3.0, 0.057 s & \cf{[compute]}, lines 173, 185 \\
+bytes per parameter & 4 & line 193 \\
+4G energy per MB, down / up & 0.98 / 2.96 J/MB & lines 207--208 \\
+4G bandwidth, down / up & 25.1 / 10.0 Mbit/s & lines 209--210 \\
+radio session: promotion & 1.2107 W for 0.265 s & lines 223--224 \\
+radio session: tail & 0.178 W for 10.2 s & lines 225--226 \\
+RTT, control payload & 69.5 ms, 1 KB & lines 227--228 \\
+workload states & 0, 0.10, 0.30 & \cf{[workload]}, line 242 \\
+workload chains (low, medium, high) & three Markov chains, stationary means 0.030, 0.119, 0.206 & lines 247--249 \\
+recharge rate $\lambda$, charging speed $\gamma$ & 0.126 per hour, 1C & \cf{[recharge]}, lines 270, 275 \\
+\bottomrule
+\end{longtable}
+
+\newpage
+%======================================================================
+\section{Physical models used inside SAGE-smart}
+\label{sec:physics}
+
+The server uses these functions to compute the deadline, the envelope and the
+forecast; the client uses them to predict the time and the SoC at the end of
+its work. They are the same functions with which the world drains the
+batteries, so the client prediction of its own final SoC is exact (CSV column
+\cf{smart\_soc\_err} $\approx 0$) and the server forecast is wrong only because
+of the recharges and the workload it cannot see.
+
+\subsection{Compute time}
+
+For $E$ epochs (possibly fractional) on $n$ samples with batch $B$:
+\begin{equation}
+  t^{\mathrm{tr}}(E, n, B) = \frac{F \, M \, E \, n}{\mu^{\mathrm{eff}}}
+                           + E \cdot \max\!\bigl(1, \lfloor n / B \rfloor\bigr) \cdot o ,
+  \qquad
+  \mu^{\mathrm{eff}} = \mu \cdot \max(10^{-3}, 1 - w) .
+  \label{eq:ttrain}
+\end{equation}
+The loss probe on $n_{\mathrm{p}}$ samples is a forward pass only:
+$t^{\mathrm{probe}} = M n_{\mathrm{p}} / \mu^{\mathrm{eff}}$. The workload $w$
+slows the training down; the training power does not change. With $n = 400$
+and $w = \bar{w}$ one epoch lasts 55.8 s (low), 29.8 s (mid) and 26.2 s
+(high) at $B = 16$, and 54.5, 28.6 and 25.0 s at $B = 128$. The probe on 256
+samples lasts 11.6, 6.1 and 5.3 s.
+
+\begin{lstlisting}[style=py,firstnumber=11,caption={\texttt{tesifl/device/compute\_model.py}, lines 11--41}]
+def training_macs(epochs: int, n_samples: int) -> float:
+    #MACs totali di un round locale: fwd*factor x campioni x epoche
+    return TRAIN_MACS_FACTOR * MODEL_MACS_FWD_PER_SAMPLE * epochs * n_samples
+
+
+def training_time_s(
+    profile: DeviceProfile, epochs: int, n_samples: int, batch_size: int
+) -> float:
+    """Durata di un round: calcolo + overhead per batch.
+
+    [B] l'overhead fisso per batch e' l'unico modo in cui B entra nel costo:
+    la potenza di training e' costante per tier (DeviceProfile.train_power_w),
+    quindi l'energia di un'epoca, P * t, CALA al crescere di B. Non c'e' un
+    batch energeticamente ottimo interno: la scelta di B e' una questione di
+    accuracy (passi di SGD per epoca), che il modello fisico non vede.
+    """
+    n_batches = max(1, n_samples // batch_size)
+    compute_s = training_macs(epochs, n_samples) / profile.macs_per_s
+    overhead_s = epochs * n_batches * BATCH_OVERHEAD_S
+    return compute_s + overhead_s
+
+
+def probe_time_s(profile: DeviceProfile, n_samples: int) -> float:
+    """Solo forward su n_samples: la stima della loss locale prima del training.
+
+    [B] niente fattore 3 (non c'e' backward) e niente overhead per batch: e'
+    una singola passata in valutazione, trascurabile rispetto al resto.
+    """
+    if n_samples <= 0:
+        return 0.0
+    return MODEL_MACS_FWD_PER_SAMPLE * n_samples / profile.macs_per_s
+\end{lstlisting}
+
+\subsection{Power}
+
+During training a phone draws the power of its tier, $P^{\mathrm{tr}}_i$,
+whatever $B$ is. Between rounds it draws
+\begin{equation}
+  P^{\mathrm{idle}}(w) = P^{\mathrm{idle}}_0 + w \, (P^{\mathrm{tr}}_i - P^{\mathrm{idle}}_0) ,
+  \label{eq:pidle}
+\end{equation}
+0.441, 0.561 and 0.815 W at $w = \bar{w}$ for the three tiers.
+
+\begin{lstlisting}[style=py,firstnumber=37,caption={\texttt{tesifl/device/world\_state.py}, lines 37--63}]
+def effective_profile(p: DeviceProfile, w: float) -> DeviceProfile:
+    """Profilo col throughput ridotto dal workload w."""
+    if w <= 0.0:
+        return p
+    return DeviceProfile(
+        cid=p.cid, battery_capacity_mah=p.battery_capacity_mah,
+        macs_per_s=p.macs_per_s * max(1e-3, 1.0 - w),
+        peukert_n=p.peukert_n, tier=p.tier, train_power_w=p.train_power_w,
+    )
+
+
+def training_power_w(p: DeviceProfile) -> float:
+    """Potenza del device durante il training: costante, quella del suo tier.
+
+    [B] prima P(B) = 3 W * (B/128)^0.3, uguale per tutti i tier e con un
+    esponente senza fonte. Ora la potenza e' quella MISURATA del telefono
+    del tier (Mandheling, vedi experiment.toml) e non dipende da B.
+    """
+    return p.train_power_w
+
+
+def idle_power_w(p: DeviceProfile, w: float) -> float:
+    """P_idle + w * (P_train - P_idle): interpola fra riposo e pieno carico
+    DEL TIER. w e' la frazione della capacita' di quel telefono occupata da
+    altre app: a parita' di w un telefono piu' potente fa piu' lavoro e
+    consuma piu' watt."""
+    return IDLE_POWER_W + w * (p.train_power_w - IDLE_POWER_W)
+\end{lstlisting}
+
+\subsection{Communication}
+
+The model is $S = 11{,}220{,}132 \times 4\,\text{B} = 44.88$ MB, the same size in
+both directions. Every isolated transfer opens a 4G radio session (promotion and
+tail):
+\begin{align}
+  E^{\mathrm{sess}} &= 1.2107 \cdot 0.265 + 0.178 \cdot 10.2 = 2.136~\text{J},
+  & t^{\mathrm{sess}} &= 0.265 + 10.2 = 10.465~\text{s}, \\
+  E^{\mathrm{comm}} &= 0.98\,S + 2.96\,S + 2 E^{\mathrm{sess}} = 181.10~\text{J},
+  & t^{\mathrm{comm}} &= \frac{S}{25.1/8} + \frac{S}{10/8} + 2 t^{\mathrm{sess}} = 71.14~\text{s}.
+\end{align}
+The battery models work with power and time, so the model exchange is applied
+as the average power $P^{\mathrm{comm}} = E^{\mathrm{comm}} / t^{\mathrm{comm}}
+= 2.546$ W for $t^{\mathrm{comm}}$. A phone that downloads the model and then
+withdraws pays only the download: 46.12 J in 24.77 s. A control message
+(proposal and answer, 1 KB, half in each direction) costs $1.97 \cdot 10^{-3}$ J
+when it shares the radio session of the model download that follows (selected
+phone), and 2.138 J when it is isolated. It delays the round by
+$t_{\mathrm{ctrl}} = 0.265 + 0.0695 + 0.0006 = 0.335$ s (promotion, RTT,
+transmission); the tail does not delay the round.
+
+\begin{lstlisting}[style=py,firstnumber=44,caption={\texttt{tesifl/device/communication\_model.py}, lines 44--131}]
+def round_payload_mb() -> tuple[float, float]:
+    #(rx_mb, tx_mb) di un round: modello intero in giu', update stessa taglia in su
+    return MODEL_SIZE_MB, MODEL_SIZE_MB
+
+
+def _payload_energy_j(rx_mb: float, tx_mb: float) -> float:
+    return rx_mb * COMM_ENERGY_DL_J_PER_MB + tx_mb * COMM_ENERGY_UL_J_PER_MB
+
+
+def _payload_time_s(rx_mb: float, tx_mb: float) -> float:
+    #RX e TX sequenziali (non sovrapposti), ciascuno con la sua banda
+    return rx_mb / COMM_BANDWIDTH_DL_MB_PER_S + tx_mb / COMM_BANDWIDTH_UL_MB_PER_S
+
+
+def session_energy_j() -> float:
+    """Energia fissa di una sessione radio: promozione + coda."""
+    return (SESSION_PROMO_POWER_W * SESSION_PROMO_TIME_S
+            + SESSION_TAIL_POWER_W * SESSION_TAIL_TIME_S)
+
+
+def session_time_s() -> float:
+    return SESSION_PROMO_TIME_S + SESSION_TAIL_TIME_S
+
+
+# --------------------------------------------------- scambio del modello
+def comm_time_s(profile: DeviceProfile | None = None) -> float:
+    #trasferimento giu' e su, piu' le due sessioni radio. `profile` accettato
+    #e ignorato: rete unica.
+    rx_mb, tx_mb = round_payload_mb()
+    return _payload_time_s(rx_mb, tx_mb) + 2 * session_time_s()
+
+
+def comm_energy_j(profile: DeviceProfile | None = None) -> float:
+    rx_mb, tx_mb = round_payload_mb()
+    return _payload_energy_j(rx_mb, tx_mb) + 2 * session_energy_j()
+
+
+def comm_power_w(profile: DeviceProfile | None = None) -> float:
+    #potenza media equivalente: serve al modello di batteria, che ragiona in
+    #potenza x tempo, cosi' la non-idealita' si applica anche alla comunicazione
+    t = comm_time_s()
+    return comm_energy_j() / t if t > 0 else 0.0
+
+
+# ------------------------------------------------ solo download del modello
+# [B] 04/11: chi riceve il modello e poi si ritira (opt-out di SAGE-smart)
+# scarica il modello ma non carica l'update: una sola sessione radio.
+def download_time_s() -> float:
+    rx_mb, _ = round_payload_mb()
+    return _payload_time_s(rx_mb, 0.0) + session_time_s()
+
+
+def download_energy_j() -> float:
+    rx_mb, _ = round_payload_mb()
+    return _payload_energy_j(rx_mb, 0.0) + session_energy_j()
+
+
+def download_power_w() -> float:
+    t = download_time_s()
+    return download_energy_j() / t if t > 0 else 0.0
+
+
+# ------------------------------------------------- messaggi di controllo
+# Richiesta di stato o proposta di lavoro, con la risposta del client.
+# merged=True: lo scambio cade nella stessa sessione radio del download del
+# modello che segue subito dopo (client selezionato), quindi non paga una
+# sessione propria. merged=False: sessione isolata, costo pieno.
+def ctrl_energy_j(merged: bool = False) -> float:
+    half = CTRL_PAYLOAD_MB / 2.0
+    return _payload_energy_j(half, half) + (0.0 if merged else session_energy_j())
+
+
+def ctrl_time_s(merged: bool = False) -> float:
+    """Durata della scarica: trasmissione piu', se isolata, la sessione."""
+    half = CTRL_PAYLOAD_MB / 2.0
+    return _payload_time_s(half, half) + (0.0 if merged else session_time_s())
+
+
+def ctrl_power_w(merged: bool = False) -> float:
+    t = ctrl_time_s(merged)
+    return ctrl_energy_j(merged) / t if t > 0 else 0.0
+
+
+def ctrl_latency_s() -> float:
+    """Quanto uno scambio di controllo ritarda il round: promozione + RTT +
+    trasmissione. La coda non conta, la radio si spegne in background."""
+    half = CTRL_PAYLOAD_MB / 2.0
+    return SESSION_PROMO_TIME_S + COMM_RTT_S + _payload_time_s(half, half)
+\end{lstlisting}
+
+\subsection{Battery}
+
+The battery of the world (\cf{lin}, \cf{peuk} or \cf{nm}) is a static property
+of the phone, known to the server from the enrollment and to the client. A
+power $P$ for $\Delta t$ seconds at SoC $s$ changes the SoC by:
+\begin{align}
+  \text{Ideal:} \quad & \Delta s = -\frac{(P/\eta)\,\Delta t / 3600}{V_0 \, Q_i} , \\
+  \text{Peukert:} \quad & I = \frac{P/\eta}{V_0}, \quad
+      Q'_i = Q_i \Bigl(\frac{Q_i}{5\,\text{h}}\Bigr)^{n-1}, \quad
+      \Delta s = -\frac{\Delta t / 3600}{Q'_i / I^{n}} , \quad n = 1.05 , \\
+  \text{Datasheet:} \quad & \frac{P}{\eta} = V\!\Bigl(s, \frac{I}{Q_i}\Bigr) \, I
+      \;\text{(solved for } I \text{ by bisection)}, \quad
+      \Delta s = -\frac{I \, \Delta t / 3600}{Q_i \, q(I/Q_i)} .
+\end{align}
+In the Datasheet model $V(s, \rho)$ is interpolated linearly in $s$ on the three
+discharge curves of the datasheet (0.2C, 0.5C, 1C) and linearly in the C-rate
+$\rho$; below 0.2C it is the 0.2C curve, above 1C it is extrapolated (at least
+0.5 V). The usable capacity is $q(\rho) = 1.000, 0.962, 0.919$ of the nominal
+one at 0.2C, 0.5C and 1C (constant below 0.2C, extrapolated above, at least
+0.3). The bisection runs 60 iterations between $10^{-9}$ A and $50 Q_i$. The
+world clamps the SoC to $[0, 1]$; a phone that reaches 0 is dead for the rest
+of the run. A phone in charge is connected to the grid: its battery does not
+discharge, and the energy is counted separately as grid energy.
+
+\begin{lstlisting}[style=py,firstnumber=71,caption={\texttt{tesifl/device/world\_state.py}, lines 71--87}]
+def battery_delta_soc(battery: str, power_w: float, dt_s: float,
+                      profile: DeviceProfile, soc: float) -> float:
+    """Variazione di SoC (<= 0) della batteria `battery` per power_w x dt_s.
+
+    lin   SoC -= P/eta * dt / (V_nom * C_nom)                (energy_wh_linear)
+    peuk  SoC -= dt / t_pieno,  t_pieno = C' / I^n           (battery_model_peukert)
+    nm    SoC -= I * dt / Q(I), P = V(SoC, I) * I            (battery_model)
+    Solo nm dipende dal SoC corrente: la tensione cala al calare della carica.
+    """
+    if battery == "nm":
+        return delta_soc(power_w, dt_s, profile, soc)
+    if battery == "peuk":
+        return peukert_delta_soc(power_w, dt_s, profile)
+    if battery == "lin":
+        cap_wh = profile.battery_capacity_mah / 1000.0 * V_NOMINAL
+        return -energy_wh_linear(power_w, dt_s) / cap_wh
+    raise ValueError(f"batteria '{battery}': una fra {BATTERIES}")
+\end{lstlisting}
+
+\begin{lstlisting}[style=py,firstnumber=67,caption={\texttt{tesifl/device/battery\_model.py}, lines 67--90}]
+_SOC = np.array([0.00, 0.01, 0.02, 0.03, 0.04, 0.05, 0.075, 0.10, 0.15,
+                 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60,
+                 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 0.98, 1.00])
+
+# V a 0.2C -- la curva di gran lunga piu' usata: training ~0.2C, idle ~0.01C
+_V_02C = np.array([2.50, 3.00, 3.15, 3.26, 3.33, 3.38, 3.44, 3.46, 3.51,
+                   3.54, 3.57, 3.59, 3.61, 3.64, 3.66, 3.69, 3.71, 3.75,
+                   3.80, 3.85, 3.90, 3.95, 4.03, 4.09, 4.17, 4.22, 4.24])
+# V a 0.5C
+_V_05C = np.array([2.50, 2.80, 2.94, 3.04, 3.11, 3.16, 3.24, 3.29, 3.36,
+                   3.41, 3.44, 3.47, 3.49, 3.51, 3.53, 3.55, 3.59, 3.62,
+                   3.66, 3.71, 3.76, 3.81, 3.89, 3.96, 4.03, 4.08, 4.12])
+# V a 1C
+_V_1C = np.array([2.50, 2.68, 2.78, 2.86, 2.91, 2.96, 3.04, 3.10, 3.18,
+                  3.23, 3.27, 3.30, 3.33, 3.35, 3.38, 3.40, 3.43, 3.47,
+                  3.50, 3.55, 3.59, 3.65, 3.72, 3.78, 3.84, 3.89, 3.95])
+
+_CRATES = np.array([0.2, 0.5, 1.0])
+_VTAB = np.vstack([_V_02C, _V_05C, _V_1C])          # (3, 27)
+
+# capacita' utilizzabile come FRAZIONE della nominale, dagli endpoint
+_QFRAC = np.array([2.60, 2.50, 2.39]) / 2.60         # 1.000, 0.962, 0.919
+
+_BISECT_ITERS = 60
+\end{lstlisting}
+
+\begin{lstlisting}[style=py,firstnumber=93,caption={\texttt{tesifl/device/battery\_model.py}, lines 93--159}]
+def _voltage(soc: float, crate: float) -> float:
+    """V(SoC, C-rate), bilineare sulle tre curve.
+
+    [B] fuori dal range 0.2-1C si estrapola LINEARMENTE in C-rate invece di
+    saturare: a correnti molto basse (idle, ~0.001C) la tensione satura da
+    sola sulla curva 0.2C, che e' fisicamente corretto, mentre a correnti alte
+    saturare sottostimerebbe la caduta e falserebbe proprio il caso peggiore.
+    """
+    soc = float(np.clip(soc, 0.0, 1.0))
+    v_at = np.array([np.interp(soc, _SOC, _VTAB[i]) for i in range(3)])
+    if crate <= _CRATES[0]:
+        # sotto 0.2C la caduta ohmica e' gia' trascurabile: non estrapolare
+        # verso l'alto, la tensione a vuoto e' il limite fisico
+        return float(v_at[0])
+    if crate >= _CRATES[-1]:
+        slope = (v_at[2] - v_at[1]) / (_CRATES[2] - _CRATES[1])
+        return float(max(0.5, v_at[2] + slope * (crate - _CRATES[-1])))
+    return float(np.interp(crate, _CRATES, v_at))
+
+
+def _q_fraction(crate: float) -> float:
+    """Capacita' utilizzabile / nominale, in funzione del C-rate."""
+    if crate <= _CRATES[0]:
+        return float(_QFRAC[0])
+    if crate >= _CRATES[-1]:
+        slope = (_QFRAC[2] - _QFRAC[1]) / (_CRATES[2] - _CRATES[1])
+        return float(max(0.3, _QFRAC[2] + slope * (crate - _CRATES[-1])))
+    return float(np.interp(crate, _CRATES, _QFRAC))
+
+
+def solve_current_a(power_w: float, soc: float, profile: DeviceProfile) -> float:
+    """Risolve P = V(SoC, I) * I per bisezione. Ritorna I in ampere.
+
+    [B] serve un metodo iterativo perche' V dipende da I: piu' corrente, meno
+    tensione, quindi per la stessa potenza serve ancora piu' corrente. Il
+    prodotto V*I e' monotono crescente in I finche' la caduta resta moderata,
+    il che rende la bisezione sicura e sufficiente -- Newton converge prima ma
+    puo' uscire dal dominio tabulato.
+    """
+    if power_w <= 0.0:
+        return 0.0
+    q_nom_ah = profile.battery_capacity_mah / 1000.0
+    p_batt = power_w / DCDC_EFFICIENCY        # la conversione avviene a monte
+    lo, hi = 1e-9, 50.0 * q_nom_ah            # fino a 50C: limite di sicurezza
+    for _ in range(_BISECT_ITERS):
+        mid = 0.5 * (lo + hi)
+        if _voltage(soc, mid / q_nom_ah) * mid < p_batt:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
+
+
+def delta_soc(power_w: float, dt_s: float, profile: DeviceProfile,
+              soc: float = 1.0) -> float:
+    """Variazione di SoC (<= 0) consumando power_w per dt_s secondi.
+
+    [B] `soc` ha default 1.0 SOLO per compatibilita' con le chiamate che non
+    lo passano ancora. Passarlo cambia il risultato -- e' tutto il punto del
+    modello -- quindi ogni chiamante dovrebbe fornire il SoC corrente.
+    """
+    if power_w <= 0.0 or dt_s <= 0.0:
+        return 0.0
+    q_nom_ah = profile.battery_capacity_mah / 1000.0
+    i_a = solve_current_a(power_w, soc, profile)
+    q_eff_ah = q_nom_ah * _q_fraction(i_a / q_nom_ah)
+    return -(i_a * (dt_s / 3600.0)) / q_eff_ah
+\end{lstlisting}
+
+\begin{lstlisting}[style=py,firstnumber=173,caption={\texttt{tesifl/device/battery\_model.py}, lines 173--189}]
+def energy_wh_linear(power_w: float, dt_s: float) -> float:
+    """Energia al carico, P/eta * dt, senza alcun modello di batteria.
+
+    E' anche il consumo della batteria LINEARE (mondo "lin"): li' il SoC
+    scende di P/eta * dt / (V_nom * C_nom). Negli altri mondi resta la
+    colonna energy_lin_wh del CSV: l'energia che il device ha usato, a
+    prescindere da quanta carica la batteria abbia pagato per erogarla.
+    """
+    if power_w <= 0.0 or dt_s <= 0.0:
+        return 0.0
+    return (power_w / DCDC_EFFICIENCY) * dt_s / 3600.0
+
+
+def energy_wh_from_delta_soc(delta: float, profile: DeviceProfile) -> float:
+    """Energia estratta DALLA BATTERIA per una data variazione di SoC."""
+    q_nom_ah = profile.battery_capacity_mah / 1000.0
+    return V_NOMINAL * (-delta * q_nom_ah)
+\end{lstlisting}
+
+\begin{lstlisting}[style=py,firstnumber=29,caption={\texttt{tesifl/device/battery\_model\_peukert.py}, lines 29--49}]
+def load_power_to_battery_current(power_w: float) -> float:
+    """P_batt = P_load / eta_dcdc ; I_batt = P_batt / V_nom."""
+    if power_w <= 0:
+        return 0.0
+    return (power_w / DCDC_EFFICIENCY) / V_NOMINAL
+
+
+def peukert_capacity_ah(profile: DeviceProfile) -> float:
+    """C' = C * (C/R)^(n-1), la capacita' effettiva alla corrente nominale."""
+    c_rated_ah = profile.battery_capacity_mah / 1000.0
+    i_rated_a = c_rated_ah / RATED_R_HOURS
+    return c_rated_ah * (i_rated_a ** (profile.peukert_n - 1.0))
+
+
+def delta_soc(power_w: float, dt_s: float, profile: DeviceProfile) -> float:
+    """Variazione di SoC (<= 0) consumando power_w per dt_s secondi."""
+    if power_w <= 0 or dt_s <= 0:
+        return 0.0
+    current_a = load_power_to_battery_current(power_w)
+    t_full_h = peukert_capacity_ah(profile) / (current_a ** profile.peukert_n)
+    return -((dt_s / 3600.0) / t_full_h)
+\end{lstlisting}
+
+\subsection{Workload of the other apps}
+
+Each phone follows one of three Markov chains over the states idle, light and
+heavy ($w = 0$, 0.10, 0.30). The chains are assigned in equal thirds with a
+permutation independent of the tier (seed of the run + 7919) and make one
+transition per round. Their stationary means are 0.0297, 0.1191 and 0.2055;
+their mean, $\bar{w} = 0.1181$, is the workload that the server assumes for a
+phone that has never reported one. The heaviest state, $w_{\max} = 0.30$, is
+only a fallback value for a reply without workload.
+
+\begin{lstlisting}[style=py,firstnumber=41,caption={\texttt{tesifl/device/workload.py}, lines 41--41}]
+W_MAX = 0.95
+\end{lstlisting}
+
+\begin{lstlisting}[style=py,firstnumber=44,caption={\texttt{tesifl/device/workload.py}, lines 44--51}]
+def scaled_util(scale: float) -> np.ndarray:
+    """Utilizzazione dei tre stati moltiplicata per `scale`, con tetto W_MAX.
+
+    A scale = 1 i valori sono quelli di experiment.toml, identici bit per bit.
+    """
+    if scale <= 0.0:
+        raise ValueError(f"workload scale {scale}: deve essere > 0")
+    return np.minimum(W_MAX, STATE_UTIL * float(scale))
+\end{lstlisting}
+
+\begin{lstlisting}[style=py,firstnumber=67,caption={\texttt{tesifl/device/workload.py}, lines 67--112}]
+    def __init__(self, n_clients: int, seed: int, enabled: bool = True,
+                 scale: float = 1.0) -> None:
+        self.enabled = bool(enabled)
+        self.scale = float(scale)
+        self._util = scaled_util(self.scale)
+        self.n_clients = int(n_clients)
+        self._rng = np.random.default_rng(seed)
+        self._chains = {p: np.asarray(WORKLOAD_CHAINS[p], dtype=float)
+                        for p in PROFILE_NAMES}
+        for p, m in self._chains.items():
+            if not np.allclose(m.sum(axis=1), 1.0):
+                raise ValueError(f"la catena '{p}' ha righe che non sommano a 1")
+
+        # profili in parti uguali, assegnati con una permutazione: senza,
+        # il profilo sarebbe una funzione del cid e quindi correlato alla
+        # partizione dei dati, che pure dipende dal cid.
+        self._profile = self._assign_equal(PROFILE_NAMES)
+        # tutti partono da idle: lo stato iniziale conta poco, le catene
+        # convergono alla stazionaria in poche decine di round.
+        self._state = {cid: 0 for cid in range(self.n_clients)}
+
+    def _assign_equal(self, names: list[str]) -> dict[int, str]:
+        base = [names[i % len(names)] for i in range(self.n_clients)]
+        order = self._rng.permutation(self.n_clients)
+        return {int(cid): base[i] for i, cid in enumerate(order)}
+
+    # ------------------------------------------------------------ evoluzione
+    def step(self) -> None:
+        """Una transizione per ogni client. Da chiamare a inizio round."""
+        if not self.enabled:
+            return
+        for cid in range(self.n_clients):
+            row = self._chains[self._profile[cid]][self._state[cid]]
+            self._state[cid] = int(self._rng.choice(len(row), p=row))
+
+    # -------------------------------------------------------------- lettura
+    def utilization(self, cid: int) -> float:
+        """w in [0, 1): frazione di calcolo occupata da altre applicazioni."""
+        if not self.enabled:
+            return 0.0
+        return float(self._util[self._state[cid]])
+
+    def max_utilization(self) -> float:
+        """w dello stato piu' pesante a questo scale: il caso peggiore che
+        SAGE-smart assume finche' non conosce il workload di un client."""
+        return float(self._util.max())
+\end{lstlisting}
+
+\begin{lstlisting}[style=py,firstnumber=132,caption={\texttt{tesifl/device/workload.py}, lines 132--147}]
+def stationary_utilization(scale: float = 1.0) -> dict[str, float]:
+    """Utilizzazione media attesa di ogni profilo, dall'autovettore della catena.
+
+    Serve a verificare che le matrici diano le medie che ci si aspetta, senza
+    doverle simulare: e' il primo dei controlli di validazione.
+    """
+    util = scaled_util(scale)
+    out = {}
+    for name, m in WORKLOAD_CHAINS.items():
+        m = np.asarray(m, dtype=float)
+        vals, vecs = np.linalg.eig(m.T)
+        i = int(np.argmin(np.abs(vals - 1.0)))
+        pi = np.real(vecs[:, i])
+        pi = pi / pi.sum()
+        out[name] = float(pi @ util)
+    return out
+\end{lstlisting}
+
+\subsection{Initial SoC, recharge and idle of the world}
+
+The initial SoC is drawn from a normal distribution with mean 0.75 and standard
+deviation 0.15, rejecting the samples outside $[0.30, 1.00]$. At the start of
+every round a phone that is alive and not charging is plugged in with
+probability
+\begin{equation}
+  p^{\mathrm{plug}}_i = 1 - \exp\!\bigl(-\lambda \, (1 - s_i) \, \Delta t_{r-1} / 3600\bigr) ,
+  \label{eq:plug}
+\end{equation}
+with $\Delta t_{r-1}$ the duration of the previous round in seconds (0 at round
+1). A charging phone gains $\gamma \, t_r / 3600$ of SoC per round of duration
+$t_r$ and leaves the charge at 1.0. The round lasts as long as the slowest
+selected phone plus the control overhead; every alive phone is idle, at the
+power of Equation~\eqref{eq:pidle} with its current workload, for the part of
+the round in which it is not training.
+
+\begin{lstlisting}[style=py,firstnumber=191,caption={\texttt{tesifl/device/world\_state.py}, lines 191--219}]
+    def _sample_initial_soc(self) -> float:
+        """SoC iniziale: normale troncata, spostata verso la carica piena.
+
+        [B] l'uniforme su [0.3, 1.0] metteva il 29% dei client sotto il 50%
+        di carica gia' al round 1, cioe' una popolazione mediamente scarica
+        prima ancora di iniziare. Con mu=0.75 quella quota scende al 5%: resta
+        una coda bassa -- che serve, perche' e' cio' che gli algoritmi
+        battery-aware devono saper distinguere -- ma il caso tipico diventa un
+        device carico, che e' la situazione realistica.
+
+        [B] RIFIUTO IN CICLO, NON CLIP. Un clip agli estremi accumulerebbe
+        massa su 0.30 e 1.00, creando due picchi artificiali proprio dove la
+        soglia di riserva e la carica piena contano di piu'.
+
+        [B] usa self._rng, quindi la popolazione iniziale dipende dal seed
+        come prima: seed diversi danno popolazioni diverse, lo stesso seed
+        la stessa popolazione.
+        """
+        lo, hi = INITIAL_SOC_RANGE
+        for _ in range(10000):
+            x = float(self._rng.normal(INITIAL_SOC_MEAN, INITIAL_SOC_STD))
+            if lo <= x <= hi:
+                return x
+        # irraggiungibile con parametri sensati; se mu cade fuori dal
+        # troncamento e' meglio accorgersene che restare in ciclo
+        raise RuntimeError(
+            f"SoC iniziale: nessun campione in [{lo}, {hi}] con "
+            f"mu={INITIAL_SOC_MEAN}, sigma={INITIAL_SOC_STD}"
+        )
+\end{lstlisting}
+
+\begin{lstlisting}[style=py,firstnumber=298,caption={\texttt{tesifl/device/world\_state.py}, lines 298--320}]
+    def begin_round(self) -> None:
+        """Inizio round: avanza il workload e decide chi va in carica.
+
+        [B] la probabilita' cresce al calare del SoC: e' il comportamento
+        dell'utente, che mette in carica quando vede la batteria bassa. E' un
+        tasso ORARIO applicato alla durata dt del round appena finito,
+            p = 1 - exp(-rate_per_hour * (1 - SoC) * dt_ore),
+        cosi' algoritmi con round di durata diversa vedono la stessa ricarica
+        per ora di tempo reale (prima p era fissa per round). Al primo round
+        dt = 0: nessuno parte in carica. Un device gia' in carica non viene
+        riestratto: esce dalla carica solo al 100%.
+        """
+        self.workload.step()
+        if not self._recharge_enabled:
+            return
+        dt_h = self._last_round_s / 3600.0
+        for cid in self._profiles:
+            if self._failed[cid] or self._charging[cid]:
+                continue
+            p = 1.0 - np.exp(-RECHARGE_RATE_PER_H * (1.0 - self._soc[cid]) * dt_h)
+            if self._rng.random() < p:
+                self._charging[cid] = True
+                self._n_recharges[cid] += 1
+\end{lstlisting}
+
+\begin{lstlisting}[style=py,firstnumber=332,caption={\texttt{tesifl/device/world\_state.py}, lines 332--352}]
+    def round_duration_s(
+        self, cid: int, epochs: int, batch_size: int, dataset_size_local: int,
+        include_workload: bool = True,
+    ) -> float:
+        """Durata del training locale.
+
+        include_workload=False da' la durata NOMINALE, che dipende dal solo
+        tier. Serve a ESCS, che nel paper usa la latenza di profilo come dato
+        statico noto al server: il workload e' proprio cio' che il server non
+        puo' conoscere in anticipo.
+        """
+        p = self.effective_profile(cid) if include_workload else self._profiles[cid]
+        return training_time_s(p, epochs, dataset_size_local, batch_size)
+
+    def probe_duration_s(self, cid: int, n_samples: int) -> float:
+        """Forward di sola valutazione su n_samples, col workload corrente.
+
+        E' la stima della loss locale che il client di sage_smart fa prima
+        di decidere (E, B): costa poco, ma non e' gratis e va addebitata.
+        """
+        return probe_time_s(self.effective_profile(cid), n_samples)
+\end{lstlisting}
+
+\begin{lstlisting}[style=py,firstnumber=362,caption={\texttt{tesifl/device/world\_state.py}, lines 362--423}]
+    def _drain(self, cid: int, power_w: float, dt_s: float) -> tuple[float, float]:
+        """Applica power_w per dt_s con la batteria del mondo.
+
+        Ritorna (Wh di carica pagati dalla batteria, Wh al carico P*dt).
+        """
+        if self._failed[cid]:
+            return 0.0, 0.0
+        if self._charging[cid]:
+            # collegato alla rete: la batteria non si scarica. L'energia c'e'
+            # lo stesso e la contabilizziamo a parte.
+            self._energy_grid_wh[cid] += (power_w / DCDC_EFFICIENCY) * dt_s / 3600.0
+            return 0.0, 0.0
+        profile = self._profiles[cid]
+        soc = self._soc[cid]
+        d_req = battery_delta_soc(self.battery, power_w, dt_s, profile, soc)
+        new_soc = max(0.0, min(1.0, soc + d_req))
+        # [B] energia dal delta EFFETTIVO, non da quello richiesto: il SoC e'
+        # clampato a 0 ma il delta no, quindi un client che muore nel round
+        # verrebbe addebitato per carica che non aveva.
+        d = new_soc - soc
+        self._soc[cid] = new_soc
+        if new_soc <= 0.0:
+            self._failed[cid] = True
+        # l'energia al carico va scalata con la stessa frazione effettiva: se
+        # il client muore a meta' round, ha lavorato solo per meta' round
+        frac = d / d_req if d_req < 0.0 else 0.0
+        e_lin = energy_wh_linear(power_w, dt_s) * frac
+        self._energy_lin_wh[cid] += e_lin
+        return energy_wh_from_delta_soc(d, profile), e_lin
+
+    def apply_round(self, cid: int, dt_s: float, batch_size: int) -> tuple[float, float]:
+        e, e_lin = self._drain(cid, self.training_power_w(cid, batch_size), dt_s)
+        self._energy_wh[cid] += e
+        return e, e_lin
+
+    def apply_control(self, cid: int, merged: bool = False) -> tuple[float, float]:
+        """Uno scambio di controllo (richiesta + risposta) con il server.
+
+        merged=True se lo scambio cade nella sessione radio del download del
+        modello che segue (client selezionato): paga il solo payload. Vedi
+        communication_model.
+        """
+        e, e_lin = self._drain(cid, ctrl_power_w(merged), ctrl_time_s(merged))
+        self._energy_ctrl_wh[cid] += e
+        return e, e_lin
+
+    def apply_communication(self, cid: int) -> tuple[float, float]:
+        e, e_lin = self._drain(cid, comm_power_w(), comm_time_s())
+        self._energy_comm_wh[cid] += e
+        return e, e_lin
+
+    def apply_download(self, cid: int) -> tuple[float, float]:
+        """Solo il download del modello, con la sua sessione radio.
+
+        [B] 04/11: e' cio' che paga un client di SAGE-smart che riceve il
+        modello e poi si ritira (opt-out): prima pagava lo scambio intero
+        (~181 J con ResNet-18), anche l'upload che non fa (~46 J il solo
+        download). La risposta di ritiro e' un messaggio di controllo a parte.
+        """
+        e, e_lin = self._drain(cid, download_power_w(), download_time_s())
+        self._energy_comm_wh[cid] += e
+        return e, e_lin
+\end{lstlisting}
+
+\begin{lstlisting}[style=py,firstnumber=425,caption={\texttt{tesifl/device/world\_state.py}, lines 425--475}]
+    def idle_power_w(self, cid: int) -> float:
+        """P_idle + w * (P_train - P_idle) del tier, vedi idle_power_w()."""
+        return idle_power_w(self._profiles[cid], self.workload.utilization(cid))
+
+    def apply_idle(self, durations: dict[int, float]) -> tuple[float, float]:
+        """Idle di fine round, modello ESCS Sez. 4.2.
+
+        durations: cid -> durata del training, per i soli SELEZIONATI.
+        Il round dura quanto il piu' lento fra loro; ogni client sta in idle
+        per la differenza fra quella durata e il proprio training (zero per il
+        piu' lento, tutta la durata per chi non e' stato selezionato).
+
+        [B] va chiamata DOPO apply_round, altrimenti un client gia' a zero
+        pagherebbe l'idle prima del training e l'ordine cambierebbe chi muore.
+        """
+        if not self._idle_enabled:
+            return 0.0, 0.0
+        t_round = max(durations.values()) if durations else 0.0
+        if t_round <= 0.0:
+            return 0.0, 0.0
+        self._last_round_s = t_round
+        self._charge_step(t_round)
+        tot_e = tot_lin = 0.0
+        for cid in self._profiles:
+            if self._failed[cid]:
+                continue
+            idle_s = t_round - float(durations.get(cid, 0.0))
+            if idle_s <= 0.0:
+                continue
+            e, lin = self._drain(cid, self.idle_power_w(cid), idle_s)
+            self._energy_idle_wh[cid] += e
+            tot_e += e
+            tot_lin += lin
+        return tot_e, tot_lin
+
+    def _charge_step(self, t_round: float) -> None:
+        """Carica lineare a C-rate costante per la durata del round.
+
+        [B] lineare per scelta: la curva reale e' CC-CV e rallenta sopra l'80%,
+        ma modellarla aggiungerebbe due parametri per un effetto che qui non
+        cambia nulla. La carica finisce al 100% e il device torna normale.
+        """
+        if not self._recharge_enabled:
+            return
+        d_soc = CHARGE_C_RATE * t_round / 3600.0
+        for cid in self._profiles:
+            if not self._charging[cid]:
+                continue
+            self._soc[cid] = min(1.0, self._soc[cid] + d_soc)
+            if self._soc[cid] >= 1.0:
+                self._charging[cid] = False
+\end{lstlisting}
+
+\newpage
+%======================================================================
+\section{Structure of a round}
+\label{sec:round}
+
+\cf{PhysicalFedAvg.configure\_train} and \cf{aggregate\_train} define the order
+of the operations. For SAGE-smart one round $r$ is:
+\begin{enumerate}
+  \item $\mathcal{A}_r$ = phones not depleted. Phones in charge stay available
+        (\cf{recharge\_available = true}). No broadcast.
+  \item \cf{\_select\_clients} (Sections~\ref{sec:enroll}--\ref{sec:fresh}):
+        enrollment at round 1, forecast, ranking, number of slots, proposals,
+        fresh choice, energy of the control messages, envelopes. The phones see
+        the proposals with their state of the previous round.
+  \item \cf{world.begin\_round()}: one workload transition per phone and the
+        recharge draws of Equation~\eqref{eq:plug}.
+  \item The model, the envelope and the sensor readings of this round (after
+        step 3) go to the phones of $S_r$ (late binding).
+  \item Each phone decides $(E, B)$, trains and replies
+        (Section~\ref{sec:client}).
+  \item \cf{aggregate\_train} (Section~\ref{sec:aggregate}): the replies are
+        sorted by phone index; for each one the world charges training and
+        communication and the strategy updates its state. Then the round
+        duration $t_r = \max_{i \in S_r} t_i + t^{\mathrm{ovh}}_r$ is fixed,
+        the charging phones recharge, every alive phone pays the idle, and the
+        models are averaged.
+  \item The global model is evaluated on the test set.
+\end{enumerate}
+
+\begin{lstlisting}[style=py,firstnumber=110,caption={\texttt{tesifl/strategies/fedavg.py}, lines 110--168}]
+    def configure_train(
+        self, server_round: int, arrays: ArrayRecord, config: ConfigRecord, grid: Grid
+    ) -> list[Message]:
+        if self._exhausted:
+            return []
+        self._ensure_mapping(grid)
+        self.world.tick_all()
+        available = [
+            nid for nid, cid in self._node_to_cid.items()
+            if self._is_available(cid)
+        ]
+        self._n_alive = len(available)
+        if self.broadcast:
+            available = self._broadcast(available, server_round)
+        k = min(self.k_per_round, len(available))
+        selected = self._select_clients(available, k, server_round)
+        if not selected:
+            self._exhausted = True
+            log(INFO, "round %s: selezione vuota su %s disponibili, run terminata",
+                server_round, len(available))
+            return []
+        if self.broadcast:
+            self._charge_broadcast(selected)
+
+        # [B] il workload avanza qui, prima che il server calcoli le durate e
+        # selezioni: cosi' la selezione di questo round vede lo stato corrente,
+        # non quello del round precedente.
+        self.world.begin_round()
+
+        self._global_arrays = arrays
+
+        base = dict(config)
+        base["server-round"] = server_round
+        base["epochs"] = self.epochs
+        base["batch-size"] = self.batch_size
+
+        self._epochs_sent.clear()
+        self._batch_sent.clear()
+        messages: list[Message] = []
+        for nid in selected:
+            cid = int(self._node_to_cid[int(nid)])
+            cfg = ConfigRecord(dict(base))
+            cfg["cid"] = cid
+            self._per_client_config(cid, cfg, server_round)
+            self._epochs_sent[cid] = int(cfg["epochs"])
+            self._batch_sent[cid] = int(cfg["batch-size"])
+            rec = RecordDict(
+                {self.arrayrecord_key: arrays, self.configrecord_key: cfg}
+            )
+            dev = self._device_record(cid)
+            if dev is not None:
+                rec["device"] = dev
+            messages.extend(
+                self._construct_messages(rec, [int(nid)], MessageType.TRAIN)
+            )
+
+        log(INFO, "round %s: %s/%s disponibili, %s selezionati",
+            server_round, len(available), len(self._node_to_cid), len(selected))
+        return messages
+\end{lstlisting}
+
+\begin{lstlisting}[style=py,firstnumber=297,caption={\texttt{tesifl/strategies/fedavg.py}, lines 297--361}]
+    def aggregate_train(
+        self, server_round: int, replies: list[Message]
+    ) -> tuple[ArrayRecord | None, MetricRecord | None]:
+        # nessuna reply: niente da aggregare, e super() dividerebbe per zero
+        self._last_round_s = float(self._round_overhead_s())
+        if not replies:
+            return None, None
+
+        replies = sorted(
+            replies,
+            key=lambda r: self._node_to_cid.get(int(r.metadata.src_node_id), 1 << 62),
+        )
+
+        durations: dict[int, float] = {}
+        for reply in replies:
+            if not reply.has_content():
+                continue
+            cid = self._node_to_cid[reply.metadata.src_node_id]
+            n_ex = int(self._metric(reply, "num-examples", "num_examples"))
+            dt, b = self._work_done(cid, n_ex, reply)
+            durations[cid] = dt
+            e_tr, l_tr = self.world.apply_round(cid, dt_s=dt, batch_size=b)
+            e_cm, l_cm = self._charge_communication(cid, reply)
+            if n_ex > 0:
+                self._participations[cid] = self._participations.get(cid, 0) + 1
+            self._on_round_result(cid, n_ex, dt, float(e_tr + e_cm),
+                                  float(l_tr + l_cm), reply, server_round)
+
+        # [B] idle DOPO il training: il round dura quanto il selezionato piu'
+        # lento, e ogni client paga la differenza (modello ESCS Sez. 4.2). Chi
+        # non e' stato selezionato paga l'intera durata. L'ordine conta: se
+        # l'idle venisse prima, un client al limite morirebbe di idle invece
+        # che di training e il conteggio cambierebbe.
+        # [B] il ritardo prima del training (messaggi di controllo di
+        # sage_smart) allunga il round: in idle lo pagano tutti tranne i
+        # selezionati, che in quel tempo stanno parlando col server.
+        overhead = float(self._round_overhead_s())
+        self._last_round_s = max(durations.values(), default=0.0) + overhead
+        self._sim_time_s += self._last_round_s
+        self.world.apply_idle({c: d + overhead for c, d in durations.items()})
+        self._dev_soc[int(server_round)] = self.world.soc_vector()
+
+        s = self.world.stats()
+        self._round_stats[int(server_round)] = dict(s)
+        self._round_stats[int(server_round)].update({
+            "round_s": float(self._last_round_s),
+            "sim_time_s": float(self._sim_time_s),
+        })
+        if self.broadcast:
+            # [B] l'energia del broadcast e' gia' dentro energy_ctrl_wh (e
+            # quindi nel totale): qui la si riporta a parte per leggerla
+            self._round_stats[int(server_round)].update({
+                **self._bcast_round,
+                "bcast_overhead_s": float(self._bcast_overhead_s),
+                "energy_bcast_wh": float(self._bcast_energy_wh),
+            })
+        log(INFO, "round %s: %.3f Wh (train %.3f + comm %.3f) | SoC medio %.2f "
+            "| in ricarica %s | falliti %s",
+            server_round, s["total_energy_wh"], s["energy_train_wh"],
+            s["energy_comm_wh"], s["mean_soc"], s["n_recharging"], s["n_failed"])
+
+        replies = self._aggregatable(replies)
+        if not replies:
+            return None, None
+        return super().aggregate_train(server_round, replies)
+\end{lstlisting}
+
+\begin{lstlisting}[style=py,firstnumber=333,caption={\texttt{tesifl/strategies/sage\_smart.py}, lines 333--341}]
+    def configure_train(self, server_round, arrays, config, grid):
+        # la griglia serve alla negoziazione per i messaggi di controllo, che
+        # partono dentro _select_clients prima dei messaggi di training
+        self._grid = grid
+        return super().configure_train(server_round, arrays, config, grid)
+
+    def _round_overhead_s(self) -> float:
+        # negoziazione + broadcast dello stato (solo con noneg, vedi PhysicalFedAvg)
+        return self._overhead_s + super()._round_overhead_s()
+\end{lstlisting}
+
+\newpage
+%======================================================================
+\section{The strategy object}
+\label{sec:init}
+
+The constructor fixes the components that are on (all of them, unless an
+ablation switches them off), the slots, the batch sizes of the envelope, the
+fallback workload $w_{\max}$ and the enrollment workload $\bar{w}$, and creates
+the state that the server keeps for every phone: the last report (SoC,
+workload, charging, time), the known state, $k_i$, the class histograms and
+the last round of contact. Without broadcast (\cf{self.broadcast} false, as set
+by \cf{server\_app} whenever the negotiation is on) the fraction $p_{\mathrm{nr}}$
+of the contacted phones does not answer (\cf{proposal\_nonresp}).
+
+\begin{lstlisting}[style=py,firstnumber=212,caption={\texttt{tesifl/strategies/sage\_smart.py}, lines 212--312}]
+    def __init__(
+        self,
+        *args,
+        stale_weight: float = 0.3,
+        stale_max: int = 25,
+        soc_min: float = 0.20,
+        epochs_cap_mult: int = 2,
+        epochs_min: int = 2,
+        partition_sizes: dict[int, int] | None = None,
+        deadline_mult: float = 1.0,
+        probe_samples: int = 256,
+        max_waves: int = 2,
+        query_timeout_s: float = 600.0,
+        calib_alpha: float = 0.3,
+        batch_min: int = 16,
+        batch_max: int = 64,
+        forecast: bool = True,
+        negotiation: bool = True,
+        partial_work: bool = True,
+        shortlist: float = 1.5,
+        load_tau_s: float = 450.0,
+        **kwargs,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        if shortlist < 1.0:
+            raise ValueError(f"shortlist >= 1, non {shortlist}")
+        self.forecast = bool(forecast)
+        self.negotiation = bool(negotiation)
+        self.partial_work = bool(partial_work)
+        self.shortlist = float(shortlist)
+        self.load_tau_s = float(load_tau_s)
+        # [B] senza broadcast nessuno ha verificato chi e' raggiungibile: la
+        # frazione broadcast_nonresp dei contattati non risponde (proposta o
+        # modello). Il broadcast lo spegne server_app quando c'e' la
+        # negoziazione; resta solo nell'ablazione senza negoziazione (noneg).
+        self.proposal_nonresp = not self.broadcast
+        self.stale_w = float(stale_weight)
+        self.stale_max = int(stale_max)
+        self.soc_min = float(soc_min)
+        if not 1 <= int(batch_min) <= int(batch_max):
+            raise ValueError(f"batch: serve 1 <= min <= max, non {batch_min}, {batch_max}")
+        choices, b = [], int(batch_min)
+        while b <= int(batch_max):
+            choices.append(b)
+            b *= 2
+        self.batch_choices = tuple(choices)
+        self.epochs_cap = int(epochs_cap_mult) * int(self.epochs)
+        self.epochs_min = int(epochs_min)
+        self.deadline_mult = float(deadline_mult)
+        self.probe_samples = int(probe_samples)
+        self.max_waves = max(1, int(max_waves))
+        self.query_timeout_s = float(query_timeout_s)
+        self.calib_alpha = float(calib_alpha)
+        # Round 0: taglia dei dataset. Se manca, la si impara dalle risposte.
+        self._n: dict[int, int] = {int(c): int(n) for c, n in
+                                   (partition_sizes or {}).items()}
+        # ripiego se una risposta non riportasse il workload: il caso peggiore
+        # (segue workload-scale: a x1 e' 0.30)
+        self.w_busy = self.world.workload.max_utilization()
+        # carico assunto all'iscrizione: la media della POPOLAZIONE (vedi la
+        # docstring della classe, round 0)
+        wl = self.world.workload
+        self.w_enroll = (float(np.mean(list(stationary_utilization(wl.scale).values())))
+                         if wl.enabled else 0.0)
+
+        self._last_seen: dict[int, int] = {}       # cid -> ultimo round scelto
+        self._plan: dict[int, Envelope] = {}       # cid -> envelope del round
+
+        # stato che il server tiene per ogni client: l'ultimo REPORT (cosa il
+        # client ha detto e quando) e lo stato NOTO (previsione o report fresco)
+        self._subscribed = False
+        self._deadline_s: float = math.inf
+        self._clock_s = 0.0                        # tempo simulato, inizio round
+        self._soc_rep: dict[int, float] = {}
+        self._t_rep: dict[int, float] = {}
+        self._w_rep: dict[int, float] = {}
+        self._w_sum: dict[int, float] = {}         # workload riportati, per la media
+        self._w_cnt: dict[int, int] = {}
+        self._chg_rep: dict[int, bool] = {}
+        self._soc_known: dict[int, float] = {}
+        self._chg_known: dict[int, bool] = {}
+        self._w_known: dict[int, float] = {}
+        self._k_cal: dict[int, float] = {}
+        self._loss_known: dict[int, float] = {}
+        # per round: vincolo che ha fissato E_hi, risposte dei client e costi
+        # della negoziazione
+        self._bound: dict[int, str] = {}
+        self._reports: dict[int, dict] = {}
+        self._grid = None
+        self._queried: set[int] = set()
+        self._overhead_s = 0.0
+        self._waves = 0
+        self._n_queried = 0
+        self._n_refused = 0
+        self._info_err = float("nan")
+        # rinviati, non raggiunti, attesa del timeout per chi non risponde,
+        # errore sul workload noto (verifica)
+        self._n_deferred = 0
+        self._n_noreply = 0
+        self._extra_wait_s = 0.0
+        self._w_err = float("nan")
+\end{lstlisting}
+
+\begin{lstlisting}[style=py,firstnumber=314,caption={\texttt{tesifl/strategies/sage\_smart.py}, lines 314--320}]
+    @property
+    def _protocol_cols(self) -> bool:
+        """Previsione, negoziazione o niente broadcast: colonne in piu' nel CSV
+        (rinviati, non raggiunti, errore sul workload). Spente solo nei
+        gradini delle cumulate senza stima e senza negoziazione, che cosi'
+        hanno le colonne di prima."""
+        return self.forecast or self.negotiation or self.proposal_nonresp
+\end{lstlisting}
+
+\newpage
+%======================================================================
+\section{Round 0: enrollment}
+\label{sec:enroll}
+
+At the start of round 1, before the first selection, the server registers every
+phone with a first report at time 0: the true initial SoC, workload $\bar{w}$,
+not charging. This report is marked as not measured, so it does not enter the
+mean of the workloads reported by the phone. $k_i = 1$. In the simulator the
+enrollment is not a message: it has no energy or time cost. The static data
+(tier, throughput, training power, capacity, battery model) are read from the
+profile of the phone; $n_i$ comes from \cf{partition\_sizes}, which
+reproduces the partition of the clients.
+
+The deadline is the median, over the phones, of the nominal time of the
+standard work ($E_0 = 5$, $B_0 = 128$, no workload), by
+Equation~\eqref{eq:ttrain}:
+\begin{equation}
+  T = \texttt{deadline\_mult} \cdot \operatorname{median}_{i \in \mathcal{N}}
+      t^{\mathrm{tr}}_i(E_0, n_i, B_0)\big|_{w = 0} .
+\end{equation}
+It stays fixed for the whole run. With seed 2026, $T = 132.39$ s at $\beta =
+0.1$, 130.53 s at $\beta = 0.5$ and 127.87 s at $\beta = 1.0$.
+
+\begin{lstlisting}[style=py,firstnumber=344,caption={\texttt{tesifl/strategies/sage\_smart.py}, lines 344--381}]
+    def _sensor_soc(self, cid: int) -> float:
+        """SoC che il device legge dalla propria batteria."""
+        return float(self.world.snapshot(cid).soc)
+
+    def _subscribe(self) -> None:
+        """Iscrizione: dati statici e SoC iniziale di ogni client."""
+        cids = list(self._node_to_cid.values())
+        for c in cids:
+            # il primo "report" e' l'iscrizione, al tempo 0, col workload medio
+            # della popolazione (non entra nella media dei workload del client:
+            # non e' una lettura vera)
+            self._record(c, self._sensor_soc(c), self.w_enroll, False, 0.0,
+                         measured=False)
+            self._k_cal[c] = 1.0
+        nominal = [
+            training_time_s(self.world.profile(c), int(self.epochs),
+                            self._n[c], int(self.batch_size))
+            for c in cids if self._n.get(c)
+        ]
+        if nominal:
+            self._deadline_s = self.deadline_mult * float(np.median(nominal))
+        self._subscribed = True
+        log(INFO, "%s: %s client iscritti | deadline %.1f s "
+            "(%.2f x mediana nominale, E=%s B=%s) | max %s ondate | batteria %s",
+            self.variant, len(cids), self._deadline_s, self.deadline_mult,
+            self.epochs, self.batch_size, self.max_waves,
+            BATTERY_NAMES[self.world.battery])
+
+    def _record(self, cid: int, soc: float, w: float, chg: bool, t: float,
+                measured: bool = True) -> None:
+        """Un report del client: diventa anche lo stato noto."""
+        if measured:
+            self._w_sum[cid] = self._w_sum.get(cid, 0.0) + float(w)
+            self._w_cnt[cid] = self._w_cnt.get(cid, 0) + 1
+        self._soc_rep[cid], self._w_rep[cid] = float(soc), float(w)
+        self._chg_rep[cid], self._t_rep[cid] = bool(chg), float(t)
+        self._soc_known[cid], self._w_known[cid] = float(soc), float(w)
+        self._chg_known[cid] = bool(chg)
+\end{lstlisting}
+
+\newpage
+%======================================================================
+\section{Step 1: forecast of the state}
+\label{sec:forecast}
+
+At the start of every selection the server computes, for every phone, the SoC
+and the workload it expects now. The server clock $t^{\mathrm{now}}$ is the sum
+of the durations of the previous rounds, which the server knows because it
+waited for the replies. Let $s^{0}_i$, $w^{\mathrm{rep}}_i$, $c_i$ and
+$t^{\mathrm{rep}}_i$ be the SoC, workload, charging flag and time of the last
+report, $\Delta_i = t^{\mathrm{now}} - t^{\mathrm{rep}}_i$, and $\bar{w}_i$ the
+mean of the workloads reported by the phone ($\bar{w}$ if none). If
+$\Delta_i \le 0$ the forecast is the report itself. Otherwise the interval is
+split into $J = \lceil \Delta_i / 300 \rceil$ steps of $\delta = \Delta_i / J$.
+
+The workload relaxes from the last value towards the mean of the phone:
+\begin{equation}
+  w_j = \bar{w}_i + (w^{\mathrm{rep}}_i - \bar{w}_i)\, e^{-(j + 1/2)\,\delta / \tau},
+  \qquad
+  \hat{w}_i = \bar{w}_i + (w^{\mathrm{rep}}_i - \bar{w}_i)\, e^{-\Delta_i / \tau} .
+\end{equation}
+
+The SoC is the expected value over three branches with masses and SoC
+$(m_{\mathrm{d}}, s_{\mathrm{d}})$ discharging, $(m_{\mathrm{c}},
+s_{\mathrm{c}})$ charging, $(m_{\mathrm{f}}, s_{\mathrm{f}})$ charge completed
+and discharging again. Initially $(m_{\mathrm{d}}, m_{\mathrm{c}}) = (1, 0)$
+with $s_{\mathrm{d}} = s^0_i$, or $(0, 1)$ with $s_{\mathrm{c}} = s^0_i$ if the
+phone was charging; $m_{\mathrm{f}} = 0$, $s_{\mathrm{f}} = 1$. At every step
+$j$, in this order:
+\begin{enumerate}
+  \item the mass $\Delta m = m_{\mathrm{d}} \bigl(1 - e^{-\lambda (1 -
+        s_{\mathrm{d}}) \delta / 3600}\bigr)$ moves from discharging to
+        charging (the hourly plug-in model of the users, the same as
+        Equation~\eqref{eq:plug}):
+        $s_{\mathrm{c}} \leftarrow \frac{m_{\mathrm{c}} s_{\mathrm{c}} + \Delta m \, s_{\mathrm{d}}}{m_{\mathrm{c}} + \Delta m}$,
+        $m_{\mathrm{c}} \leftarrow m_{\mathrm{c}} + \Delta m$,
+        $m_{\mathrm{d}} \leftarrow m_{\mathrm{d}} - \Delta m$;
+  \item the discharging branch pays the idle:
+        $s_{\mathrm{d}} \leftarrow \max\bigl(0, s_{\mathrm{d}} + \Delta s(P^{\mathrm{idle}}(w_j), \delta, s_{\mathrm{d}})\bigr)$,
+        with the battery of the phone; the same for $s_{\mathrm{f}}$ if
+        $m_{\mathrm{f}} > 10^{-9}$;
+  \item the charging branch gains $\gamma \delta / 3600$ (at most 1); when it
+        reaches 1 its mass moves to the completed branch:
+        $s_{\mathrm{f}} \leftarrow \frac{m_{\mathrm{f}} s_{\mathrm{f}} + m_{\mathrm{c}}}{m_{\mathrm{f}} + m_{\mathrm{c}}}$,
+        $m_{\mathrm{f}} \leftarrow m_{\mathrm{f}} + m_{\mathrm{c}}$, $m_{\mathrm{c}} \leftarrow 0$.
+\end{enumerate}
+Finally $\hat{s}_i = \min\bigl(1, \max(0, m_{\mathrm{d}} s_{\mathrm{d}} +
+m_{\mathrm{c}} s_{\mathrm{c}} + m_{\mathrm{f}} s_{\mathrm{f}})\bigr)$.
+$\hat{s}_i$ is used for the ranking and for the energy limit of the envelope;
+$\hat{w}_i$ is used for the deadline limit of the envelopes of the proposals.
+The charging flag known to the server is the one of the last report.
+
+Two columns of the CSV measure the error, without entering any decision:
+\cf{smart\_info\_err}, the mean of $|\hat{s}_i - s_i|$ over $\mathcal{A}_r$, and
+\cf{smart\_w\_err}, the mean of $|\hat{w}_i - w_i|$. With the ablation
+\cf{noest} the known state is the last report as it is.
+
+\begin{lstlisting}[style=py,firstnumber=25,caption={\texttt{tesifl/strategies/sage\_smart.py}, lines 25--27}]
+# passo massimo con cui il server integra la previsione (passo 1): il mondo
+# scarica l'idle una volta per round, e un round dura 100-300 s
+_ESTIMATE_STEP_S = 300.0
+\end{lstlisting}
+
+\begin{lstlisting}[style=py,firstnumber=383,caption={\texttt{tesifl/strategies/sage\_smart.py}, lines 383--464}]
+    def _forecast(self, cid: int) -> tuple[float, float]:
+        """Passo 1: SoC e workload ATTESI adesso.
+
+            w(t)   = w_med + (w_rep - w_med) * exp(-(t - t_rep) / tau)
+            SoC(t) = valore atteso su tre rami, a passi di _ESTIMATE_STEP_S:
+                     in scarica (idle con w(t)), in carica (C-rate fino al
+                     100%), carica finita e di nuovo in scarica.
+
+        w_med e' la media dei workload riportati dal client (prima del primo
+        report, quella della popolazione). Dal ramo in scarica passa in carica,
+        a ogni passo, la frazione p = 1 - exp(-lambda (1 - SoC) dt): e' il
+        modello orario degli utenti (Ferreira 2011), un dato di POPOLAZIONE
+        che il server conosce come conosce la batteria del device. Un client
+        in carica all'ultimo report resta in carica fino al 100%. L'idle e'
+        integrato a passi di al piu' _ESTIMATE_STEP_S, come lo scarica il mondo
+        round per round: con la batteria da datasheet il calo dipende dal SoC.
+
+        [B] PERCHE'. Una stima che scarica sempre e non ricarica mai fa
+        scendere in classifica un client non contattato da ore anche se nel
+        frattempo, in media, ha ricaricato (+2 punti l'ora a SoC 0.6). E un
+        workload fermo all'ultimo valore sbaglia: dopo 5 round lo stato e' lo
+        stesso solo nel 51% dei casi.
+        """
+        soc0 = float(self._soc_rep[cid])
+        dt = max(0.0, self._clock_s - self._t_rep.get(cid, 0.0))
+        w_rep = float(self._w_rep.get(cid, self.w_enroll))
+        w_med = (self._w_sum[cid] / self._w_cnt[cid]) if self._w_cnt.get(cid) else self.w_enroll
+        if dt <= 0.0:
+            return soc0, w_rep
+        prof = self.world.profile(cid)
+        bat = self.world.battery
+        recharge = bool(getattr(self.world, "_recharge_enabled", False))
+        n = max(1, math.ceil(dt / _ESTIMATE_STEP_S))
+        h = dt / n
+        # masse e SoC dei tre rami: scarica (d), in carica (c), carica finita (f)
+        if self._chg_rep.get(cid, False):
+            m_d, s_d, m_c, s_c = 0.0, soc0, 1.0, soc0
+        else:
+            m_d, s_d, m_c, s_c = 1.0, soc0, 0.0, soc0
+        m_f, s_f = 0.0, 1.0
+        for i in range(n):
+            w = w_med + (w_rep - w_med) * math.exp(-(i + 0.5) * h / self.load_tau_s)
+            p_idle = idle_power_w(prof, w)
+            if recharge and m_d > 0.0:
+                moved = m_d * (1.0 - math.exp(-RECHARGE_RATE_PER_H * (1.0 - s_d) * h / 3600.0))
+                if moved > 0.0:
+                    s_c = (m_c * s_c + moved * s_d) / (m_c + moved)
+                    m_c, m_d = m_c + moved, m_d - moved
+            if m_d > 0.0:
+                s_d = max(0.0, s_d + battery_delta_soc(bat, p_idle, h, prof, s_d))
+            if m_f > 1e-9:
+                s_f = max(0.0, s_f + battery_delta_soc(bat, p_idle, h, prof, s_f))
+            if m_c > 0.0:
+                s_c = min(1.0, s_c + CHARGE_C_RATE * h / 3600.0)
+                if s_c >= 1.0:
+                    s_f = (m_f * s_f + m_c) / (m_f + m_c)
+                    m_f, m_c = m_f + m_c, 0.0
+        soc = m_d * s_d + m_c * s_c + m_f * s_f
+        w_now = w_med + (w_rep - w_med) * math.exp(-dt / self.load_tau_s)
+        return float(min(1.0, max(0.0, soc))), float(w_now)
+
+    def _refresh_state(self, available: list[int]) -> None:
+        """Passo 1: lo stato con cui il server ordina i client."""
+        for c in self._node_to_cid.values():
+            if self.forecast:
+                self._soc_known[c], self._w_known[c] = self._forecast(c)
+            else:
+                # ablazione noest: l'ultimo report cosi' com'e', anche se
+                # vecchio di molti round
+                self._soc_known[c] = self._soc_rep[c]
+                self._w_known[c] = self._w_rep[c]
+            self._chg_known[c] = self._chg_rep[c]
+        # [B] verifica, non input: quanto lo stato noto si discosta da quello
+        # che il device leggerebbe adesso, sul pool selezionabile
+        pool = [self._node_to_cid[n] for n in available]
+        if pool:
+            self._info_err = float(np.mean(
+                [abs(self._soc_known[c] - self._sensor_soc(c)) for c in pool]))
+            if self._protocol_cols:
+                self._w_err = float(np.mean(
+                    [abs(self._w_known[c] - self.world.workload.utilization(c))
+                     for c in pool]))
+\end{lstlisting}
+
+\newpage
+%======================================================================
+\section{Step 2: ranking}
+\label{sec:ranking}
+
+Every phone of $\mathcal{A}_r$ receives the score
+\begin{equation}
+  \sigma_i = a \, \hat{s}_i + b \, D_i + c \, \theta_i ,
+  \qquad
+  \theta_i = \min\Bigl(1, \frac{r - \ell_i}{\Theta}\Bigr) ,
+\end{equation}
+where $\ell_i$ is the last round in which phone $i$ was selected or refused a
+proposal, and $\ell_i = 0$ if neither ever happened. The workload does not
+enter the ranking.
+
+The divergence comes from the class histograms that the phones report after
+every training (counts over all their training samples). With $\pi_i$ the
+normalized histogram, the Jensen-Shannon divergence in base 2, with additive
+smoothing $\varepsilon = 10^{-9}$, is
+\begin{equation}
+  \tilde{\pi} = \frac{\pi + \varepsilon}{\sum (\pi + \varepsilon)}, \quad
+  \bar{\pi} = \tfrac{1}{2}(\tilde{\pi}_i + \tilde{\pi}_j), \quad
+  \mathrm{JS}(\pi_i, \pi_j) = \tfrac{1}{2}\mathrm{KL}_2(\tilde{\pi}_i \| \bar{\pi})
+                            + \tfrac{1}{2}\mathrm{KL}_2(\tilde{\pi}_j \| \bar{\pi}) ,
+\end{equation}
+and $D_i = \frac{1}{H - 1} \sum_{j \ne i} \mathrm{JS}(\pi_i, \pi_j)$ over the $H$
+phones with a known histogram ($D_i = 0$ for all if $H < 2$). When a histogram arrives, $D$ is recomputed for
+all of them. A phone without a histogram gets the mean of the known $D_j$, or 0
+if there is none, as for every phone at round 1.
+
+\begin{lstlisting}[style=py,firstnumber=13,caption={\texttt{tesifl/strategies/sage.py}, lines 13--19}]
+def _js(p: np.ndarray, q: np.ndarray) -> float:
+    """Jensen-Shannon in base 2, con smoothing additivo come nel paper."""
+    eps = 1e-9
+    p, q = (p + eps) / (p + eps).sum(), (q + eps) / (q + eps).sum()
+    m = 0.5 * (p + q)
+    kl = lambda a, b: float(np.sum(a * (np.log(a) - np.log(b))) / np.log(2.0))
+    return 0.5 * kl(p, m) + 0.5 * kl(q, m)
+\end{lstlisting}
+
+\begin{lstlisting}[style=py,firstnumber=40,caption={\texttt{tesifl/strategies/sage\_ablation.py}, lines 40--67}]
+    def __init__(
+        self,
+        *args,
+        sage_a: float = 0.5,
+        sage_b: float = 0.5,
+        sage_k: int = 2,
+        half_epochs_threshold: float = 0.3,
+        max_fraction: float = 0.2,   # k_per_round / N
+        class_distributions: dict[int, np.ndarray] | None = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.a, self.b = float(sage_a), float(sage_b)
+        if abs(self.a + self.b - 1.0) > 1e-9:
+            raise ValueError("a + b = 1")
+        self.k = int(sage_k)
+        self.half_th = float(half_epochs_threshold)
+        self.max_frac = float(max_fraction)
+
+        self._dist: dict[int, np.ndarray] = {}   # cid -> distribuzione classi
+        self._div: dict[int, float] = {}         # cid -> JSD media
+        self._half: set[int] = set()
+
+        if class_distributions:
+            for cid, d in class_distributions.items():
+                arr = np.asarray(d, dtype=float)
+                self._dist[int(cid)] = arr / arr.sum()
+            self._recompute_div()
+\end{lstlisting}
+
+\begin{lstlisting}[style=py,firstnumber=74,caption={\texttt{tesifl/strategies/sage\_ablation.py}, lines 74--77}]
+    def _divergence(self, cid: int) -> float:
+        if cid in self._div:
+            return self._div[cid]
+        return float(np.mean(list(self._div.values()))) if self._div else 0.0
+\end{lstlisting}
+
+\begin{lstlisting}[style=py,firstnumber=140,caption={\texttt{tesifl/strategies/sage\_ablation.py}, lines 140--164}]
+    def _on_round_result(
+        self, cid: int, n_ex: int, dt_s: float, e_wh: float, e_lin_wh: float,
+        reply: Message, server_round: int,
+    ) -> None:
+        # nessuna contabilita' energetica locale: il SoC lo tiene il world state
+        dist = self._metric(reply, "class-dist", default=None)
+        if dist is None:
+            return
+        arr = np.asarray(list(dist), dtype=float)
+        if arr.sum() <= 0:
+            return
+        self._dist[cid] = arr / arr.sum()
+        self._recompute_div()
+
+    def _recompute_div(self) -> None:
+        cids = sorted(self._dist)
+        n = len(cids)
+        if n < 2:
+            self._div = {c: 0.0 for c in cids}
+            return
+        mat = np.zeros((n, n))
+        for i in range(n):
+            for j in range(i + 1, n):
+                mat[i, j] = mat[j, i] = _js(self._dist[cids[i]], self._dist[cids[j]])
+        self._div = {c: float(mat[i].sum() / (n - 1)) for i, c in enumerate(cids)}
+\end{lstlisting}
+
+\begin{lstlisting}[style=py,firstnumber=527,caption={\texttt{tesifl/strategies/sage\_smart.py}, lines 527--550}]
+    def _resource(self, cid: int) -> float:
+        """SoC usato nello score: quello NOTO al server, non quello vero."""
+        return self._soc_known.get(cid, float(self.world.initial_soc(cid)))
+
+    def _n_of(self, cid: int) -> int | None:
+        if cid in self._n:
+            return self._n[cid]
+        return int(np.median(list(self._n.values()))) if self._n else None
+
+    def _batch_for(self, cid: int) -> int:
+        """B preferito: il piu' piccolo dell'envelope (passo 6 nella docstring
+        della classe). Il B effettivo lo sceglie il client e lo dichiara."""
+        return int(self.batch_choices[0])
+
+    def _staleness(self, cid: int, server_round: int) -> float:
+        """Round dall'ultima selezione, normalizzati su stale_max.
+
+        Chi non e' mai stato scelto conta come scelto al round 0: la sua
+        anzianita' cresce dal primo round come quella degli altri, e lo porta
+        in classifica invece di escluderlo per sempre.
+        """
+        last = self._last_seen.get(cid)
+        age = server_round if last is None else server_round - last
+        return float(min(1.0, age / max(1, self.stale_max)))
+\end{lstlisting}
+
+\newpage
+%======================================================================
+\section{Step 3: number of slots}
+\label{sec:slots}
+
+The server solves
+\begin{equation}
+  \max_{y \in \{0,1\}^{m_r}} \sum_{i \in \mathcal{A}_r} y_i \, \sigma_i
+  \quad \text{s.t.} \quad
+  k \le \sum_i y_i \le h_r = \min\bigl(k + r - 1, \lfloor 0.2 \max(m_r, n^{\mathrm{alive}}_r) \rfloor, m_r\bigr)
+\end{equation}
+with PuLP and the CBC solver, $k = 2$. Without broadcast $n^{\mathrm{alive}}_r =
+m_r$. The scores are strictly positive (the staleness term is at least
+$c / \Theta$, because $\ell_i < r$), so the solution takes exactly $h_r$ phones, the first $h_r$
+by score: 2 slots at round 1, 3 at round 2, 20 from round 19 while at least
+100 phones are alive (19 with 95 to 99 alive, and so on). Only the number of
+slots is used afterwards. If the problem is infeasible ($m_r < k$) the run
+ends. The phones are then sorted by decreasing $\sigma_i$ (ties keep the order
+of the phone index) and the proposals follow this ranking.
+
+The argument \cf{k} of \cf{\_select\_clients}, $\min(20, m_r)$, is only checked
+to be non-zero; the slots are $h_r$.
+
+\begin{lstlisting}[style=py,firstnumber=553,caption={\texttt{tesifl/strategies/sage\_smart.py}, lines 553--643}]
+    def _select_clients(
+        self, available: list[int], k: int, server_round: int
+    ) -> list[int]:
+        if not self._subscribed:
+            self._subscribe()
+        self._reports = {}
+        self._bound = {}
+        self._queried = set()
+        self._overhead_s = 0.0
+        self._waves = 0
+        self._n_queried = 0
+        self._n_refused = 0
+        self._n_deferred = 0
+        self._n_noreply = 0
+        self._extra_wait_s = 0.0
+        if not k or not available:
+            log(INFO, "%s round %s: pool vuoto", self.variant, server_round)
+            return []
+        self._refresh_state(available)
+        cid_of = self._node_to_cid
+        pool = available
+        m = len(pool)
+        # tetto sui VIVI, non sui soli raggiunti dal broadcast (vedi
+        # PhysicalSAGEAblation._select_clients)
+        hi = min(self.k + server_round - 1,
+                 int(np.floor(self.max_frac * max(m, self._n_alive))), m)
+        lo = self.k
+
+        score = {
+            n: self.a * self._resource(cid_of[n])
+            + self.b * self._divergence(cid_of[n])
+            + self.stale_w * self._staleness(cid_of[n], server_round)
+            for n in pool
+        }
+
+        prob = pulp.LpProblem("SAGE_Smart_Select", pulp.LpMaximize)
+        y = [pulp.LpVariable(f"y_{i}", cat="Binary") for i in range(m)]
+        prob += pulp.lpSum(y[i] * score[pool[i]] for i in range(m))
+        prob += pulp.lpSum(y) >= lo
+        prob += pulp.lpSum(y) <= hi
+        prob.solve(pulp.PULP_CBC_CMD(msg=0))
+
+        selected = [pool[i] for i in range(m) if int(pulp.value(y[i]) or 0) == 1]
+        if not selected:
+            self._charge_control([])
+            log(INFO, "%s round %s: ILP infeasible con pool %s (lo=%s, hi=%s): "
+                "pool esaurito", self.variant, server_round, m, lo, hi)
+            return []
+
+        # [B] l'ILP con soli vincoli di cardinalita' sceglie i top per score:
+        # le proposte scorrono la stessa classifica
+        ranking = sorted(pool, key=lambda n: -score[n])
+        if self.negotiation:
+            selected = self._negotiate_pick(ranking, len(selected), server_round)
+        else:
+            # ablazione noneg: i primi della classifica senza chiedere, nessun
+            # rimpiazzo e nessuno scambio di controllo (waves = 0, overhead 0)
+            selected = ranking[:len(selected)]
+            if self.proposal_nonresp:
+                # [B] senza broadcast e senza proposte: chi non e'
+                # raggiungibile non riceve il modello e il suo posto resta
+                # vuoto (il round dura comunque fino alla deadline)
+                lost = {n for n in selected
+                        if self._bcast_rng.random() < self.bcast_nonresp}
+                self._n_noreply += len(lost)
+                selected = [n for n in selected if n not in lost]
+        if not selected:
+            self._charge_control([])
+            log(INFO, "%s round %s: nessun candidato ha accettato in %s "
+                "ondate: pool esaurito", self.variant, server_round,
+                self._waves)
+            return []
+
+        self._charge_control(selected)
+        self._overhead_s = self._waves * ctrl_latency_s() + self._extra_wait_s
+        for n in selected:
+            self._last_seen[cid_of[n]] = server_round
+        # envelope con lo stato appena riportato dai client che hanno accettato
+        self._plan = {cid_of[n]: self._assign_work(cid_of[n]) for n in selected}
+
+        E = [env.e_hi for env in self._plan.values()]
+        never = sum(1 for c in cid_of.values() if c not in self._last_seen)
+        log(INFO, "%s round %s: pool %s, %s selezionati (cap %s) | "
+            "E_hi %s-%s (medio %.1f) | mai visti %s | interrogati %s, "
+            "rifiuti %s, ondate %s%s",
+            self.variant, server_round, m, len(selected), hi, min(E), max(E),
+            float(np.mean(E)), never, self._n_queried, self._n_refused,
+            self._waves,
+            (f" | rinviati {self._n_deferred}, non raggiunti {self._n_noreply}, "
+             f"errore w {self._w_err:.3f}") if self._protocol_cols else "")
+        return selected
+\end{lstlisting}
+
+\newpage
+%======================================================================
+\section{Step 4: proposals (negotiation)}
+\label{sec:proposals}
+
+The server does not send the model to the first $h_r$ phones of the ranking.
+It sends a proposal, the envelope of Section~\ref{sec:envelope} without the
+model, as a Flower \cf{QUERY} message.
+\begin{enumerate}
+  \item Wave 1 goes to the first $\lceil \kappa h_r \rceil$ phones of the
+        ranking (30 when $h_r = 20$). Their envelopes are computed with the
+        forecast state.
+  \item Every proposed phone is unreachable with probability $p_{\mathrm{nr}} =
+        0.10$ (own random generator, seed of the run + 104729). It receives
+        nothing, pays nothing, does not answer and does not count as
+        contacted. If at least one phone of the wave is unreachable, the wave
+        waits $t_{\mathrm{to}} - t_{\mathrm{ctrl}} = 0.665$ s more than
+        $t_{\mathrm{ctrl}}$.
+  \item A phone that answers sends its current SoC, workload and charging
+        flag, which become its last report (time $t^{\mathrm{now}}$) and its
+        known state, and accepts or refuses. It refuses only for energy: it
+        accepts if it is charging, or if for at least one $B \in \mathcal{B}$
+        the work $E_{\mathrm{lo}} = 2$ epochs plus the probe of 256 samples,
+        followed by the model upload, leaves its predicted SoC at or above
+        $s_{\min}$ (Equations~\eqref{eq:ttrain} and \eqref{eq:predict}, with its
+        current workload).
+  \item A refusal sets $\ell_i = r$: the staleness of the phone restarts from
+        zero.
+  \item If the accepted phones are fewer than $h_r$, wave 2 goes to the next
+        $\lceil \kappa (h_r - \text{accepted}) \rceil$ phones of the ranking
+        not yet asked. There are at most $W = 2$ waves. If after them the
+        accepted phones are still fewer than $h_r$, the round goes on with
+        fewer phones; if none accepted, the pool is exhausted and the run
+        ends.
+\end{enumerate}
+
+The energy of the control messages is charged after the fresh choice: a phone
+that is selected pays $1.97 \cdot 10^{-3}$ J (the exchange shares the radio
+session of the model download), every other phone that answered pays 2.138 J.
+The control overhead of the round, which delays the training of the selected
+phones and is paid as idle by all the others, is
+\begin{equation}
+  t^{\mathrm{ovh}}_r = (\text{waves}) \cdot t_{\mathrm{ctrl}}
+                     + (\text{waves with an unreachable phone}) \cdot (t_{\mathrm{to}} - t_{\mathrm{ctrl}}) .
+\end{equation}
+
+\begin{lstlisting}[style=py,firstnumber=658,caption={\texttt{tesifl/strategies/sage\_smart.py}, lines 658--697}]
+    def _negotiate_pick(self, ranking: list[int], slots: int,
+                        server_round: int) -> list[int]:
+        """Passi 4-5: rosa piu' larga dei posti, scelta sullo stato fresco.
+
+        Ondata 1: proposte ai primi ceil(shortlist * slots) della classifica.
+        Chi accetta entra nella rosa; chi rifiuta (solo per energia) perde
+        l'anzianita'; chi non risponde non e' raggiungibile e non conta come
+        contatto. Se i posti non sono coperti, ondata 2 coi successivi, ancora
+        shortlist volte quelli che mancano. Poi il server sceglie i `slots`
+        migliori per _fresh_score: gli altri della rosa sono RINVIATI, tengono
+        l'anzianita' e restano in cima al round dopo.
+        """
+        cid_of = self._node_to_cid
+        accepted: list[int] = []
+        asked: set[int] = set()
+        need = slots
+        while need > 0 and self._waves < self.max_waves:
+            batch = [n for n in ranking if n not in asked][: int(math.ceil(self.shortlist * need))]
+            if not batch:
+                break
+            self._waves += 1
+            asked.update(batch)
+            envs = {cid_of[n]: self._assign_work(cid_of[n]) for n in batch}
+            replies = self._propose(batch, envs)
+            for n in batch:
+                r = replies.get(n)
+                if r is None:
+                    continue
+                if int(self._rep(r, "smart-accept", 0)) == 1:
+                    accepted.append(n)
+                else:
+                    self._n_refused += 1
+                    # [B] contattato: l'anzianita' riparte da zero, cosi' non
+                    # torna in testa alla classifica al round successivo
+                    self._last_seen[cid_of[n]] = server_round
+            need = slots - len(accepted)
+        picked = sorted(accepted,
+                        key=lambda n: -self._fresh_score(cid_of[n], server_round))[:slots]
+        self._n_deferred = len(accepted) - len(picked)
+        return picked
+\end{lstlisting}
+
+\begin{lstlisting}[style=py,firstnumber=466,caption={\texttt{tesifl/strategies/sage\_smart.py}, lines 466--510}]
+    def _propose(self, nodes: list[int],
+                 envs: dict[int, Envelope]) -> dict[int, Message]:
+        """Passo 4: proposte (MessageType.QUERY) e lettura delle risposte.
+
+        Le risposte aggiornano subito lo stato noto. Il costo energetico NON
+        si addebita qui: dipende da chi verra' selezionato (sessione radio
+        condivisa col download del modello o no), vedi _charge_control.
+        """
+        if self.proposal_nonresp:
+            # [B] senza broadcast nessuno ha verificato prima chi e'
+            # raggiungibile. La frazione broadcast_nonresp non riceve la
+            # proposta (fuori copertura, spento): non paga nulla, non risponde,
+            # e l'ondata si chiude al timeout.
+            lost = {n for n in nodes if self._bcast_rng.random() < self.bcast_nonresp}
+            if lost:
+                self._n_noreply += len(lost)
+                self._extra_wait_s += max(0.0, self.bcast_timeout_s - ctrl_latency_s())
+                nodes = [n for n in nodes if n not in lost]
+        msgs: list[Message] = []
+        for n in nodes:
+            cid = self._node_to_cid[n]
+            cfg = ConfigRecord({"cid": int(cid)})
+            for key, val in envs[cid].to_config().items():
+                cfg[key] = val
+            rec = RecordDict({self.configrecord_key: cfg,
+                              "device": self._device_record(cid)})
+            msgs.extend(self._construct_messages(rec, [int(n)], MessageType.QUERY))
+        self._queried.update(nodes)
+        self._n_queried += len(nodes)
+        if self._grid is None or not msgs:
+            return {}
+        out: dict[int, Message] = {}
+        for r in self._grid.send_and_receive(msgs, timeout=self.query_timeout_s):
+            if not r.has_content():
+                continue
+            n = int(r.metadata.src_node_id)
+            cid = self._node_to_cid.get(n)
+            if cid is None:
+                continue
+            self._record(cid, float(self._rep(r, "smart-soc", self._soc_known[cid])),
+                         float(self._rep(r, "smart-workload", self.w_busy)),
+                         bool(int(self._rep(r, "smart-charging", 0))),
+                         self._clock_s)
+            out[n] = r
+        return out
+\end{lstlisting}
+
+\begin{lstlisting}[style=py,firstnumber=512,caption={\texttt{tesifl/strategies/sage\_smart.py}, lines 512--525}]
+    def _charge_control(self, selected: list[int]) -> None:
+        """Addebita al mondo gli scambi della negoziazione del round.
+
+        Chi e' stato selezionato riceve subito dopo il modello: lo scambio
+        cade nella stessa sessione radio (merged). Chi non lo e' paga una
+        sessione intera.
+        """
+        sel = set(selected)
+        for n in self._queried:
+            # [B] col broadcast attivo ogni candidato ha appena risposto alla
+            # richiesta di stato: la sessione radio e' gia' aperta e la
+            # proposta paga il solo payload, anche se viene rifiutata
+            self.world.apply_control(self._node_to_cid[n],
+                                     merged=(n in sel) or self.broadcast)
+\end{lstlisting}
+
+The phone answers with the handler \cf{query} of the client. Its reading is the
+one attached by the server, taken before \cf{begin\_round}; the probe size in
+the check is the one of the envelope (256), not capped by $n_i$ as it is at
+training time.
+
+\begin{lstlisting}[style=py,firstnumber=279,caption={\texttt{tesifl/tesiFL/client\_app.py}, lines 279--305}]
+@app.query()
+def query(msg: Message, context: Context):
+    """Proposta di lavoro di sage_smart, prima del training (Fase 2b).
+
+    Il server propone un envelope di (E, B): il client accetta se riesce a
+    fare almeno il minimo senza intaccare la riserva, altrimenti rifiuta, e
+    il server chiama un altro client al suo posto. La risposta porta anche
+    SoC, workload e stato di carica letti adesso: il server li usa al posto
+    della propria stima.
+
+    Niente modello, niente dati: e' un messaggio di pochi byte. Il costo
+    energetico (una sessione radio) lo addebita il mondo fisico.
+    """
+    cfg = msg.content["config"]
+    dev = msg.content[DEVICE_KEY]
+    reading = DeviceReading.from_record(dev)
+    # [B] la taglia del dataset il client la conosce; nel simulatore arriva
+    # nel record del device per non caricare i dati in una query
+    n = int(dev["dataset-size"])
+    metrics = {
+        "smart-soc": float(reading.soc),
+        "smart-workload": float(reading.workload),
+        "smart-charging": int(reading.charging),
+        "smart-accept": int(accepts_proposal(reading, Envelope.from_config(cfg), n)),
+    }
+    content = RecordDict({"metrics": MetricRecord(metrics)})
+    return Message(content=content, reply_to=msg)
+\end{lstlisting}
+
+\begin{lstlisting}[style=py,firstnumber=128,caption={\texttt{tesifl/tesiFL/client\_policy.py}, lines 128--170}]
+def statistical_utility(loss: float, n_classes: int = 10) -> float:
+    if not math.isfinite(loss):
+        return 1.0
+    return float(min(1.0, max(0.0, loss / math.log(n_classes))))
+
+
+def headroom(reading: DeviceReading, soc_min: float) -> float:
+    if reading.charging:
+        return 1.0
+    return float(min(1.0, max(0.0, (reading.soc - soc_min) / max(1e-9, 1.0 - soc_min))))
+
+
+def _energy_ok(reading: DeviceReading, soc_end: float, soc_min: float) -> bool:
+    return reading.charging or soc_end >= soc_min
+
+
+def can_afford_minimum(reading: DeviceReading, env: Envelope, n_samples: int) -> bool:
+    """Il round minimo (E_lo, batch migliore, stima della loss inclusa) lascia
+    la riserva intatta? Si verifica PRIMA della stima della loss: se la
+    risposta e' no, non vale la pena spendere nemmeno quella."""
+    if reading.charging:
+        return True
+    for b in env.batches:
+        _, soc_end = reading.predict(env.e_lo, b, n_samples, env.probe_samples)
+        if soc_end >= env.soc_min:
+            return True
+    return False
+
+
+def accepts_proposal(reading: DeviceReading, env: Envelope, n_samples: int) -> bool:
+    """Controllo di accettazione della proposta (passo 4 di sage_smart).
+
+    Il client accetta se riesce a fare almeno il lavoro minimo dell'envelope
+    senza intaccare la riserva, con lo stato di ADESSO; in carica accetta
+    sempre. E' lo stesso controllo che fara' di nuovo al momento del
+    training: qui serve a rifiutare PRIMA di scaricare il modello, cosi' il
+    server puo' chiamare un altro client nello stesso round.
+
+    [B] rifiuta SOLO per energia. Chi non sta nella deadline accetta e fa i
+    passi che ci stanno (lavoro parziale, vedi decide): il rifiuto per
+    deadline (05-06/11) escludeva i telefoni lenti con molti dati.
+    """
+    return can_afford_minimum(reading, env, n_samples)
+\end{lstlisting}
+
+\newpage
+%======================================================================
+\section{Step 5: fresh choice}
+\label{sec:fresh}
+
+Among the phones that accepted, the server keeps the $h_r$ with the highest
+fresh score, computed with the state they have just sent:
+\begin{equation}
+  \phi_i = \bigl(a \, s'_i + b \, D_i + c \, \theta_i\bigr) \, (1 - w'_i),
+  \qquad s'_i = \begin{cases} 1 & \text{if charging} \\ \text{reported SoC} & \text{otherwise} \end{cases}
+\end{equation}
+with $w'_i$ the reported workload. A charging phone counts as full because its
+training does not touch the battery; a busy phone counts less because within
+the deadline it would do fewer steps. The other phones that accepted are
+deferred: $\ell_i$ does not change, so they keep their staleness, and their
+known state is the fresh report. The selected phones get $\ell_i = r$, then
+their envelopes are recomputed with the fresh state (Section~\ref{sec:envelope}).
+
+\begin{lstlisting}[style=py,firstnumber=645,caption={\texttt{tesifl/strategies/sage\_smart.py}, lines 645--656}]
+    def _fresh_score(self, cid: int, server_round: int) -> float:
+        """Passo 5: lo score con lo stato APPENA riportato dal client.
+
+        Stessa forma della classifica, ma con SoC, carica e workload della
+        risposta alla proposta: un telefono in carica conta come pieno (la
+        batteria non paga), e il punteggio e' pesato per 1 - w, il lavoro
+        utile che puo' fare adesso.
+        """
+        soc = 1.0 if self._chg_rep.get(cid, False) else float(self._soc_rep[cid])
+        base = (self.a * soc + self.b * self._divergence(cid)
+                + self.stale_w * self._staleness(cid, server_round))
+        return base * (1.0 - float(self._w_rep.get(cid, self.w_enroll)))
+\end{lstlisting}
+
+\newpage
+%======================================================================
+\section{Step 6: envelope}
+\label{sec:envelope}
+
+For phone $i$, with throughput reduced by the known workload $\hat{w}_i$
+(forecast for the proposals, fresh report for the selected phones):
+\begin{align}
+  E^{\mathrm{dl}}_i &= \Bigl\lfloor \frac{T}{\min_{B \in \mathcal{B}} t^{\mathrm{tr}}_i(1, n_i, B)} \Bigr\rfloor ,\\
+  d^{\mathrm{ep}}_i &= k_i \, \frac{(P^{\mathrm{tr}}_i / \eta) \, t^{\mathrm{tr}}_i(1, n_i, 16) / 3600}{V_0 Q_i}, \qquad
+  d^{\mathrm{up}}_i = k_i \, \frac{(P^{\mathrm{comm}} / \eta) \, t^{\mathrm{comm}} / 3600}{V_0 Q_i} ,\\
+  E^{\mathrm{en}}_i &= \Bigl\lfloor \frac{\hat{s}_i - s_{\min} - d^{\mathrm{up}}_i}{d^{\mathrm{ep}}_i} \Bigr\rfloor
+      \quad (E^{\mathrm{en}}_i = E_{\mathrm{cap}} \text{ if the phone is charging}) ,\\
+  E_{\mathrm{hi},i} &= \min\bigl(E_{\mathrm{cap}}, \max(E_{\mathrm{lo}}, \min(E_{\mathrm{cap}}, E^{\mathrm{dl}}_i, E^{\mathrm{en}}_i))\bigr) .
+\end{align}
+The energy limit is linear (Ideal battery) corrected by $k_i$, at the most
+expensive batch per epoch (16); the deadline limit uses the fastest batch. If
+$n_i$ is unknown the median of the known sizes is used. With $n = 400$ and
+$w = \bar{w}$, $E^{\mathrm{dl}} = 2$, 4 and 5 for the three tiers, while
+$E^{\mathrm{en}}$ is above 200 at SoC 0.75 (one epoch costs 0.19--0.26 points of
+SoC, the model exchange 0.27--0.28): in practice the deadline limits $E_{\mathrm{hi}}$.
+The CSV records which limit was active (\cf{cap}, \cf{deadline},
+\cf{energy}).
+
+The envelope contains $E_{\mathrm{lo}} = 2$, $E_{\mathrm{hi},i}$, $\mathcal{B}
+= (16, 32, 64, 128)$, $T$, $s_{\min} = 0.20$, 256 probe samples and the flag of
+the partial work. The training message also carries \cf{epochs}
+$= E_{\mathrm{hi},i}$ and \cf{batch-size} $= 16$, which the client does not use
+to train, and the sensor record of the phone, read by the world after
+\cf{begin\_round}.
+
+\begin{lstlisting}[style=py,firstnumber=705,caption={\texttt{tesifl/strategies/sage\_smart.py}, lines 705--774}]
+    def _batches_for(self, cid: int) -> tuple[int, ...]:
+        """Taglie di batch dell'envelope, dalla piu' piccola (preferita)."""
+        return self.batch_choices
+
+    def _assign_work(self, cid: int) -> Envelope:
+        prof = self.world.profile(cid)          # statico: dal round 0
+        batches = self._batches_for(cid)
+        b_ref = self._batch_for(cid)
+        peff = effective_profile(prof, self._w_known.get(cid, self.w_enroll))
+        e_lo, e_cap = int(self.epochs_min), int(self.epochs_cap)
+        n = self._n_of(cid)
+
+        # vincolo di deadline: col batch piu' veloce dell'envelope
+        e_dl = e_cap
+        if n and math.isfinite(self._deadline_s):
+            t_ep = min(training_time_s(peff, 1, n, b) for b in batches)
+            e_dl = int(self._deadline_s // max(t_ep, 1e-9))
+
+        # vincolo di energia: stima lineare corretta da k_i
+        e_en = e_cap
+        if n and not self._chg_known.get(cid, False):
+            cap_wh = prof.battery_capacity_mah / 1000.0 * V_NOMINAL
+            k = self._k_cal.get(cid, 1.0)
+            d_ep = k * energy_wh_linear(
+                training_power_w(prof), training_time_s(peff, 1, n, b_ref)
+            ) / cap_wh
+            d_up = k * energy_wh_linear(comm_power_w(), comm_time_s()) / cap_wh
+            spare = self._resource(cid) - self.soc_min - d_up
+            e_en = int(spare // d_ep) if d_ep > 0 else e_cap
+
+        e_hi = int(np.clip(min(e_cap, e_dl, e_en), e_lo, e_cap))
+        if e_hi >= e_cap:
+            self._bound[cid] = "cap"
+        elif e_dl <= e_en:
+            self._bound[cid] = "deadline"
+        else:
+            self._bound[cid] = "energy"
+        return Envelope(
+            e_lo=e_lo, e_hi=e_hi, batches=batches,
+            deadline_s=float(self._deadline_s) if math.isfinite(self._deadline_s)
+            else 1e12,
+            soc_min=float(self.soc_min), probe_samples=self.probe_samples,
+            partial_work=self.partial_work,
+        )
+
+    def _per_client_config(
+        self, cid: int, cfg: ConfigRecord, server_round: int
+    ) -> None:
+        env = self._plan.get(cid)
+        if env is None:
+            return
+        for key, val in env.to_config().items():
+            cfg[key] = val
+        # [B] epochs e batch-size restano nel config come TETTO e batch di
+        # riferimento: il client di sage_smart non li usa per allenarsi.
+        cfg["epochs"] = int(env.e_hi)
+        cfg["batch-size"] = int(self._batch_for(cid))
+
+    def _device_record(self, cid: int) -> ConfigRecord | None:
+        """Sensori del device: letti dal mondo PER CONTO del client.
+
+        [B] nel messaggio di training e' chiamato dopo WorldState.begin_round:
+        il client vede il workload e lo stato di carica di QUESTO round, il
+        server nella selezione aveva visto quelli del precedente.
+        [B] "dataset-size": il client conosce la taglia del proprio dataset;
+        nel simulatore arriva qui per non dover caricare i dati in una query.
+        """
+        rec = DeviceReading.from_world(self.world, cid).to_record()
+        rec["dataset-size"] = int(self._n_of(cid) or 0)
+        return ConfigRecord(rec)
+\end{lstlisting}
+
+\begin{lstlisting}[style=py,firstnumber=54,caption={\texttt{tesifl/tesiFL/client\_policy.py}, lines 54--61}]
+# chiavi del ConfigRecord con cui viaggia l'envelope
+K_E_LO = "smart-e-lo"
+K_E_HI = "smart-e-hi"
+K_BATCHES = "smart-batches"
+K_DEADLINE = "smart-deadline-s"
+K_SOC_MIN = "smart-soc-min"
+K_PROBE = "smart-probe-samples"
+K_PARTIAL = "smart-partial-work"
+\end{lstlisting}
+
+\begin{lstlisting}[style=py,firstnumber=64,caption={\texttt{tesifl/tesiFL/client\_policy.py}, lines 64--111}]
+@dataclass(frozen=True)
+class Envelope:
+    """Proposta del server: dentro questi limiti decide il client.
+
+    partial_work: al training, se nemmeno E_lo sta nella deadline il client
+    fa i passi di SGD che ci stanno (meno di E_lo epoche) invece di lavorare
+    in ritardo (vedi decide). Viaggia nel messaggio solo se acceso.
+    [B] 16/11: tolti refuse_deadline e refuse_load_only (rifiuto della
+    proposta per la deadline, SAGE-smart plus/plus2-4): il client rifiuta
+    solo per energia.
+    """
+
+    e_lo: int
+    e_hi: int
+    batches: tuple[int, ...]
+    deadline_s: float
+    soc_min: float
+    probe_samples: int
+    partial_work: bool = False
+
+    def to_config(self) -> dict:
+        cfg = {
+            K_E_LO: int(self.e_lo),
+            K_E_HI: int(self.e_hi),
+            K_BATCHES: [int(b) for b in self.batches],
+            K_DEADLINE: float(self.deadline_s),
+            K_SOC_MIN: float(self.soc_min),
+            K_PROBE: int(self.probe_samples),
+        }
+        if self.partial_work:
+            cfg[K_PARTIAL] = 1
+        return cfg
+
+    @classmethod
+    def from_config(cls, cfg) -> "Envelope":
+        return cls(
+            e_lo=int(cfg[K_E_LO]),
+            e_hi=int(cfg[K_E_HI]),
+            batches=tuple(int(b) for b in cfg[K_BATCHES]),
+            deadline_s=float(cfg[K_DEADLINE]),
+            soc_min=float(cfg[K_SOC_MIN]),
+            probe_samples=int(cfg[K_PROBE]),
+            partial_work=bool(int(cfg[K_PARTIAL])) if K_PARTIAL in cfg else False,
+        )
+
+    @staticmethod
+    def present_in(cfg) -> bool:
+        return K_E_LO in cfg
+\end{lstlisting}
+
+\newpage
+%======================================================================
+\section{Step 6, on the phone: decision and training}
+\label{sec:client}
+
+The client recognizes the envelope in the configuration and runs
+\cf{\_train\_client\_driven}. The steps are:
+\begin{enumerate}
+  \item Reading of the sensors of this round: SoC, workload, charging flag
+        (late binding). The local data are loaded; $n_i$ is the size of the
+        training part; the probe size is $n_{\mathrm{p}} = \min(256, n_i)$.
+  \item If not even $E_{\mathrm{lo}}$ is affordable (same check as the
+        acceptance), the phone withdraws without measuring the loss: it pays
+        the download and an isolated control message.
+  \item Probe: mean cross-entropy $L_i$ of the global model on $n_{\mathrm{p}}$
+        random local samples (generator seeded with $\text{seed} + 1000 r + i$,
+        evaluation mode, no gradient, batches of 128).
+  \item Decision (\cf{decide}):
+        \begin{align}
+          u_i &= \min\Bigl(1, \max\bigl(0, L_i / \ln |\mathcal{Y}|\bigr)\Bigr)
+               \quad (\ln 100 = 4.605;\; u_i = 1 \text{ if } L_i \text{ is not finite}), \\
+          h_i &= \begin{cases} 1 & \text{if charging} \\
+                 \min\bigl(1, \max(0, (s_i - s_{\min}) / (1 - s_{\min}))\bigr) & \text{otherwise} \end{cases} \\
+          E^{*}_i &= E_{\mathrm{lo}} + \operatorname{round}\bigl((E_{\mathrm{hi},i} - E_{\mathrm{lo}})\, u_i \, h_i\bigr)
+        \end{align}
+        (Python \cf{round}, halves to even). For $B$ in increasing order, and
+        for $E$ from $E^{*}_i$ down to $E_{\mathrm{lo}}$, the first pair whose
+        predicted time is within $T$ and whose predicted final SoC is at least
+        $s_{\min}$ (or the phone is charging) is chosen. The prediction is
+        \begin{equation}
+          t = t^{\mathrm{tr}}_i(E, n_i, B) + t^{\mathrm{probe}}_i(n_{\mathrm{p}}), \quad
+          s^{\mathrm{end}} = s_i + \Delta s(P^{\mathrm{tr}}_i, t, s_i) + \Delta s(P^{\mathrm{comm}}, t^{\mathrm{comm}}, \cdot)
+          \label{eq:predict}
+        \end{equation}
+        with the workload of now and the battery of the phone, clamped to
+        $[0, 1]$; a phone whose training would reach 0 is predicted at 0, and a
+        charging phone keeps its SoC.
+  \item Partial work: if no pair $(E, B)$ satisfies both conditions, but
+        $E_{\mathrm{lo}}$ is affordable for the battery at some $B$,
+        the phone takes the smallest $B$ at which the battery allows the steps
+        that fit the deadline: the largest $\nu \le E_{\mathrm{lo}} \lceil
+        n_i / B \rceil$ with predicted time within $T$, found by bisection, at
+        least 1. It reports $E = E_{\mathrm{lo}}$ and a cap of $\nu$ steps.
+  \item Otherwise, if $E_{\mathrm{lo}}$ is affordable, $E_{\mathrm{lo}}$ with
+        the fastest affordable $B$, out of the deadline. Otherwise the phone
+        withdraws (reserve).
+  \item Training: SGD with learning rate 0.01 and momentum 0.9, shuffled
+        batches of size $B$, for $E$ epochs, at most the planned steps $E
+        \lceil n_i/B \rceil$ (or the cap of the partial work), and at most the
+        steps that keep the predicted SoC at or above $s_{\min}$
+        (\cf{affordable\_steps}, bisection; no limit if charging). The
+        training can stop in the middle of an epoch.
+  \item Reply: the model and the report. \cf{num-examples} $= n_i$;
+        \cf{class-dist}, the class histogram; \cf{smart-epochs} $= E$;
+        \cf{smart-batch} $= B$; \cf{smart-steps} $= \nu_i$, the steps really
+        executed; the SoC at the start and the predicted SoC at the end for
+        the work really done (time with $\nu_i / \lceil n_i/B \rceil$ epochs,
+        plus the upload); the workload and the charging flag; the loss before
+        and after; whether the deadline was met; with the partial work on,
+        \cf{smart-partial} and \cf{smart-weight} $= \min(n_i, \nu_i B)$, the
+        samples really seen.
+\end{enumerate}
+
+\begin{lstlisting}[style=py,firstnumber=68,caption={\texttt{tesifl/tesiFL/client\_app.py}, lines 68--72}]
+    # sage_smart: il server ha mandato una PROPOSTA, non un'assegnazione
+    if Envelope.present_in(config):
+        return _train_client_driven(msg, model, device, config, partition_id,
+                                    num_partitions, beta, seed, proximal_mu,
+                                    dataset_name=dataset, augment=augment)
+\end{lstlisting}
+
+\begin{lstlisting}[style=py,firstnumber=103,caption={\texttt{tesifl/tesiFL/client\_app.py}, lines 103--138}]
+def _class_counts(loader, n_classes: int = 10) -> list[int]:
+    """Distribuzione delle classi locali, per la divergenza JS di SAGE.
+
+    [B] su TUTTI i campioni: nel codice originale il bincount finale usava la
+    sola variabile del ciclo, cioe' l'ultimo batch.
+    """
+    counts = [0] * n_classes
+    for _b in loader:
+        for _lbl in _b["label"].tolist():
+            if 0 <= int(_lbl) < n_classes:
+                counts[int(_lbl)] += 1
+    return counts
+
+
+def _probe_loss(model, dataset, n_probe: int, device, generator) -> float:
+    """Loss del modello GLOBALE su n_probe campioni locali estratti a caso.
+
+    Fase 5, passo 2 della proposta: alta loss = i dati di questo client sono
+    ancora mal rappresentati nel modello globale = vale la pena lavorare.
+    [B] in eval() e senza gradiente: in train() il forward aggiornerebbe le
+    statistiche di BatchNorm, e l'update inviato al server ne porterebbe
+    traccia anche se il client poi non si allenasse.
+    """
+    idx = torch.randperm(len(dataset), generator=generator)[:n_probe].tolist()
+    loader = DataLoader(Subset(dataset, idx), batch_size=128)
+    criterion = torch.nn.CrossEntropyLoss(reduction="sum")
+    model.eval()
+    tot, n = 0.0, 0
+    with torch.no_grad():
+        for batch in loader:
+            images = batch["img"].to(device)
+            labels = batch["label"].to(device)
+            tot += float(criterion(model(images), labels).item())
+            n += int(labels.numel())
+    model.train()
+    return tot / max(1, n)
+\end{lstlisting}
+
+\begin{lstlisting}[style=py,firstnumber=141,caption={\texttt{tesifl/tesiFL/client\_app.py}, lines 141--276}]
+def _train_client_driven(msg: Message, model, device, config, partition_id: int,
+                         num_partitions: int, beta: float, seed: int,
+                         proximal_mu: float, dataset_name: str = "cifar10",
+                         augment: bool = False) -> Message:
+    """sage_smart: il client decide (E, B) dentro l'envelope del server.
+
+    Fasi 5-7 della proposta:
+      5. rilegge il proprio stato (late binding), stima la loss locale,
+         sceglie (E, B) oppure si ritira;
+      6. si allena con una guardia sul budget energetico;
+      7. risponde con l'update e con cio' che ha fatto davvero: E e B scelti,
+         passi eseguiti, SoC iniziale e finale, loss prima e dopo.
+
+    Il SoC finale e' quello che il fuel gauge del device prevede per il
+    lavoro svolto (training + upload): vedi device/fuel_gauge.py.
+    """
+    if DEVICE_KEY not in msg.content:
+        raise KeyError(
+            "sage_smart: il messaggio non contiene i sensori del device "
+            f"(record '{DEVICE_KEY}'): la strategia deve allegarli"
+        )
+    # [B] LATE BINDING: la lettura e' quella di adesso, non quella che il
+    # server aveva al momento della selezione
+    reading = DeviceReading.from_record(msg.content[DEVICE_KEY])
+    env = Envelope.from_config(config)
+    server_round = int(config["server-round"])
+
+    n_cls = num_classes(dataset_name)
+    # [B] con augment la stima della loss (5b) vede immagini aumentate come
+    # il training: misura quanto resta da imparare sull'obiettivo vero, che
+    # con l'augmentation non va a zero per memorizzazione
+    trainloader, _ = load_data(partition_id, num_partitions, env.batches[0],
+                               beta, seed, dataset=dataset_name, augment=augment)
+    dataset = trainloader.dataset
+    n = len(dataset)
+    env = dataclasses.replace(env, probe_samples=min(env.probe_samples, n))
+
+    base = {
+        "smart-soc-start": float(reading.soc),
+        "smart-workload": float(reading.workload),
+        "smart-charging": int(reading.charging),
+    }
+
+    def optout(probe: int, loss_pre: float, e_target: int) -> Message:
+        """Ritiro dal round: nessun update, la riserva resta intatta.
+
+        [B] num-examples = 0: il server lo esclude dalla media, ma addebita
+        comunque la comunicazione (il modello e' stato scaricato) e, se
+        c'e' stata, la stima della loss.
+        """
+        b = env.batches[0]
+        dt = reading.work_time_s(0, b, n, probe)
+        _, soc_final = reading.soc_after(dt, b)
+        metrics = {
+            **base,
+            "num-examples": 0,
+            "train_loss": 0.0,
+            "smart-optout": 1,
+            "smart-epochs": 0,
+            "smart-batch": int(b),
+            "smart-steps": 0,
+            "smart-probe": int(probe),
+            "smart-soc-final": float(soc_final),
+            "smart-e-target": int(e_target),
+        }
+        if loss_pre == loss_pre:          # non NaN
+            metrics["smart-loss-pre"] = float(loss_pre)
+        content = RecordDict({"metrics": MetricRecord(metrics)})
+        return Message(content=content, reply_to=msg)
+
+    # 5a. il minimo e' sostenibile? Se no, inutile anche stimare la loss
+    if not can_afford_minimum(reading, env, n):
+        return optout(probe=0, loss_pre=float("nan"), e_target=0)
+
+    # 5b. utilita' statistica: loss del modello globale sui dati locali
+    model.to(device)
+    gen = torch.Generator().manual_seed(seed + 1000 * server_round + partition_id)
+    loss_pre = _probe_loss(model, dataset, env.probe_samples, device, gen)
+
+    # 5c. decisione
+    plan = decide(reading, env, n, loss_pre, n_classes=n_cls)
+    if plan.optout:
+        return optout(probe=env.probe_samples, loss_pre=loss_pre,
+                      e_target=plan.e_target)
+
+    # 6. training con guardia sul budget energetico
+    loader = DataLoader(dataset, batch_size=plan.batch, shuffle=True)
+    spe = len(loader)                        # ceil(n / B): passi per epoca
+    planned = plan.epochs * spe
+    # [B] 06/11 lavoro parziale (env.partial_work): al massimo i passi che
+    # stanno nella deadline, vedi client_policy.decide
+    if plan.steps_cap > 0:
+        planned = min(planned, plan.steps_cap)
+    budget = affordable_steps(reading, env, n, plan.batch, cap=planned)
+    stats: dict = {}
+    train_loss, loss_sq_sum, loss_n = train_fn(
+        model, loader, plan.epochs, config["lr"], device,
+        proximal_mu=proximal_mu, max_steps=budget, stats=stats,
+    )
+    steps = int(stats["steps"])
+
+    # 7. SoC finale previsto dal fuel gauge per il lavoro EFFETTIVO
+    dt = reading.work_time_s(steps / spe, plan.batch, n, env.probe_samples)
+    _, soc_final = reading.soc_after(dt, plan.batch)
+
+    metrics = {
+        **base,
+        "train_loss": train_loss,
+        "num-examples": n,
+        "class-dist": _class_counts(loader, n_cls),
+        "loss-sq-sum": loss_sq_sum,
+        "loss-n": loss_n,
+        "smart-optout": 0,
+        "smart-epochs": int(plan.epochs),
+        "smart-batch": int(plan.batch),
+        "smart-steps": steps,
+        "smart-steps-budget": int(budget),
+        "smart-budget-hit": int(steps < planned),
+        "smart-probe": int(env.probe_samples),
+        "smart-soc-final": float(soc_final),
+        "smart-time-s": float(dt),
+        "smart-deadline-ok": int(dt <= env.deadline_s),
+        "smart-e-target": int(plan.e_target),
+        "smart-utility": float(plan.utility),
+        "smart-loss-pre": float(loss_pre),
+        "smart-loss-post": float(stats["last_loss"]),
+    }
+    if env.partial_work:
+        # [B] solo con il lavoro parziale acceso, cosi' le altre run mandano
+        # esattamente le metriche di prima. smart-weight = campioni visti
+        # davvero (n se ha fatto almeno un'epoca): il peso nella media.
+        metrics["smart-partial"] = int(plan.steps_cap > 0)
+        metrics["smart-weight"] = int(min(n, steps * plan.batch))
+    content = RecordDict({"arrays": ArrayRecord(model.state_dict()),
+                          "metrics": MetricRecord(metrics)})
+    return Message(content=content, reply_to=msg)
+\end{lstlisting}
+
+\begin{lstlisting}[style=py,firstnumber=173,caption={\texttt{tesifl/tesiFL/client\_policy.py}, lines 173--226}]
+def decide(reading: DeviceReading, env: Envelope, n_samples: int,
+           loss: float, n_classes: int = 10) -> Plan:
+    """Sceglie (E, B) dentro l'envelope. Vedi la docstring del modulo."""
+    u = statistical_utility(loss, n_classes)
+    h = headroom(reading, env.soc_min)
+    span = max(0, env.e_hi - env.e_lo)
+    e_target = env.e_lo + int(round(span * u * h))
+    p = env.probe_samples
+
+    def options(e: int):
+        out = []
+        for b in env.batches:
+            t, soc_end = reading.predict(e, b, n_samples, p)
+            if _energy_ok(reading, soc_end, env.soc_min):
+                out.append((b, t, soc_end))
+        return out
+
+    # B dal piu' piccolo: dentro ogni B si riduce E, e si sale di B solo se
+    # a quel B non ci sta nemmeno E_lo
+    for b in sorted(env.batches):
+        for e in range(e_target, env.e_lo - 1, -1):
+            t, soc_end = reading.predict(e, b, n_samples, p)
+            if _energy_ok(reading, soc_end, env.soc_min) and t <= env.deadline_s:
+                return Plan(False, e, b, t, soc_end, True, u, e_target,
+                            "target" if e == e_target else "ridotto")
+
+    # [B] 06/11, LAVORO PARZIALE (env.partial_work): nessun E >= E_lo sta
+    # nella deadline. Invece di fare E_lo in ritardo (il round aspetta e tutti
+    # pagano idle), il client fa i passi di SGD che stanno nella deadline, col
+    # B piu' piccolo che la batteria regge (piu' passi per lo stesso tempo,
+    # come nel resto della regola). Riguarda soprattutto i telefoni lenti con
+    # molti dati, che non stanno nella deadline nemmeno a riposo: col solo
+    # rifiuto per deadline non partecipavano mai, accettando arrivavano
+    # sempre in ritardo (workload x1: ~430 ritardi su 495). L'update pesa nella
+    # media per i campioni visti davvero (smart-weight, vedi sage_smart).
+    # Solo se E_lo e' sostenibile per la batteria (feasible): il caso
+    # "riserva" (ritiro) resta quello di prima.
+    feasible = options(env.e_lo)
+    if feasible and env.partial_work:
+        for b in sorted(env.batches):
+            k = deadline_steps(reading, env, n_samples, b)
+            t, soc_end = reading.predict(k / steps_per_epoch(n_samples, b), b, n_samples, p)
+            if _energy_ok(reading, soc_end, env.soc_min):
+                return Plan(False, env.e_lo, b, t, soc_end, t <= env.deadline_s, u, e_target,
+                            "parziale", steps_cap=k)
+
+    # nessun E rispetta la deadline: E_lo col batch piu' veloce, se la
+    # batteria lo regge. La deadline e' un vincolo di comparabilita', la
+    # riserva no.
+    if feasible:
+        b, t, soc_end = min(feasible, key=lambda o: o[1])
+        return Plan(False, env.e_lo, b, t, soc_end, False, u, e_target,
+                    "fuori-deadline")
+    return Plan(True, utility=u, e_target=e_target, reason="riserva")
+\end{lstlisting}
+
+\begin{lstlisting}[style=py,firstnumber=229,caption={\texttt{tesifl/tesiFL/client\_policy.py}, lines 229--283}]
+def steps_per_epoch(n_samples: int, batch: int) -> int:
+    """ceil(n / B), come len(DataLoader) nel client."""
+    return max(1, math.ceil(n_samples / batch))
+
+
+def deadline_steps(reading: DeviceReading, env: Envelope, n_samples: int, batch: int) -> int:
+    """Massimo numero di passi di SGD (al piu' E_lo epoche) la cui durata,
+    stima della loss compresa e col workload attuale, sta nella deadline.
+    Almeno 1: se non ci sta nemmeno un passo, se ne fa uno (ritardo minimo).
+    La durata e' lineare nelle epoche, quindi la ricerca binaria e' esatta."""
+    spe = steps_per_epoch(n_samples, batch)
+
+    def fits(k: int) -> bool:
+        return reading.work_time_s(k / spe, batch, n_samples, env.probe_samples) <= env.deadline_s
+
+    hi = env.e_lo * spe
+    if fits(hi):
+        return hi
+    lo = 0                       # fits(0): la sola stima della loss, si assume
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        if fits(mid):
+            lo = mid
+        else:
+            hi = mid
+    return max(1, lo)
+
+
+def affordable_steps(reading: DeviceReading, env: Envelope, n_samples: int,
+                     batch: int, cap: int) -> int:
+    """Massimo numero di passi di SGD che lasciano SoC finale >= soc_min.
+
+    E' il S_max della proposta (budget energetico). Serve da guardia durante
+    il training: se la previsione fosse ottimistica, il client si fermerebbe
+    qui e invierebbe un update parziale invece di intaccare la riserva.
+    """
+    if reading.charging:
+        return cap
+    spe = max(1, math.ceil(n_samples / batch))
+
+    def ok(steps: int) -> bool:
+        _, soc_end = reading.predict(steps / spe, batch, n_samples,
+                                     env.probe_samples)
+        return soc_end >= env.soc_min
+
+    if ok(cap):
+        return cap
+    lo, hi = 0, cap          # ok(lo) e' vero se il minimo era sostenibile
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        if ok(mid):
+            lo = mid
+        else:
+            hi = mid
+    return lo
+\end{lstlisting}
+
+\begin{lstlisting}[style=py,firstnumber=41,caption={\texttt{tesifl/device/fuel\_gauge.py}, lines 41--130}]
+@dataclass(frozen=True)
+class DeviceReading:
+    """Istantanea del device presa al momento dell'esecuzione (late binding)."""
+
+    soc: float
+    workload: float
+    charging: bool
+    profile: DeviceProfile
+    model: str = "nm"
+
+    # -------------------------------------------------- lato mondo (server)
+    @classmethod
+    def from_world(cls, world: WorldState, cid: int) -> "DeviceReading":
+        return cls(
+            soc=float(world.snapshot(cid).soc),
+            workload=float(world.utilization(cid)),
+            charging=bool(world.is_charging(cid)),
+            profile=world.profile(cid),
+            model=world.battery,
+        )
+
+    def to_record(self) -> dict:
+        p = self.profile
+        return {
+            "soc": float(self.soc),
+            "workload": float(self.workload),
+            "charging": bool(self.charging),
+            "battery-model": _NAMES[self.model],
+            "cid": int(p.cid),
+            "capacity-mah": float(p.battery_capacity_mah),
+            "macs-per-s": float(p.macs_per_s),
+            "train-power-w": float(p.train_power_w),
+            "peukert-n": float(p.peukert_n),
+            "tier": str(p.tier),
+        }
+
+    # -------------------------------------------------- lato device (client)
+    @classmethod
+    def from_record(cls, rec) -> "DeviceReading":
+        return cls(
+            soc=float(rec["soc"]),
+            workload=float(rec["workload"]),
+            charging=bool(rec["charging"]),
+            profile=DeviceProfile(
+                cid=int(rec["cid"]),
+                battery_capacity_mah=float(rec["capacity-mah"]),
+                macs_per_s=float(rec["macs-per-s"]),
+                peukert_n=float(rec["peukert-n"]),
+                tier=str(rec["tier"]),
+                train_power_w=float(rec["train-power-w"]),
+            ),
+            model={v: k for k, v in _NAMES.items()}[str(rec["battery-model"])],
+        )
+
+    # ------------------------------------------------------------ previsioni
+    def work_time_s(self, epochs: float, batch_size: int, n_samples: int,
+                    probe_samples: int = 0) -> float:
+        """Durata del lavoro locale col workload ATTUALE.
+
+        `epochs` puo' essere frazionario: un training interrotto a meta'
+        epoca dura la frazione corrispondente (training_time_s e' lineare
+        nelle epoche).
+        """
+        p = effective_profile(self.profile, self.workload)
+        return (training_time_s(p, epochs, n_samples, batch_size)
+                + probe_time_s(p, probe_samples))
+
+    def soc_after(self, dt_s: float, batch_size: int) -> tuple[float, float]:
+        """(SoC dopo il training, SoC dopo l'upload) secondo la batteria del
+        device. In carica la batteria non scende: e' collegato alla rete.
+        La potenza di training e' quella del tier: `batch_size` cambia solo la
+        durata (gia' dentro dt_s), non la potenza."""
+        if self.charging:
+            return self.soc, self.soc
+        s1 = self._drain(self.soc, training_power_w(self.profile), dt_s)
+        if s1 <= 0.0:
+            # il mondo marca il device come morto e non addebita l'upload
+            return 0.0, 0.0
+        s2 = self._drain(s1, comm_power_w(), comm_time_s())
+        return s1, s2
+
+    def predict(self, epochs: float, batch_size: int, n_samples: int,
+                probe_samples: int = 0) -> tuple[float, float]:
+        """(durata, SoC finale dopo l'upload) di un piano (E, B)."""
+        dt = self.work_time_s(epochs, batch_size, n_samples, probe_samples)
+        return dt, self.soc_after(dt, batch_size)[1]
+
+    def _drain(self, soc: float, power_w: float, dt_s: float) -> float:
+        d = battery_delta_soc(self.model, power_w, dt_s, self.profile, soc)
+        return max(0.0, min(1.0, soc + d))
+\end{lstlisting}
+
+\begin{lstlisting}[style=py,firstnumber=5,caption={\texttt{tesifl/tesiFL/task.py}, lines 5--80}]
+def train(net, trainloader, epochs, lr, device, proximal_mu: float = 0.0,
+          max_steps: int | None = None, stats: dict | None = None):
+    """Train the model on the training set.
+
+    proximal_mu > 0 attiva il termine prossimale di FedProx:
+        loss = CE + (mu/2) * ||w - w_global||^2
+    dove w_global sono i pesi ricevuti dal server a inizio round (congelati,
+    detached: il gradiente non ci passa attraverso). mu=0 -> FedAvg puro,
+    nessun costo computazionale aggiuntivo.
+
+    max_steps  interrompe il training dopo quel numero di passi di SGD, anche
+               a meta' epoca (Fase 6 della proposta: early stopping quando il
+               budget energetico finisce). None = epoche complete, come prima.
+    stats      se e' un dict, ci scrive "steps" (passi eseguiti) e
+               "last_loss" (loss media dell'ultima epoca, anche parziale):
+               servono a sage_smart. Il valore di ritorno non cambia.
+    """
+    net.to(device)
+    criterion = torch.nn.CrossEntropyLoss().to(device)
+    optimizer = torch.optim.SGD(net.parameters(), lr=lr, momentum=0.9)
+
+    # [B] snapshot dei pesi globali PRIMA di qualunque step locale
+    use_prox = proximal_mu > 0.0
+    if use_prox:
+        global_params = [p.detach().clone() for p in net.parameters()]
+
+    # [B] reduction='none' per avere la loss dei singoli campioni: serve alla
+    # statistical utility di Oort (|B|*sqrt(mean(Loss^2))). Il backward usa
+    # comunque la media, quindi FedAvg/FedProx sono numericamente invariati.
+    criterion_ns = torch.nn.CrossEntropyLoss(reduction="none").to(device)
+
+    net.train()
+    running_loss = 0.0
+    sq_sum, n_seen = 0.0, 0
+    steps = 0
+    last_sum, last_n = 0.0, 0
+    for _ep in range(epochs):
+        # [B] controllo PRIMA dell'azzeramento: se il budget finisce
+        # esattamente a fine epoca, le statistiche restano quelle dell'epoca
+        # appena chiusa invece di un'epoca vuota
+        if max_steps is not None and steps >= max_steps:
+            break
+        # statistiche riferite all'ULTIMA epoca: riflettono lo stato del
+        # modello a fine round, non la media del percorso
+        sq_sum, n_seen = 0.0, 0
+        last_sum, last_n = 0.0, 0
+        for batch in trainloader:
+            if max_steps is not None and steps >= max_steps:
+                break
+            images = batch["img"].to(device)
+            labels = batch["label"].to(device)
+            optimizer.zero_grad()
+            per_sample = criterion_ns(net(images), labels)
+            with torch.no_grad():
+                sq_sum += float(torch.sum(per_sample ** 2).item())
+                n_seen += int(per_sample.numel())
+                last_sum += float(torch.sum(per_sample).item())
+                last_n += int(per_sample.numel())
+            loss = per_sample.mean()
+            if use_prox:
+                prox_term = 0.0
+                for p, g in zip(net.parameters(), global_params):
+                    prox_term = prox_term + torch.sum((p - g) ** 2)
+                loss = loss + (proximal_mu / 2.0) * prox_term
+            loss.backward()
+            optimizer.step()
+            running_loss += loss.item()
+            steps += 1
+    # [B] diviso per i passi EFFETTIVI: con epoche complete steps vale
+    # epochs * len(trainloader), cioe' esattamente il denominatore di prima
+    avg_trainloss = running_loss / max(1, steps)
+    if stats is not None:
+        stats["steps"] = steps
+        stats["last_loss"] = last_sum / last_n if last_n else float("nan")
+    # (loss media, somma dei quadrati per campione, n campioni dell'ultima epoca)
+    return avg_trainloss, sq_sum, n_seen
+\end{lstlisting}
+
+\newpage
+%======================================================================
+\section{Step 7: accounting, state update and aggregation}
+\label{sec:aggregate}
+
+For each reply, in order of phone index:
+\begin{itemize}
+  \item Work done (\cf{\_work\_done}): duration $t_i = t^{\mathrm{tr}}_i(\nu_i /
+        \lceil n_i/B \rceil, n_i, B) + t^{\mathrm{probe}}_i(n_{\mathrm{p}})$ with
+        the workload of this round, from the steps that the phone declares.
+  \item Training energy: power $P^{\mathrm{tr}}_i$ for $t_i$ on the battery of
+        the world (\cf{apply\_round}); nothing on the battery if charging.
+  \item Communication: model download and upload ($P^{\mathrm{comm}}$ for
+        $t^{\mathrm{comm}}$); download and an isolated control message for a
+        phone that withdrew. The communication time does not enter the round
+        duration.
+  \item State update (\cf{\_on\_round\_result}): the class histogram updates
+        $D$; the reported final SoC, workload and charging flag become the last
+        report, at time $t^{\mathrm{now}} + t^{\mathrm{ovh}}_r + t_i$; $n_i$ is
+        updated; if the phone was not charging and did at least one step, the
+        calibration factor is updated with the observed drop:
+        \begin{equation}
+          k_i \leftarrow (1 - \alpha)\, k_i + \alpha \, \frac{s^{\mathrm{start}}_i - s^{\mathrm{end}}_i}
+          {\bigl(P^{\mathrm{tr}}_i\, t'_i + P^{\mathrm{comm}} t^{\mathrm{comm}}\bigr) / (3600\, \eta\, V_0 Q_i)} ,
+        \end{equation}
+        with $t'_i$ the training and probe time recomputed with the declared
+        workload, applied only if numerator and denominator are positive.
+\end{itemize}
+Then the round duration $t_r = \max_{i \in S_r} t_i + t^{\mathrm{ovh}}_r$ is
+fixed, the server clock advances by $t_r$, the charging phones recharge, and
+every alive phone pays the idle for $t_r - (t_i + t^{\mathrm{ovh}}_r)$ if
+selected and $t_r$ otherwise.
+
+The update of a phone that withdrew, or whose $(E, B)$ is outside its envelope
+($E \notin [E_{\mathrm{lo}}, E_{\mathrm{hi},i}]$ or $B \notin \mathcal{B}$), is
+not averaged; its energy is charged anyway. The other updates are averaged with
+the Flower \cf{FedAvg}, weighted by \cf{num-examples} $= n_i$. If at least two
+updates are valid and in this round at least one phone did partial work
+($\min(n_i, \nu_i B) < n_i$), the average is replaced by the one weighted by
+the samples really seen:
+\begin{equation}
+  x^{r+1} = \sum_{i} q_i \, x^{r}_i , \qquad
+  q_i = \frac{\min(n_i, \nu_i B_i)}{\sum_j \min(n_j, \nu_j B_j)} ,
+\end{equation}
+in double precision, BatchNorm buffers included; integer buffers are rounded.
+A phone that did at least one full epoch has $\min(n_i, \nu_i B_i) = n_i$, so
+the two averages differ only in the weight of the partial updates. The columns
+\cf{tau\_min}, \cf{tau\_max}, \cf{tau\_eff} and \cf{tau\_spread} record the
+declared steps and do not change the average.
+
+\begin{lstlisting}[style=py,firstnumber=777,caption={\texttt{tesifl/strategies/sage\_smart.py}, lines 777--842}]
+    def _rep(self, reply: Message, key: str, default=None):
+        return self._metric(reply, key, default=default)
+
+    def _is_optout(self, reply: Message) -> bool:
+        return int(self._rep(reply, "smart-optout", 0) or 0) == 1
+
+    def _charge_communication(self, cid: int, reply: Message) -> tuple[float, float]:
+        """Chi si ritira ha scaricato il modello ma non carica l'update: paga
+        il download e la risposta di ritiro (uno scambio di controllo
+        isolato), non lo scambio intero. [B] 04/11: prima pagava ~181 J invece
+        di ~48 J, e l'ablazione senza negoziazione risultava penalizzata."""
+        if not self._is_optout(reply):
+            return super()._charge_communication(cid, reply)
+        e_dl, l_dl = self.world.apply_download(cid)
+        e_ct, l_ct = self.world.apply_control(cid, merged=False)
+        return e_dl + e_ct, l_dl + l_ct
+
+    def _work_done(self, cid: int, n_ex: int, reply: Message) -> tuple[float, int]:
+        """Lavoro dichiarato dal client -> durata, per l'addebito fisico.
+
+        Stessa formula che il client usa per prevedere il proprio SoC
+        (DeviceReading.work_time_s).
+        """
+        b = int(self._rep(reply, "smart-batch", self._batch_for(cid)))
+        steps = int(self._rep(reply, "smart-steps", 0))
+        probe = int(self._rep(reply, "smart-probe", 0))
+        e_eff = steps / math.ceil(n_ex / b) if steps > 0 and n_ex > 0 else 0.0
+        dt = (self.world.round_duration_s(cid, epochs=e_eff, batch_size=b,
+                                          dataset_size_local=n_ex)
+              + self.world.probe_duration_s(cid, probe))
+        return dt, b
+
+    def _in_envelope(self, cid: int, reply: Message) -> bool:
+        env = self._plan.get(cid)
+        if env is None:
+            return False
+        e = int(self._rep(reply, "smart-epochs", 0))
+        b = int(self._rep(reply, "smart-batch", 0))
+        return env.e_lo <= e <= env.e_hi and b in env.batches
+
+    def _aggregatable(self, replies: list[Message]) -> list[Message]:
+        """Esclude chi si e' ritirato e chi e' uscito dall'envelope.
+
+        [B] il client non dovrebbe mai uscire dall'envelope: la sua policy
+        sceglie dentro i limiti. Il controllo rende esplicito il contratto:
+        fuori dai limiti il server non accetta l'update (ma il lavoro e'
+        stato fatto, quindi l'energia viene addebitata lo stesso).
+        """
+        out = []
+        for r in replies:
+            if not r.has_content():
+                out.append(r)      # gli errori li gestisce FedAvg, come prima
+                continue
+            if self._is_optout(r):
+                continue
+            cid = self._node_to_cid.get(int(r.metadata.src_node_id))
+            if cid is not None and not self._in_envelope(cid, r):
+                continue
+            out.append(r)
+        return out
+
+    def _steps(self, reply: Message) -> float:
+        """Passi di SGD dichiarati dal client (colonne tau_* del CSV)."""
+        if self._is_optout(reply):
+            return 0.0
+        return float(self._rep(reply, "smart-steps", 0))
+\end{lstlisting}
+
+\begin{lstlisting}[style=py,firstnumber=844,caption={\texttt{tesifl/strategies/sage\_smart.py}, lines 844--906}]
+    def _on_round_result(
+        self, cid: int, n_ex: int, dt_s: float, e_wh: float, e_lin_wh: float,
+        reply: Message, server_round: int,
+    ) -> None:
+        super()._on_round_result(cid, n_ex, dt_s, e_wh, e_lin_wh, reply,
+                                 server_round)
+        optout = self._is_optout(reply)
+        soc0 = float(self._rep(reply, "smart-soc-start", self._resource(cid)))
+        soc1 = float(self._rep(reply, "smart-soc-final", soc0))
+        chg = bool(int(self._rep(reply, "smart-charging", 0)))
+        w = float(self._rep(reply, "smart-workload", self.w_busy))
+        b = int(self._rep(reply, "smart-batch", self._batch_for(cid)))
+        steps = int(self._rep(reply, "smart-steps", 0))
+        probe = int(self._rep(reply, "smart-probe", 0))
+
+        # report del client, con l'istante in cui e' stato fatto: fine del
+        # suo training e upload, dopo il ritardo iniziale del round. Da qui
+        # partono le previsioni dei round successivi (passo 1).
+        self._record(cid, soc1, w, chg, self._clock_s + self._overhead_s + dt_s)
+        if n_ex > 0:
+            self._n[cid] = int(n_ex)
+        loss = self._rep(reply, "smart-loss-pre", None)
+        if loss is not None:
+            self._loss_known[cid] = float(loss)
+
+        # calibrazione k_i: calo di SoC dichiarato / stima lineare dello
+        # stesso lavoro, con la durata ricostruita dal workload DICHIARATO.
+        # [B] nel mondo lineare k_i resta ~1; con Peukert e datasheet impara
+        # quanto la batteria del device paga il training rispetto a P*t.
+        if not chg and steps > 0 and n_ex > 0:
+            prof = self.world.profile(cid)
+            peff = effective_profile(prof, w)
+            e_eff = steps / math.ceil(n_ex / b)
+            t = training_time_s(peff, e_eff, n_ex, b) + probe_time_s(peff, probe)
+            cap_wh = prof.battery_capacity_mah / 1000.0 * V_NOMINAL
+            lin = (energy_wh_linear(training_power_w(prof), t)
+                   + energy_wh_linear(comm_power_w(), comm_time_s())) / cap_wh
+            drop = soc0 - soc1
+            if lin > 0 and drop > 0:
+                a = self.calib_alpha
+                self._k_cal[cid] = (1 - a) * self._k_cal.get(cid, 1.0) + a * drop / lin
+
+        self._reports[cid] = {
+            "optout": optout,
+            "epochs": int(self._rep(reply, "smart-epochs", 0)),
+            "e_eff": (steps / math.ceil(n_ex / b)) if steps > 0 and n_ex > 0 else 0.0,
+            "batch": b,
+            "steps": steps,
+            "budget_hit": int(self._rep(reply, "smart-budget-hit", 0)),
+            "deadline_ok": int(self._rep(reply, "smart-deadline-ok", 1)),
+            "charging": chg,
+            "loss_pre": float(loss) if loss is not None else float("nan"),
+            "loss_post": float(self._rep(reply, "smart-loss-post", float("nan"))),
+            "workload": w,
+            # [B] VERIFICA, non input: SoC dichiarato contro SoC VERO del
+            # mondo dopo l'addebito di training + upload (l'idle viene dopo)
+            "soc_err": abs(float(self.world.snapshot(cid).soc) - soc1),
+            "rejected": (not optout) and not self._in_envelope(cid, reply),
+            "partial": int(self._rep(reply, "smart-partial", 0)),
+        }
+        if self._reports[cid]["rejected"]:
+            log(INFO, "%s round %s: update del client %s fuori envelope, "
+                "scartato", self.variant, server_round, cid)
+\end{lstlisting}
+
+\begin{lstlisting}[style=py,firstnumber=965,caption={\texttt{tesifl/strategies/sage\_smart.py}, lines 965--1056}]
+    def aggregate_train(self, server_round, replies):
+        """Media FedAvg pesata per i dati; col lavoro parziale, per i campioni
+        visti davvero.
+
+        La media per i dati la fa super() (PhysicalFedAvg) sulle reply di
+        _aggregatable (senza opt-out e fuori envelope), BatchNorm compresa.
+        Qui si aggiungono:
+          - le colonne della policy nel CSV (_policy_stats);
+          - le colonne tau_* coi passi di SGD dichiarati dai client
+            (tau_min, tau_max, tau_eff = media pesata per i dati, tau_spread
+            = max/min): solo diagnostica, nessun effetto sulla media;
+          - [B] 06/11 LAVORO PARZIALE: nei round in cui qualcuno ha fatto meno
+            di un'epoca, la media e' pesata per i campioni visti davvero,
+            min(n, passi * B), invece che per n: un update da meta' dati non
+            deve pesare come uno da tutti. Negli altri round resta la media di
+            super(), identica.
+        [B] 16/11: FedNova (normalizzazione per i passi, Wang et al. NeurIPS
+        2020) tolto. Era spento dal 30/10: contributo esterno, e nelle due
+        ablazioni la media pesata per i dati andava uguale o meglio (FedNova
+        -0.9 / -1.0 punti).
+        """
+        arrays, metrics = super().aggregate_train(server_round, replies)
+        # il server sa quanto e' durato il round: ha aspettato le risposte
+        self._clock_s += self._last_round_s
+
+        # [B] metriche della policy nel CSV per round, PRIMA dell'uscita
+        # anticipata: servono anche quando l'aggregazione non viene applicata.
+        # super() ha gia' assegnato _round_stats[round], quindi qui si aggiunge
+        # sopra con update() invece di sovrascrivere.
+        if self._plan:
+            self._round_stats.setdefault(int(server_round), {}).update(
+                self._policy_stats())
+
+        if arrays is None or self._global_arrays is None:
+            return arrays, metrics
+
+        # [B] le CHIAVI vanno conservate: costruire un ArrayRecord da una lista
+        # gli fa assegnare nomi posizionali "0","1",... e il load_state_dict in
+        # global_evaluate non li riconosce. Leggere per chiave garantisce anche
+        # lo stesso ordine fra record globale e locali.
+        keys = list(self._global_arrays.keys())
+        rows = []
+        wts = []        # campioni visti davvero (smart-weight), per il lavoro parziale
+        # stesse reply che super() ha mediato: senza opt-out e fuori envelope
+        for r in self._aggregatable(replies):
+            if not r.has_content():
+                continue
+            if self._node_to_cid.get(int(r.metadata.src_node_id)) is None:
+                continue
+            n = float(self._metric(r, "num-examples", "num_examples", default=0))
+            tau = self._steps(r)
+            if n <= 0 or tau <= 0:
+                continue
+            key = sorted(r.content.array_records)[0]
+            rec = r.content.array_records[key]
+            rows.append((n, tau, [rec[k].numpy() for k in keys]))
+            wts.append(float(self._metric(r, "smart-weight", default=n)))
+
+        if len(rows) < 2:
+            return arrays, metrics
+
+        tot = sum(n for n, _, _ in rows)
+        p = [n / tot for n, _, _ in rows]
+        tau_eff = sum(pi * tau for pi, (_, tau, _) in zip(p, rows))
+        taus = [tau for _, tau, _ in rows]
+        self._round_stats.setdefault(int(server_round), {}).update({
+            "tau_min": int(min(taus)),
+            "tau_max": int(max(taus)),
+            "tau_eff": float(tau_eff),
+            "tau_spread": float(max(taus) / max(1.0, min(taus))),
+        })
+        log(INFO, "round %s: FedAvg su %s client | tau %s-%s, tau_eff %.1f, "
+            "spread %.1f", server_round, len(rows), int(min(taus)),
+            int(max(taus)), tau_eff, max(taus) / max(1.0, min(taus)))
+
+        if self.partial_work and any(w < n for w, (n, _, _) in zip(wts, rows)):
+            tot_w = sum(wts)
+            q = [w / tot_w for w in wts]
+            merged = ArrayRecord()
+            for j, k in enumerate(keys):
+                ref = self._global_arrays[k].numpy()
+                avg = np.asarray(sum(qi * row[2][j].astype(np.float64) for qi, row in zip(q, rows)),
+                                 dtype=np.float64).reshape(ref.shape)
+                if np.issubdtype(ref.dtype, np.integer):
+                    avg = np.rint(avg)
+                merged[k] = Array(avg.astype(ref.dtype))
+            self._round_stats.setdefault(int(server_round), {}).update({
+                "smart_weight_frac": float(tot_w / sum(n for n, _, _ in rows)),
+            })
+            return merged, metrics
+
+        return arrays, metrics
+\end{lstlisting}
+
+The accuracy of the CSV is the one of the global model on the test set,
+computed by the server after every round. The final accuracy of the reports is
+the mean of the last 20 rounds.
+
+\begin{lstlisting}[style=py,firstnumber=421,caption={\texttt{tesifl/tesiFL/server\_app.py}, lines 421--439}]
+def global_evaluate(server_round: int, arrays: ArrayRecord) -> MetricRecord:
+    """Evaluate model on central data."""
+
+    # Load the model and initialize it with the received weights
+    model = build_model(_MODEL_NAME, num_classes(_DATASET))
+    model.load_state_dict(arrays.to_torch_state_dict())
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+
+    # Load entire test set
+    test_dataloader = load_centralized_dataset(_DATASET)
+
+    # Evaluate the global model on the test set
+    test_loss, test_acc = test(model, test_dataloader, device)
+
+    _ACC_BY_ROUND[int(server_round)] = (float(test_acc), float(test_loss))
+
+    # Return the evaluation metrics
+    return MetricRecord({"accuracy": test_acc, "loss": test_loss})
+\end{lstlisting}
+
+\newpage
+%======================================================================
+\section{Logged metrics}
+\label{sec:metrics}
+
+Besides the state of the world (energy by item, SoC distribution, depleted and
+charging phones, \cf{round\_s}, \cf{sim\_time\_s}), every round adds:
+\begin{longtable}{p{0.30\textwidth}p{0.64\textwidth}}
+\toprule
+Column & Content \\
+\midrule
+\endhead
+\cf{mean\_epochs}, \cf{max\_epochs}, \cf{smart\_min\_epochs} & epochs really executed, $\nu_i / \lceil n_i/B \rceil$, over the phones that did not withdraw \\
+\cf{mean\_batch} & mean batch size chosen \\
+\cf{n\_charging\_sel} & selected phones that were charging \\
+\cf{smart\_mean\_e\_hi} & mean $E_{\mathrm{hi}}$ of the envelopes of the selected phones \\
+\cf{smart\_n\_bound\_energy}, \cf{smart\_n\_bound\_deadline} & envelopes limited by the energy or by the deadline, counted over all the envelopes computed in the round (proposals included) \\
+\cf{smart\_n\_optout}, \cf{smart\_n\_rejected} & withdrawals, updates outside the envelope \\
+\cf{smart\_n\_deadline\_miss}, \cf{smart\_n\_budget\_hit} & trainings beyond the deadline, trainings stopped by the energy budget \\
+\cf{smart\_mean\_loss\_pre}, \cf{smart\_mean\_loss\_post} & probe loss, loss of the last epoch \\
+\cf{smart\_mean\_workload} & mean reported workload of the selected phones \\
+\cf{smart\_soc\_err} & maximum $|$true SoC $-$ reported final SoC$|$ (check) \\
+\cf{smart\_mean\_k} & mean $k_i$ \\
+\cf{smart\_deadline\_s} & $T$ \\
+\cf{smart\_info\_err} & mean $|\hat{s}_i - s_i|$ over $\mathcal{A}_r$ (check) \\
+\cf{smart\_n\_queried}, \cf{smart\_n\_refused}, \cf{smart\_waves} & proposals that reached a phone, refusals, waves \\
+\cf{smart\_overhead\_s} & $t^{\mathrm{ovh}}_r$ \\
+\cf{smart\_n\_partial} & phones that did partial work \\
+\cf{smart\_n\_deferred}, \cf{smart\_n\_noreply}, \cf{smart\_w\_err} & deferred phones, unreachable phones, mean $|\hat{w}_i - w_i|$ (check) \\
+\cf{tau\_*}, \cf{smart\_weight\_frac} & declared steps; fraction of samples seen in the rounds with partial work \\
+\bottomrule
+\end{longtable}
+
+\begin{lstlisting}[style=py,firstnumber=908,caption={\texttt{tesifl/strategies/sage\_smart.py}, lines 908--962}]
+    def _policy_stats(self) -> dict:
+        """Colonne della policy nel CSV per round."""
+        rep = list(self._reports.values())
+        done = [r for r in rep if not r["optout"]]
+        envs = list(self._plan.values())
+
+        def mean(xs):
+            xs = [x for x in xs if x == x]          # scarta i NaN
+            return float(np.mean(xs)) if xs else float("nan")
+
+        st = {
+            # epoche e batch ESEGUITI dai client
+            "mean_epochs": mean([r["e_eff"] for r in done]),
+            "max_epochs": float(max((r["e_eff"] for r in done), default=0.0)),
+            "mean_batch": mean([r["batch"] for r in done]),
+            "n_charging_sel": int(sum(1 for r in rep if r["charging"])),
+            "smart_min_epochs": float(min((r["e_eff"] for r in done), default=0.0)),
+            "smart_mean_e_hi": mean([e.e_hi for e in envs]),
+            "smart_n_bound_energy": int(sum(1 for v in self._bound.values() if v == "energy")),
+            "smart_n_bound_deadline": int(sum(1 for v in self._bound.values() if v == "deadline")),
+            "smart_n_optout": int(sum(1 for r in rep if r["optout"])),
+            "smart_n_rejected": int(sum(1 for r in rep if r["rejected"])),
+            "smart_n_deadline_miss": int(sum(1 for r in done if not r["deadline_ok"])),
+            "smart_n_budget_hit": int(sum(1 for r in done if r["budget_hit"])),
+            "smart_mean_loss_pre": mean([r["loss_pre"] for r in rep]),
+            "smart_mean_loss_post": mean([r["loss_post"] for r in done]),
+            "smart_mean_workload": mean([r["workload"] for r in rep]),
+            "smart_soc_err": float(max((r["soc_err"] for r in rep), default=0.0)),
+            "smart_mean_k": mean(list(self._k_cal.values())),
+            "smart_deadline_s": float(self._deadline_s),
+            # passi 1 e 4: qualita' e costo dello stato usato per selezionare
+            "smart_info_err": float(self._info_err),
+            "smart_n_queried": int(self._n_queried),
+            "smart_n_refused": int(self._n_refused),
+            "smart_waves": int(self._waves),
+            "smart_overhead_s": float(self._overhead_s),
+        }
+        if self.partial_work:
+            # [B] solo con il lavoro parziale (nopartial ha le colonne di prima)
+            st["smart_n_partial"] = int(sum(1 for r in done if r.get("partial")))
+        if self._protocol_cols:
+            # [B] rinviati (accettato ma non scelto), non raggiunti senza
+            # broadcast, errore medio del workload noto (verifica)
+            st["smart_n_deferred"] = int(self._n_deferred)
+            st["smart_n_noreply"] = int(self._n_noreply)
+            st["smart_w_err"] = float(self._w_err)
+        log(INFO, "%s: %s risposte | E eseguite %.1f (min %.2f, max %.2f) "
+            "| E_hi medio %.1f (energia %s, deadline %s) | opt-out %s | "
+            "fuori deadline %s | errore SoC %.1e | errore stato noto %.3f",
+            self.variant, len(rep), st["mean_epochs"], st["smart_min_epochs"],
+            st["max_epochs"], st["smart_mean_e_hi"], st["smart_n_bound_energy"],
+            st["smart_n_bound_deadline"], st["smart_n_optout"],
+            st["smart_n_deadline_miss"], st["smart_soc_err"],
+            st["smart_info_err"])
+        return st
+\end{lstlisting}
+
+Observed values (datasheet battery, seed 2026, rounds 21--250 for the protocol
+columns):
+
+\begin{table}[H]
+  \centering
+  \begin{tabular}{lccc}
+    \toprule
+    & $\beta = 0.1$ & $\beta = 0.5$ & $\beta = 1.0$ \\
+    \midrule
+    Deadline $T$ (s)                          & 132.4 & 130.5 & 127.9 \\
+    Proposals that reached a phone, per round & 26.8  & 26.9  & 27.0 \\
+    Unreachable phones per round              & 2.90  & 2.92  & 2.93 \\
+    Refusals per round                        & 0.21  & 0.18  & 0.07 \\
+    Deferred phones per round                 & 6.89  & 6.89  & 7.00 \\
+    Waves per round                           & 1.00  & 1.00  & 1.00 \\
+    Control overhead per round (s)            & 0.97  & 0.97  & 0.97 \\
+    Epochs executed (mean, all rounds)        & 2.51  & 2.25  & 2.21 \\
+    Batch size (mean, all rounds)             & 16.1  & 16.1  & 17.5 \\
+    Partial trainings per round (all rounds)  & 2.44  & 2.08  & 1.58 \\
+    Withdrawals in the run                    & 0     & 0     & 0 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\newpage
+%======================================================================
+\section{Ablation switches and labels}
+\label{sec:ablation}
+
+The run parameter \cf{smart-ablation} switches components off, several of them
+joined by \cf{+}. The tokens are the keys of the dictionary in
+\cf{server\_app.py} (Section~\ref{sec:params}).
+
+\begin{longtable}{p{0.13\textwidth}p{0.81\textwidth}}
+\toprule
+Token & Effect \\
+\midrule
+\endhead
+\cf{nostale} & $c = 0$: no staleness, in the ranking and in the fresh score \\
+\cf{noest} & no forecast: $\hat{s}_i$ and $\hat{w}_i$ are the last report as it is \\
+\cf{noneg} & no proposals and no fresh choice: the model goes to the first $h_r$ phones of the ranking, which can still withdraw after the download. The broadcast of the state comes back (\cf{broadcast = true} in \cf{experiment.toml}): every alive phone answers with probability 0.9, the others are excluded from the round, the answers pay a control message (shared with the download for the selected phones), and the round waits $t_{\mathrm{ctrl}}$, or $\max(t_{\mathrm{ctrl}}, t_{\mathrm{to}}) = 1$ s if someone does not answer \\
+\cf{e5} & $E_{\mathrm{lo}} = E_{\mathrm{cap}} = 5$: five epochs fixed \\
+\cf{b128} & $\mathcal{B} = \{128\}$ \\
+\cf{nopartial} & no partial work: a phone that does not fit the deadline with $E_{\mathrm{lo}}$ trains $E_{\mathrm{lo}}$ epochs out of the deadline \\
+\bottomrule
+\end{longtable}
+
+The labels of the cumulative ablations keep the names of the runs already done:
+
+\begin{table}[H]
+  \centering
+  \begin{tabular}{llp{0.42\textwidth}}
+    \toprule
+    Label & Tokens & Step \\
+    \midrule
+    \cf{sage\_smart\_cum0}   & \cf{nostale+noest+noneg+e5+b128+nopartial} & 0 base (both orders) \\
+    \cf{sage\_smart\_cum1}   & \cf{noest+noneg+e5+b128+nopartial} & 1 + staleness (both orders) \\
+    \cf{sage\_smart\_cum2p}  & \cf{noest+noneg+b128} & forward 2: + adaptive $E$ with partial work \\
+    \cf{sage\_smart\_pcum4}  & \cf{noest+noneg} & forward 3: + adaptive $B$ \\
+    \cf{sage\_smart2\_nofc}  & \cf{noest} & forward 4: + negotiation \\
+    \cf{sage\_smart2\_rev2}  & \cf{e5+b128+nopartial} & reverse 2: + negotiation and forecast \\
+    \cf{sage\_smart2\_rev3}  & \cf{b128} & reverse 3: + adaptive $E$ \\
+    \cf{sage\_smart}         & none & last step of both orders \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\newpage
+%======================================================================
+\section{What the server knows, and simplifications}
+\label{sec:info}
+
+The decisions of the strategy use only:
+\begin{itemize}
+  \item static data of the enrollment: tier, throughput, training power,
+        capacity and battery model of every phone, $n_i$;
+  \item population data: $\bar{w}$ (mean of the stationary workloads of the
+        three chains), the plug-in rate $\lambda$ and the charging speed
+        $\gamma$;
+  \item what the phones send: the answers to the proposals and the reports
+        after the training;
+  \item the durations of the rounds, which the server observes.
+\end{itemize}
+The world enters only in two places, both outside the decisions: the sensor
+record that the server attaches to the messages on behalf of the phone (a real
+phone reads it from its operating system), and the check columns
+\cf{smart\_soc\_err}, \cf{smart\_info\_err} and \cf{smart\_w\_err}.
+
+Simplifications of the simulator, as implemented:
+\begin{itemize}
+  \item The forecast uses the same battery and idle models as the world, so it
+        is wrong only because of recharges and workload. On real phones it would
+        also be wrong because of the model: here it is optimistic.
+  \item The enrollment has no energy or time cost; $n_i$ is computed by the
+        server with the same partitioner as the clients.
+  \item The proposals see the state before \cf{begin\_round}; the training sees
+        the state after it (one workload transition and the recharge draws in
+        between).
+  \item The communication time (71 s per exchange) is charged as energy but
+        does not enter the round duration, which is the slowest training plus
+        the control overhead.
+  \item The time model charges the batch overhead on $\lfloor n/B \rfloor$
+        batches per epoch, while the client executes $\lceil n/B \rceil$ steps
+        per epoch.
+  \item The acceptance check uses 256 probe samples even when $n_i < 256$; the
+        training uses $\min(256, n_i)$.
+  \item Within a round the power of each item (training, communication, idle)
+        is constant.
+\end{itemize}
+
+\end{document}

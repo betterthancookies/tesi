@@ -22,151 +22,176 @@ from device.world_state import (
 from strategies.sage_ablation import PhysicalSAGEAblation
 from tesiFL.client_policy import Envelope
 
-# passo massimo con cui il server integra l'idle nella stima (Fase 2a): il
-# mondo scarica l'idle una volta per round, e un round dura 100-300 s
+# passo massimo con cui il server integra la previsione (passo 1): il mondo
+# scarica l'idle una volta per round, e un round dura 100-300 s
 _ESTIMATE_STEP_S = 300.0
 
 
 class PhysicalSAGESmart(PhysicalSAGEAblation):
     """SAGE-smart: selezione lato server, (E, B) decisi dal CLIENT.
 
+    [B] 16/11: questo e' l'UNICO SAGE-smart. Fino al 15/11 si chiamava
+    "SAGE-smart 2" (etichetta sage_smart2_socfc, token
+    partial+enrollmean+socfc+pick+nobcast); qui sono i default, senza token.
+    Le versioni di prima sono state tolte dal codice: negoziazione con
+    rimpiazzi senza rosa, stima del solo idle e col workload medio, rifiuto
+    per deadline (dlrefuse, dlload), previsione che pesa la classifica per
+    1 - w, FedNova, carico massimo all'iscrizione, broadcast ai primi M.
+    Restano nella storia di git e nelle cartelle dei risultati fino alla v2.
+    Fra sage_smart_lin, _peuk e _nm cambia SOLO la batteria dei device del
+    mondo; l'algoritmo e' lo stesso.
+
     Il server sceglie chi partecipa e propone un intervallo di lavoro; quanto
     lavorare lo decide il client, un istante prima di iniziare, con cio' che
-    solo lui sa. Le fasi sono quelle della proposta (Sez. 4).
+    solo lui sa.
 
-    FASE 0 -- ISCRIZIONE (una volta, al primo round)
-      Il server registra i dati STATICI di ogni client: profilo hardware
-      (capacita', velocita', curva di potenza), taglia del dataset, SoC
-      iniziale. Ne ricava la deadline del round e il batch ottimo per device.
+    ROUND 0 -- ISCRIZIONE (al primo round, nessun training)
+      Il server registra i dati STATICI di ogni client (profilo hardware,
+      batteria del device, taglia del dataset) e il SoC iniziale. Per tutti
+      assume il carico medio della POPOLAZIONE, w_enroll (0.118 a x1): media
+      delle utilizzazioni stazionarie delle tre catene di workload, un dato
+      aggregato e non del singolo client. Fissa la DEADLINE del round:
+      deadline_mult per la mediana dei tempi del lavoro standard (E e B delle
+      baseline, senza carico). Vale 132 s e resta fissa per tutta la run.
+      [B] col carico massimo, a beta 1.0 chi non era mai contattato veniva
+      stimato scarico dal tempo 0, finiva in fondo alla classifica e non
+      veniva piu' interrogato (6 client mai scelti a x1, 26 a x3). Un errore
+      ottimista lo corregge la prima proposta; uno pessimista mai.
+      [B] T_round limita lo straggler, quindi anche l'idle che gli altri
+      pagano aspettandolo (modello ESCS). Senza deadline un client in carica
+      riceveva le epoche massime e arrivava a 30 volte i passi degli altri.
 
-    FASE 2 -- STATO DEI CLIENT E NEGOZIAZIONE (documento "Client Server
-              Protocol" del relatore, opzione 3 con l'opzione 2)
-      a) STIMA LATO SERVER (opzione 2), nessun messaggio. Dall'ultimo report
-         di ogni client il server estrapola il SoC col consumo di idle,
-         scaricando la BATTERIA DEL DEVICE (lineare, Peukert o datasheet: e'
-         un dato statico dell'iscrizione, come la capacita'):
-             SoC_est = SoC_rep - dSoC_batteria(P_idle(w_rep), dt)
-         con P_idle(w) = P_idle + w (P_train - P_idle) dal profilo statico,
-         w_rep l'ultimo workload riportato, dt il tempo simulato dal report.
-         Con questa stima ordina i client (Fase 3). Non vede ricariche ne'
-         cambi di workload.
-         [B] CIRCOLARITA': formula e batteria sono le stesse del simulatore,
-         quindi la stima sbaglia solo per ricariche e workload che cambia. Su
-         device veri sbaglierebbe anche per il modello: qui e' ottimista, va
-         dichiarato.
-      b) PROPOSTA E ACCETTAZIONE (opzione 3). Ai soli candidati il server
-         manda una PROPOSTA (l'envelope della Fase 4, senza modello) con
-         messaggi Flower veri (MessageType.QUERY). Ogni candidato rilegge il
-         proprio stato e accetta se riesce a fare almeno E_lo senza intaccare
-         la riserva, altrimenti rifiuta; in entrambi i casi risponde col
-         proprio SoC, workload e stato di carica, che diventano lo stato
-         noto. I rifiuti vengono sostituiti dai successivi in classifica,
-         per al massimo `max_waves` ondate. Il modello va SOLO a chi ha
-         accettato: un rifiuto non spreca il download.
-      COSTO: ogni scambio e' una sessione radio LTE (~12.6 J, vedi
-      communication_model). Chi accetta la condivide col download del
-      modello che segue, chi rifiuta la paga intera. Ogni ondata ritarda il
-      round di promozione + RTT (~0.33 s).
-      [B] un rifiuto conta come contatto: azzera l'anzianita', cosi' il
-      client non torna subito in cima alla classifica e non si spreca un
-      messaggio a ogni round; l'anzianita' poi ricresce, quindi non resta
-      escluso per sempre (niente starvation).
-      [B] se in `max_waves` ondate nessuno accetta, il pool e' considerato
-      esaurito e la run termina, come quando l'ILP e' infeasible.
-      [B] quanto la stima sbaglia lo misura smart_info_err (|SoC stimato -
-      SoC del device| medio sul pool), quanto costa la negoziazione
-      energy_ctrl_wh e smart_overhead_s.
-      [B] la negoziazione avviene PRIMA di WorldState.begin_round, che fa
-      avanzare il workload e decide le ricariche: resta uno scarto fra cio'
-      che il client ha dichiarato e cio' che trova al training. E' il motivo
-      del late binding, e il client puo' ancora ritirarsi (opt-out).
+    OGNI ROUND, IN SETTE PASSI
 
-    FASE 3 -- SELEZIONE
-          score = a*SoC + b*D + c*min(1, eta / stale_max)     a + b = 1
-      SoC e' quello NOTO AL SERVER (la stima della Fase 2a), D la
-      divergenza JS delle classi (come SAGE), eta i round dall'ultima
-      selezione e c = `stale_weight`.
-      [B] IL TERMINE DI ANZIANITA'. Con il solo a*SoC + b*D, D e' statica:
-      chi ha divergenza bassa non viene scelto mai, e chi consuma poco resta
-      carico e viene riscelto sempre (misurato: 4 client su 30 mai
-      selezionati, uno scelto 228 volte su 250, Gini 0.62 contro 0.19 di
-      FedAvg). L'anzianita' fa guadagnare punteggio a chi non partecipa da
-      tanto, finche' non viene provato. E' la Fase 8 della proposta, ed e'
-      quello che fanno Oort e F3AST.
-      [B] con score non negativi e soli vincoli di cardinalita' l'ILP
-      coincide con i top-k per score, come in SAGE.
+    1. PREVISIONE (stima del SoC lato server, nessun messaggio; _forecast)
+       Per ogni client il server conserva l'ultimo stato ricevuto e quando.
+       Prevede il SoC di adesso: scarica di idle con la batteria del device
+       (dato statico) e probabilita' che nel frattempo il proprietario lo
+       abbia messo in carica (modello orario degli utenti, Ferreira 2011; se
+       era in carica, quanto si e' ricaricato). Prevede anche il workload,
+       che torna dall'ultimo valore riportato verso la media del client.
+       [B] CIRCOLARITA': batteria e consumo sono quelli del simulatore, quindi
+       la previsione sbaglia solo per ricariche e workload. Su device veri
+       sbaglierebbe anche per il modello: qui e' ottimista, va dichiarato.
 
-    FASE 4 -- PROPOSTA (envelope), per ogni selezionato
-      E in [E_lo, E_hi]   B in {batch ammessi}   + deadline, soglia SoC
-      E_lo = epochs_min: sotto, l'update non porta segnale utile.
-      E_hi = min(2*E_nom, vincolo di deadline, vincolo di energia), dove
-        deadline: E * t_epoca(B, w_noto) <= T_round
-        energia:  E * dSoC_epoca <= SoC_noto - soc_min - dSoC_upload
-                  con dSoC stimato LINEARMENTE (P*t/capacita') e corretto da
-                  un fattore k_i appreso dai consumi che il client riporta.
-      B: le potenze di 2 fra batch_min e batch_max (16..64). Il client
-      sceglie il B "piu' economico per passo di SGD": il piu' piccolo,
-      riducendo prima E, e sale solo se a quel B non ci sta nemmeno E_lo
-      (vedi client_policy.decide). Il vincolo di energia su E_hi e' stimato
-      a batch_min (il B preferito, il piu' caro per epoca), quello di
-      deadline col B piu' veloce dell'envelope.
-      [B] con la potenza costante per tier l'energia per CAMPIONE cala al
-      crescere di B, quella per PASSO di SGD cresce: con la stessa energia
-      B = 16 fa molti piu' passi di B = 256. Lo sweep (experiment.toml,
-      smart_batch_min) premia i B piccoli in accuracy; il SoC cala sotto 32.
-      [B] le baseline restano a batch_size = 128: parte del vantaggio di
-      SAGE-smart in accuracy viene da B, non dalla negoziazione. L'ablazione
-      e' FedAvg con B piccolo (results_sweepB*). Prima: B in {32, 64} dal
-      minimo di P(B) * t(B) con P(B) ~ B^0.3, poi B = 128 fisso.
-      [B] e' una stima volutamente LASCA: il server non conosce il workload
-      attuale ne' la curva vera della batteria. Il compito di essere precisi
-      e' del client.
-      [B] T_round = deadline_mult * mediana dei tempi nominali (E_nom, B_nom,
-      senza workload). Limita lo straggler, quindi anche l'idle che gli altri
-      pagano aspettandolo (modello ESCS), e tiene i tau comparabili per
-      FedNova. Senza deadline un client in carica riceveva le epoche massime e
-      arrivava a tau 30 volte gli altri: vedi aggregate_train.
+    2. CLASSIFICA
+           score = a*SoC_previsto + b*D + c*min(1, eta / stale_max)   a + b = 1
+       D divergenza JS delle classi (come SAGE), eta i round dall'ultima
+       selezione (chi non e' mai stato scelto conta come scelto al round 0),
+       c = stale_weight. Il workload NON entra qui (vedi passo 5).
+       [B] IL TERMINE DI ANZIANITA'. Con il solo a*SoC + b*D, D e' statica:
+       chi ha divergenza bassa non viene scelto mai, e chi consuma poco resta
+       carico e viene riscelto sempre (misurato: 4 client su 30 mai
+       selezionati, uno scelto 228 volte su 250, Gini 0.62 contro 0.19 di
+       FedAvg). L'anzianita' fa guadagnare punteggio a chi non partecipa da
+       tanto, finche' non viene provato (Fase 8 della proposta, come Oort e
+       F3AST).
+       [B] 10/11: pesare la classifica per 1 - w atteso escludeva per sempre
+       la catena di workload "high": il w atteso tende alla sua media e non
+       scende mai, la penalita' colpiva anche l'anzianita' (catena high
+       scelta 21 volte contro 40, 4 telefoni mai scelti, -1.5 punti).
 
-    FASE 5 -- DECISIONE DEL CLIENT: vedi tesiFL/client_policy.py.
-      Il client rilegge SoC, workload e carica, stima la loss del modello
-      globale sui propri dati e sceglie (E, B) dentro l'envelope, oppure si
-      ritira (opt-out) se nemmeno il minimo rispetta la sua riserva.
+    3. POSTI
+       k al primo round, uno in piu' a ogni round, al massimo il 20% dei vivi
+       (2 al round 1, 20 dal round 19 con 100 client). Con score non negativi
+       e soli vincoli di cardinalita' l'ILP coincide con i top per score,
+       come in SAGE.
 
-    FASE 6 -- TRAINING con guardia: il client si ferma se finisce il budget
-      energetico, anche a meta' epoca, e lo dichiara.
+    4. PROPOSTE (negoziazione; _negotiate_pick, _propose)
+       Il modello non va ai primi della classifica: una PROPOSTA (l'envelope
+       del passo 6, senza modello, MessageType.QUERY) va ai primi
+       ceil(shortlist * posti), 30 a regime con shortlist = 1.5.
+       - Senza broadcast nessuno ha verificato prima chi e' raggiungibile: la
+         frazione broadcast_nonresp (10%) non riceve la proposta (fuori
+         copertura, spento), non paga nulla e l'ondata si chiude al timeout.
+       - Chi risponde invia lo stato di adesso (SoC, workload, in carica) e
+         accetta o rifiuta. Rifiuta SOLO per energia: se il lavoro minimo
+         (E_lo) lo porterebbe sotto la riserva; in carica accetta sempre
+         (client_policy.accepts_proposal).
+       - Un rifiuto conta come contatto: l'anzianita' riparte da zero, cosi'
+         il client non torna subito in cima e non si spreca un messaggio a
+         ogni round. Chi non risponde non e' contattato.
+       - Se le accettazioni non coprono i posti, una seconda ondata va ai
+         successivi della classifica (ceil(shortlist * posti mancanti)), al
+         massimo max_waves ondate. Se nessuno accetta, il pool e' esaurito e
+         la run termina, come quando l'ILP e' infeasible.
+       COSTO: ogni scambio e' una sessione radio LTE (~12.6 J, vedi
+       communication_model). Chi viene scelto la condivide col download del
+       modello che segue, gli altri la pagano intera. Ogni ondata ritarda il
+       round di promozione + RTT (~0.33 s), piu' il timeout se manca qualcuno.
+       [B] l'ex broadcast dello stato a tutti i client non serve: le risposte
+       alle proposte danno sia la raggiungibilita' sia lo stato (energia di
+       controllo da ~10 a ~1 Wh per run).
 
-    FASE 7 -- RISPOSTA E AGGREGAZIONE
-      Il client comunica (E, B) scelti, passi eseguiti, SoC iniziale e
-      FINALE, loss prima e dopo. Il server:
-        - verifica che (E, B) stiano nell'envelope: se no scarta l'update;
-        - addebita al mondo fisico il lavoro DICHIARATO (Fedavg._work_done);
-        - aggrega con la media pesata per i dati (FedAvg). FedNova, con tau_i
-          = passi dichiarati dal client, solo con fednova=True: era il
-          default fino al 30/10, tolto dopo le ablazioni (vedi server_app).
+    5. SCELTA FRESCA (_fresh_score)
+       Fra chi ha accettato il server tiene i migliori, tanti quanti i posti,
+       con lo stato APPENA riportato:
+           score_fresco = (a*SoC_ora + b*D + c*anzianita') * (1 - w_ora)
+       Un telefono in carica conta come SoC = 1 (il training non costa nulla
+       alla sua batteria); uno occupato pesa meno (nella deadline farebbe
+       meno passi). Gli altri che avevano accettato sono RINVIATI: tengono
+       l'anzianita' e sono in cima alla classifica del round dopo.
+       [B] il workload pesa solo qui, dove e' quello appena riportato e
+       quindi transitorio.
 
-    FASE 8 -- AGGIORNAMENTO DELLO STATO
-      SoC noto <- SoC finale riportato; k_i <- media mobile del rapporto fra
-      calo di SoC osservato e stima lineare; divergenza D_i dalla
-      distribuzione delle classi.
+    6. ENVELOPE E TRAINING LOCALE (_assign_work; client: client_policy.decide)
+           E in [E_lo, E_hi]   B in {batch ammessi}   + deadline, riserva
+       E_lo = epochs_min: sotto, l'update non porta segnale utile.
+       E_hi = min(epochs_cap_mult * E, vincolo di deadline, vincolo di energia):
+         deadline: E * t_epoca(B piu' veloce, w noto) <= T_round
+         energia:  E * dSoC_epoca <= SoC_noto - soc_min - dSoC_upload, con dSoC
+                   stimato LINEARMENTE (P*t/capacita') e corretto da un fattore
+                   k_i appreso dai consumi che il client riporta (passo 7).
+       B: le potenze di 2 fra batch_min e batch_max (16..128).
+       Il client rilegge SoC, workload e carica, misura la loss del modello sui
+       propri dati e sceglie E in proporzione a loss e batteria sopra la
+       riserva, B dal piu' piccolo (piu' passi di SGD nello stesso tempo). Se
+       nemmeno E_lo sta nella deadline fa i passi che ci stanno (lavoro
+       parziale); se nemmeno E_lo rispetta la riserva si ritira (opt-out).
+       Durante il training si ferma se finisce il budget energetico.
+       [B] con la potenza costante per tier l'energia per CAMPIONE cala al
+       crescere di B, quella per PASSO di SGD cresce: con la stessa energia
+       B = 16 fa molti piu' passi di B = 128. Le baseline restano a
+       batch_size = 128: parte del vantaggio di SAGE-smart in accuracy viene
+       da B (ablazione: FedAvg con B piccolo, results_sweepB*).
+       [B] il vincolo di energia e' volutamente LASCO: il server non conosce
+       il workload attuale ne' la curva vera della batteria. Il compito di
+       essere precisi e' del client.
 
-    LA BATTERIA DEI DEVICE e' quella del mondo (WorldState.battery): lineare,
-      Peukert o datasheet, etichette sage_smart_lin / _peuk / _nm. Il client
-      legge il proprio SoC e prevede il consumo con la propria batteria
-      (DeviceReading); il server la usa nella stima della Fase 2a. Il resto
-      dell'algoritmo (envelope, negoziazione, FedNova) e' identico nei tre
-      mondi: cambia SOLO la batteria montata sui device.
-      La colonna smart_soc_err (|SoC dichiarato - SoC vero|) vale ~0 in tutti
-      e tre i mondi: il client prevede con la stessa batteria che si scarica.
+    7. AGGREGAZIONE E AGGIORNAMENTI (aggregate_train, _on_round_result)
+       Il client comunica (E, B), passi eseguiti, SoC iniziale e FINALE, loss
+       prima e dopo, istogramma delle classi. Il server:
+         - scarta gli update fuori envelope e addebita al mondo fisico il
+           lavoro DICHIARATO (_work_done);
+         - fa la media FedAvg pesata per i dati; nei round con lavoro
+           parziale, pesata per i campioni visti davvero;
+         - aggiorna stato noto (SoC finale riportato), k_i, divergenza D_i e
+           anzianita' (a zero) di chi si e' allenato.
+
+    [B] LATE BINDING: la negoziazione avviene PRIMA di WorldState.begin_round,
+      che fa avanzare il workload e decide le ricariche: resta uno scarto fra
+      cio' che il client ha dichiarato e cio' che trova al training. Per
+      questo il client decide (E, B) al training, e puo' ancora ritirarsi.
+
+    INTERRUTTORI DELLE ABLAZIONI (smart-ablation in server_app, "+" fra piu'
+      componenti), tutti accesi di default:
+        stale_weight 0      nostale    niente anzianita'
+        forecast False      noest      SoC e workload dell'ultimo report
+        negotiation False   noneg      niente proposte: il modello va ai primi
+                                       della classifica (possono ancora
+                                       ritirarsi); torna il broadcast dello
+                                       stato per sapere chi e' raggiungibile
+        e5, b128                       E = 5 o B = 128 fissi (server_app)
+        partial_work False  nopartial  niente lavoro parziale
 
     COSA SA IL SERVER, E DA DOVE
-      Le decisioni della strategia usano solo: profili statici e tipo di
-      batteria (Fase 0), risposte alle proposte (Fase 2), metriche riportate
-      dai client (Fase 7). Il mondo fisico entra in due soli punti, entrambi
-      fuori dalle decisioni:
+      Le decisioni usano solo: profili statici e tipo di batteria (round 0),
+      risposte alle proposte (passo 4), metriche riportate dai client (passo
+      7). Il mondo fisico entra in due soli punti, fuori dalle decisioni:
         - `_device_record`: i SENSORI del device, allegati al messaggio per
           conto del device stesso (in un telefono vero li legge dall'OS);
-        - le colonne smart_soc_err e smart_info_err, che confrontano
-          dichiarato/stimato e vero: sono verifiche, non input.
+        - le colonne smart_soc_err, smart_info_err e smart_w_err, che
+          confrontano dichiarato/stimato e vero: sono verifiche, non input.
 
     PARAMETRI
       stale_weight, stale_max  peso (c) e scala dell'anzianita'
@@ -178,6 +203,8 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
       deadline_mult  scala della deadline sulla mediana nominale
       probe_samples  campioni per stimare la loss prima di decidere
       max_waves      ondate di proposte per round (1 = nessun rimpiazzo)
+      shortlist      proposte a shortlist * posti candidati (rosa)
+      load_tau_s     costante con cui il workload previsto torna alla media
       query_timeout_s  attesa massima delle risposte ai messaggi di controllo
       calib_alpha    peso della media mobile su k_i
     """
@@ -198,114 +225,26 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         calib_alpha: float = 0.3,
         batch_min: int = 16,
         batch_max: int = 64,
-        soc_source: str = "estimate",
+        forecast: bool = True,
         negotiation: bool = True,
-        fednova: bool = False,
-        refuse_deadline: bool = False,
-        refuse_load_only: bool = False,
-        partial_work: bool = False,
-        load_estimate: str = "last",
-        enroll_load: str = "max",
-        forecast: bool = False,
-        shortlist: float = 1.0,
-        proposal_nonresp: bool = False,
+        partial_work: bool = True,
+        shortlist: float = 1.5,
         load_tau_s: float = 450.0,
-        forecast_load_rank: bool = True,
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
-        # [B] 09/11, SAGE-smart 2 (spenti di default: tutte le etichette di
-        # prima restano identiche; li accende sage_smart2 in _shard.sh).
-        # L'idea e' quella di pagina 1 della proposta: il server PREVEDE
-        # l'utilita' di ogni client e la RETTIFICA quando lo contatta. Finora
-        # la negoziazione diceva solo SE un client partecipa (accetta/rifiuta)
-        # e la stima correggeva solo l'idle: nessuna delle due cambiava CHI
-        # veniva scelto (19.5 su 20 uguali). Qui decidono la scelta.
-        #   forecast True:   stima 2. Oltre all'idle, il SoC atteso tiene conto
-        #                    delle ricariche attese (stesso modello orario degli
-        #                    utenti, Ferreira 2011) e il workload atteso decade
-        #                    dall'ultimo valore riportato verso la media del
-        #                    client con costante load_tau_s. La classifica e'
-        #                    pesata per (1 - w atteso): il lavoro utile che il
-        #                    telefono puo' fare adesso per unita' di batteria.
-        #   shortlist > 1:   negoziazione 2. Le proposte vanno a una rosa di
-        #                    shortlist * k candidati; il server sceglie i k con
-        #                    lo stato FRESCO delle risposte (SoC, carica,
-        #                    workload). Chi accetta e non viene scelto non perde
-        #                    l'anzianita': e' rinviato, non escluso. Il client
-        #                    rifiuta solo per energia (niente dlload).
-        #   proposal_nonresp True: senza broadcast nessuno ha verificato chi e'
-        #                    raggiungibile: la frazione broadcast_nonresp dei
-        #                    contattati non risponde (proposta o modello), come
-        #                    nel broadcast. Va con broadcast spento ("nobcast").
-        # [B] 10/11, forecast_load_rank False (token "socfc"): previsione del
-        # solo SoC in classifica. La cumulata del 09/11 (beta 0.1) ha mostrato
-        # che pesare la classifica per (1 - w atteso) esclude per sempre i
-        # telefoni con la catena di workload "high": il w atteso tende alla
-        # loro media e non scende mai, quindi la penalita' (x0.79) colpisce
-        # anche l'anzianita' e non si recupera. Catena high scelta 21 volte
-        # contro 40, 4 telefoni mai scelti, -1.5 punti di accuratezza. Il carico
-        # resta solo nella scelta finale (_fresh_score), dove e' quello appena
-        # riportato e quindi transitorio: e' la parte che funziona.
         if shortlist < 1.0:
             raise ValueError(f"shortlist >= 1, non {shortlist}")
-        if shortlist > 1.0 and not negotiation:
-            raise ValueError("shortlist > 1 richiede la negoziazione")
-        if forecast and soc_source != "estimate":
-            raise ValueError("forecast richiede soc_source='estimate'")
         self.forecast = bool(forecast)
-        self.shortlist = float(shortlist)
-        self.proposal_nonresp = bool(proposal_nonresp)
-        self.load_tau_s = float(load_tau_s)
-        self.forecast_load_rank = bool(forecast_load_rank)
-        # [B] 19/10, ABLAZIONE (smart-ablation in server_app): i default sono
-        # SAGE-smart completo; ogni interruttore toglie un solo componente.
-        #   soc_source "report": il server usa l'ultimo SoC riportato, senza
-        #                        estrapolare l'idle (niente stima della Fase 2a)
-        #   negotiation False:   niente proposte (Fase 2b): il training va ai
-        #                        primi della classifica, che possono ancora
-        #                        ritirarsi dopo aver scaricato il modello
-        #   fednova False:       media pesata per i dati (FedAvg) al posto di
-        #                        FedNova
-        # [B] 05/11, dopo l'esperimento sul workload (spenti di default, cosi'
-        # le campagne fino alla v2 restano valide; li accende "plus" in
-        # server_app):
-        #   refuse_deadline True: nella proposta il client rifiuta anche se il
-        #                        lavoro minimo non sta nella deadline col suo
-        #                        workload attuale (client_policy.accepts_proposal)
-        #   load_estimate "mean": la stima del SoC estrapola l'idle col workload
-        #                        MEDIO riportato dal client, non con l'ultimo. A
-        #                        x3 l'ultimo, preso come costante per decine di
-        #                        minuti, dava 8.7 punti di errore contro i 5.3
-        #                        del report senza stima.
-        # [B] 06/11:
-        #   refuse_load_only True: con refuse_deadline, il client rifiuta per
-        #                        la deadline solo se a riposo ci starebbe
-        #                        (colpa del carico del momento); chi non ci sta
-        #                        nemmeno a riposo accetta come nella v2. Col
-        #                        solo refuse_deadline i telefoni lenti con
-        #                        molti dati rifiutavano sempre.
-        #   partial_work True:   al training chi non sta nella deadline nemmeno
-        #                        con E_lo fa i passi che ci stanno invece di
-        #                        lavorare in ritardo; nella media pesa per i
-        #                        campioni visti davvero (aggregate_train).
-        if refuse_load_only and not refuse_deadline:
-            raise ValueError("refuse_load_only richiede refuse_deadline")
-        if partial_work and fednova:
-            raise ValueError("partial_work non e' previsto con FedNova")
-        if soc_source not in ("estimate", "report"):
-            raise ValueError(f"soc_source: 'estimate' o 'report', non {soc_source!r}")
-        if load_estimate not in ("last", "mean"):
-            raise ValueError(f"load_estimate: 'last' o 'mean', non {load_estimate!r}")
-        if enroll_load not in ("max", "mean"):
-            raise ValueError(f"enroll_load: 'max' o 'mean', non {enroll_load!r}")
-        self.soc_source = soc_source
         self.negotiation = bool(negotiation)
-        self.fednova = bool(fednova)
-        self.refuse_deadline = bool(refuse_deadline)
-        self.refuse_load_only = bool(refuse_load_only)
         self.partial_work = bool(partial_work)
-        self.load_estimate = load_estimate
+        self.shortlist = float(shortlist)
+        self.load_tau_s = float(load_tau_s)
+        # [B] senza broadcast nessuno ha verificato chi e' raggiungibile: la
+        # frazione broadcast_nonresp dei contattati non risponde (proposta o
+        # modello). Il broadcast lo spegne server_app quando c'e' la
+        # negoziazione; resta solo nell'ablazione senza negoziazione (noneg).
+        self.proposal_nonresp = not self.broadcast
         self.stale_w = float(stale_weight)
         self.stale_max = int(stale_max)
         self.soc_min = float(soc_min)
@@ -323,38 +262,23 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         self.max_waves = max(1, int(max_waves))
         self.query_timeout_s = float(query_timeout_s)
         self.calib_alpha = float(calib_alpha)
-        # Fase 0: taglia dei dataset. Se manca, la si impara dalle risposte.
+        # Round 0: taglia dei dataset. Se manca, la si impara dalle risposte.
         self._n: dict[int, int] = {int(c): int(n) for c, n in
                                    (partition_sizes or {}).items()}
-        # [B] workload ignoto = caso peggiore (proposta, Fase 1): meglio
-        # proporre poco lavoro a un client che si scopre libero che troppo a
-        # uno che si scopre occupato. Segue workload-scale (04/11): a scale 1
-        # e' 0.30 come prima.
+        # ripiego se una risposta non riportasse il workload: il caso peggiore
+        # (segue workload-scale: a x1 e' 0.30)
         self.w_busy = self.world.workload.max_utilization()
-        # [B] 09/11, enroll_load: il workload che il server assume per un
-        # client che non ha ancora mai riportato il proprio (iscrizione).
-        #   "max"  il caso peggiore w_busy, come fino alla v2 e al plus3;
-        #   "mean" la media della POPOLAZIONE: media delle utilizzazioni
-        #          stazionarie delle tre catene, assegnate in parti uguali
-        #          (0.118 a x1). E' un dato aggregato, non del singolo client.
-        # Col massimo, a beta 1.0 (a = 0.9) chi non era mai contattato veniva
-        # stimato scaricarsi al carico massimo dal tempo 0, finiva in fondo alla
-        # classifica e non veniva piu' interrogato: 6 client mai scelti a x1
-        # (plus3), 26 a x3. Un errore ottimista lo corregge la prima proposta;
-        # uno pessimista non viene corretto mai.
-        self.enroll_load = enroll_load
-        if enroll_load == "mean":
-            wl = self.world.workload
-            self.w_enroll = (float(np.mean(list(stationary_utilization(wl.scale).values())))
-                             if wl.enabled else 0.0)
-        else:
-            self.w_enroll = self.w_busy
+        # carico assunto all'iscrizione: la media della POPOLAZIONE (vedi la
+        # docstring della classe, round 0)
+        wl = self.world.workload
+        self.w_enroll = (float(np.mean(list(stationary_utilization(wl.scale).values())))
+                         if wl.enabled else 0.0)
 
         self._last_seen: dict[int, int] = {}       # cid -> ultimo round scelto
         self._plan: dict[int, Envelope] = {}       # cid -> envelope del round
 
         # stato che il server tiene per ogni client: l'ultimo REPORT (cosa il
-        # client ha detto e quando) e lo stato NOTO (stima o report fresco)
+        # client ha detto e quando) e lo stato NOTO (previsione o report fresco)
         self._subscribed = False
         self._deadline_s: float = math.inf
         self._clock_s = 0.0                        # tempo simulato, inizio round
@@ -370,7 +294,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         self._k_cal: dict[int, float] = {}
         self._loss_known: dict[int, float] = {}
         # per round: vincolo che ha fissato E_hi, risposte dei client e costi
-        # della Fase 2
+        # della negoziazione
         self._bound: dict[int, str] = {}
         self._reports: dict[int, dict] = {}
         self._grid = None
@@ -380,76 +304,43 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         self._n_queried = 0
         self._n_refused = 0
         self._info_err = float("nan")
-        # SAGE-smart 2: workload atteso (classifica), rinviati, non raggiunti,
-        # attesa del timeout per chi non risponde, errore sul workload (verifica)
-        self._w_fc: dict[int, float] = {}
+        # rinviati, non raggiunti, attesa del timeout per chi non risponde,
+        # errore sul workload noto (verifica)
         self._n_deferred = 0
         self._n_noreply = 0
         self._extra_wait_s = 0.0
         self._w_err = float("nan")
 
     @property
-    def _smart2(self) -> bool:
-        """Almeno un componente di SAGE-smart 2 acceso: colonne in piu' nel CSV."""
-        return self.forecast or self.shortlist > 1.0 or self.proposal_nonresp
+    def _protocol_cols(self) -> bool:
+        """Previsione, negoziazione o niente broadcast: colonne in piu' nel CSV
+        (rinviati, non raggiunti, errore sul workload). Spente solo nei
+        gradini delle cumulate senza stima e senza negoziazione, che cosi'
+        hanno le colonne di prima."""
+        return self.forecast or self.negotiation or self.proposal_nonresp
 
     @property
     def variant(self) -> str:
-        off = [name for name, on in (("stima SoC", self.soc_source == "estimate"),
-                                     ("negoziazione", self.negotiation)) if not on]
-        on = [name for name, flag in (("FedNova", self.fednova),
-                                      ("rifiuto per deadline" + (" (solo se colpa del carico)"
-                                                                 if self.refuse_load_only else ""),
-                                       self.refuse_deadline),
-                                      ("lavoro parziale", self.partial_work),
-                                      ("workload medio", self.load_estimate == "mean"),
-                                      (f"workload medio all'iscrizione ({self.w_enroll:.3f})",
-                                       self.enroll_load == "mean"),
-                                      (f"previsione di SoC (ricariche attese) e workload "
-                                       f"(tau {self.load_tau_s:g} s)",
-                                       self.forecast and self.forecast_load_rank),
-                                      ("previsione del solo SoC in classifica (ricariche "
-                                       "attese e consumo; workload solo nella scelta finale)",
-                                       self.forecast and not self.forecast_load_rank),
-                                      (f"rosa di {self.shortlist:g} k scelta sullo stato fresco",
-                                       self.shortlist > 1.0),
-                                      ("senza broadcast, non risposte sulle proposte",
-                                       self.proposal_nonresp))
-              if flag]
-        # [B] dal 30/10 FedNova e' spento di default: si segnala quando e' acceso
+        off = [name for name, on in (
+            ("anzianita'", self.stale_w > 0),
+            ("previsione del SoC", self.forecast),
+            ("negoziazione (broadcast dello stato)" if self.broadcast else "negoziazione",
+             self.negotiation),
+            ("lavoro parziale", self.partial_work)) if not on]
         return (f"sage-smart-{self.world.battery}"
-                + (f" CON {', '.join(on)}" if on else "")
                 + (f" SENZA {', '.join(off)}" if off else ""))
 
     def configure_train(self, server_round, arrays, config, grid):
-        # la griglia serve alla Fase 2 per i messaggi di controllo, che
+        # la griglia serve alla negoziazione per i messaggi di controllo, che
         # partono dentro _select_clients prima dei messaggi di training
         self._grid = grid
         return super().configure_train(server_round, arrays, config, grid)
 
     def _round_overhead_s(self) -> float:
-        # negoziazione + broadcast dello stato (se attivo, vedi PhysicalFedAvg)
+        # negoziazione + broadcast dello stato (solo con noneg, vedi PhysicalFedAvg)
         return self._overhead_s + super()._round_overhead_s()
 
-    def _broadcast_targets(self, available: list[int], server_round: int) -> list[int]:
-        """Nota 3 del documento: col broadcast limitato (broadcast_top_m > 0)
-        si chiede lo stato ai soli primi M per punteggio, calcolato con la
-        stima del server (Fase 2a). M >= k, altrimenti non si riempie il
-        round."""
-        if self.bcast_top_m <= 0 or self.bcast_top_m >= len(available):
-            return list(available)
-        self._refresh_state(available)
-        cid_of = self._node_to_cid
-        score = {
-            n: self.a * self._resource(cid_of[n])
-            + self.b * self._divergence(cid_of[n])
-            + self.stale_w * self._staleness(cid_of[n], server_round)
-            for n in available
-        }
-        m = max(self.bcast_top_m, self.k_per_round)
-        return sorted(available, key=lambda n: -score[n])[:m]
-
-    # ===================================================== Fase 0 e Fase 2
+    # ========================================== round 0 e passo 1: lo stato
     def _sensor_soc(self, cid: int) -> float:
         """SoC che il device legge dalla propria batteria."""
         return float(self.world.snapshot(cid).soc)
@@ -458,9 +349,9 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         """Iscrizione: dati statici e SoC iniziale di ogni client."""
         cids = list(self._node_to_cid.values())
         for c in cids:
-            # il primo "report" e' l'iscrizione, al tempo 0, workload ignoto
-            # (non entra nella media dei workload: non e' una lettura vera).
-            # [B] 09/11: il workload assunto e' w_enroll (vedi enroll_load)
+            # il primo "report" e' l'iscrizione, al tempo 0, col workload medio
+            # della popolazione (non entra nella media dei workload del client:
+            # non e' una lettura vera)
             self._record(c, self._sensor_soc(c), self.w_enroll, False, 0.0,
                          measured=False)
             self._k_cal[c] = 1.0
@@ -489,42 +380,8 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         self._soc_known[cid], self._w_known[cid] = float(soc), float(w)
         self._chg_known[cid] = bool(chg)
 
-    def _estimate(self, cid: int) -> float:
-        """Fase 2a: SoC estrapolato dall'ultimo report col consumo di idle.
-
-            SoC_est = SoC_rep - dSoC_batteria(P_idle(w_rep), dt)
-
-        con la batteria del device (dato statico dell'iscrizione). [B] senza
-        k_i: k_i e' calibrato sul training lineare, qui la batteria e' gia'
-        quella giusta. L'idle e' integrato a passi di al piu'
-        _ESTIMATE_STEP_S, come lo scarica il mondo round per round: con la
-        batteria da datasheet il calo dipende dal SoC, un passo unico su un
-        dt lungo lo sbaglierebbe.
-        In carica al momento del report: si assume invariato, perche' non si
-        sa quando la carica finisce (stima prudente, la carica lo alzerebbe).
-        """
-        soc = self._soc_rep[cid]
-        # ablazione: l'ultimo report cosi' com'e', anche se vecchio di molti round
-        if self.soc_source == "report" or self._chg_rep.get(cid, False):
-            return soc
-        dt = max(0.0, self._clock_s - self._t_rep.get(cid, 0.0))
-        if dt <= 0.0:
-            return float(soc)
-        w = self._w_rep.get(cid, self.w_enroll)
-        if self.load_estimate == "mean" and self._w_cnt.get(cid):
-            # media dei workload riportati: su un intervallo di decine di
-            # minuti il workload cambia stato, l'ultimo valore non dura
-            w = self._w_sum[cid] / self._w_cnt[cid]
-        prof = self.world.profile(cid)
-        p_idle = idle_power_w(prof, w)
-        n = max(1, math.ceil(dt / _ESTIMATE_STEP_S))
-        for _ in range(n):
-            soc = max(0.0, soc + battery_delta_soc(self.world.battery, p_idle,
-                                                   dt / n, prof, soc))
-        return float(min(1.0, soc))
-
     def _forecast(self, cid: int) -> tuple[float, float]:
-        """SAGE-smart 2, Fase 2a: SoC e workload ATTESI adesso.
+        """Passo 1: SoC e workload ATTESI adesso.
 
             w(t)   = w_med + (w_rep - w_med) * exp(-(t - t_rep) / tau)
             SoC(t) = valore atteso su tre rami, a passi di _ESTIMATE_STEP_S:
@@ -536,13 +393,15 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         a ogni passo, la frazione p = 1 - exp(-lambda (1 - SoC) dt): e' il
         modello orario degli utenti (Ferreira 2011), un dato di POPOLAZIONE
         che il server conosce come conosce la batteria del device. Un client
-        in carica all'ultimo report resta in carica fino al 100%.
+        in carica all'ultimo report resta in carica fino al 100%. L'idle e'
+        integrato a passi di al piu' _ESTIMATE_STEP_S, come lo scarica il mondo
+        round per round: con la batteria da datasheet il calo dipende dal SoC.
 
-        [B] PERCHE'. La stima di prima scaricava sempre e non ricaricava mai:
-        un client non contattato da ore scendeva in classifica anche se nel
-        frattempo, in media, aveva ricaricato (+2 punti l'ora a SoC 0.6). E il
-        workload restava l'ultimo valore per sempre, mentre dopo 5 round lo
-        stato e' lo stesso solo nel 51% dei casi.
+        [B] PERCHE'. Una stima che scarica sempre e non ricarica mai fa
+        scendere in classifica un client non contattato da ore anche se nel
+        frattempo, in media, ha ricaricato (+2 punti l'ora a SoC 0.6). E un
+        workload fermo all'ultimo valore sbaglia: dopo 5 round lo stato e' lo
+        stesso solo nel 51% dei casi.
         """
         soc0 = float(self._soc_rep[cid])
         dt = max(0.0, self._clock_s - self._t_rep.get(cid, 0.0))
@@ -583,14 +442,14 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         return float(min(1.0, max(0.0, soc))), float(w_now)
 
     def _refresh_state(self, available: list[int]) -> None:
-        """Fase 2a: lo stato con cui il server ordina i client."""
+        """Passo 1: lo stato con cui il server ordina i client."""
         for c in self._node_to_cid.values():
             if self.forecast:
-                soc, w = self._forecast(c)
-                self._soc_known[c], self._w_known[c] = soc, w
-                self._w_fc[c] = w
+                self._soc_known[c], self._w_known[c] = self._forecast(c)
             else:
-                self._soc_known[c] = self._estimate(c)
+                # ablazione noest: l'ultimo report cosi' com'e', anche se
+                # vecchio di molti round
+                self._soc_known[c] = self._soc_rep[c]
                 self._w_known[c] = self._w_rep[c]
             self._chg_known[c] = self._chg_rep[c]
         # [B] verifica, non input: quanto lo stato noto si discosta da quello
@@ -599,24 +458,24 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         if pool:
             self._info_err = float(np.mean(
                 [abs(self._soc_known[c] - self._sensor_soc(c)) for c in pool]))
-            if self._smart2:
+            if self._protocol_cols:
                 self._w_err = float(np.mean(
                     [abs(self._w_known[c] - self.world.workload.utilization(c))
                      for c in pool]))
 
     def _propose(self, nodes: list[int],
                  envs: dict[int, Envelope]) -> dict[int, Message]:
-        """Fase 2b: proposte (MessageType.QUERY) e lettura delle risposte.
+        """Passo 4: proposte (MessageType.QUERY) e lettura delle risposte.
 
         Le risposte aggiornano subito lo stato noto. Il costo energetico NON
         si addebita qui: dipende da chi verra' selezionato (sessione radio
         condivisa col download del modello o no), vedi _charge_control.
         """
         if self.proposal_nonresp:
-            # [B] SAGE-smart 2 senza broadcast: nessuno ha verificato prima chi
-            # e' raggiungibile. La frazione broadcast_nonresp non riceve la
-            # proposta (fuori copertura, spento), come nel broadcast: non paga
-            # nulla, non risponde, e l'ondata si chiude al timeout.
+            # [B] senza broadcast nessuno ha verificato prima chi e'
+            # raggiungibile. La frazione broadcast_nonresp non riceve la
+            # proposta (fuori copertura, spento): non paga nulla, non risponde,
+            # e l'ondata si chiude al timeout.
             lost = {n for n in nodes if self._bcast_rng.random() < self.bcast_nonresp}
             if lost:
                 self._n_noreply += len(lost)
@@ -675,21 +534,22 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         return int(np.median(list(self._n.values()))) if self._n else None
 
     def _batch_for(self, cid: int) -> int:
-        """B preferito: il piu' piccolo dell'envelope (FASE 4 nella docstring
+        """B preferito: il piu' piccolo dell'envelope (passo 6 nella docstring
         della classe). Il B effettivo lo sceglie il client e lo dichiara."""
         return int(self.batch_choices[0])
 
     def _staleness(self, cid: int, server_round: int) -> float:
         """Round dall'ultima selezione, normalizzati su stale_max.
 
-        Chi non e' mai stato scelto ha anzianita' massima dal primo round:
-        e' il modo per provarlo invece di escluderlo per sempre.
+        Chi non e' mai stato scelto conta come scelto al round 0: la sua
+        anzianita' cresce dal primo round come quella degli altri, e lo porta
+        in classifica invece di escluderlo per sempre.
         """
         last = self._last_seen.get(cid)
         age = server_round if last is None else server_round - last
         return float(min(1.0, age / max(1, self.stale_max)))
 
-    # ============================================================ Fase 3
+    # ========================================================= passi 2-5
     def _select_clients(
         self, available: list[int], k: int, server_round: int
     ) -> list[int]:
@@ -724,12 +584,6 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
             + self.stale_w * self._staleness(cid_of[n], server_round)
             for n in pool
         }
-        if self.forecast and self.forecast_load_rank:
-            # [B] SAGE-smart 2: pesato per il lavoro utile atteso adesso,
-            # 1 - w atteso (a parita' di potenza un telefono occupato al 30%
-            # fa il 30% di passi in meno nella deadline e paga di piu' ogni passo)
-            score = {n: s * (1.0 - self._w_fc.get(cid_of[n], self.w_enroll))
-                     for n, s in score.items()}
 
         prob = pulp.LpProblem("SAGE_Smart_Select", pulp.LpMaximize)
         y = [pulp.LpVariable(f"y_{i}", cat="Binary") for i in range(m)]
@@ -746,19 +600,16 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
             return []
 
         # [B] l'ILP con soli vincoli di cardinalita' sceglie i top per score:
-        # la prima ondata di proposte e' esattamente la sua scelta, i
-        # rimpiazzi sono i successivi nella stessa classifica
+        # le proposte scorrono la stessa classifica
         ranking = sorted(pool, key=lambda n: -score[n])
-        if self.negotiation and self.shortlist > 1.0:
+        if self.negotiation:
             selected = self._negotiate_pick(ranking, len(selected), server_round)
-        elif self.negotiation:
-            selected = self._negotiate(ranking, len(selected), server_round)
         else:
-            # ablazione: la prima ondata senza chiedere, nessun rimpiazzo e
-            # nessuno scambio di controllo (waves = 0, overhead 0)
+            # ablazione noneg: i primi della classifica senza chiedere, nessun
+            # rimpiazzo e nessuno scambio di controllo (waves = 0, overhead 0)
             selected = ranking[:len(selected)]
             if self.proposal_nonresp:
-                # [B] SAGE-smart 2 senza broadcast e senza proposte: chi non e'
+                # [B] senza broadcast e senza proposte: chi non e'
                 # raggiungibile non riceve il modello e il suo posto resta
                 # vuoto (il round dura comunque fino alla deadline)
                 lost = {n for n in selected
@@ -788,11 +639,11 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
             float(np.mean(E)), never, self._n_queried, self._n_refused,
             self._waves,
             (f" | rinviati {self._n_deferred}, non raggiunti {self._n_noreply}, "
-             f"errore w {self._w_err:.3f}") if self._smart2 else "")
+             f"errore w {self._w_err:.3f}") if self._protocol_cols else "")
         return selected
 
     def _fresh_score(self, cid: int, server_round: int) -> float:
-        """SAGE-smart 2: lo score con lo stato APPENA riportato dal client.
+        """Passo 5: lo score con lo stato APPENA riportato dal client.
 
         Stessa forma della classifica, ma con SoC, carica e workload della
         risposta alla proposta: un telefono in carica conta come pieno (la
@@ -806,16 +657,15 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
 
     def _negotiate_pick(self, ranking: list[int], slots: int,
                         server_round: int) -> list[int]:
-        """SAGE-smart 2, Fase 2b: rosa piu' larga dei posti, scelta sullo
-        stato fresco.
+        """Passi 4-5: rosa piu' larga dei posti, scelta sullo stato fresco.
 
-        Ondata 1: proposte ai primi ceil(shortlist * slots) della classifica
-        (stima). Chi accetta entra nella rosa; chi rifiuta (solo per energia)
-        perde l'anzianita' come prima; chi non risponde non e' raggiungibile
-        e non conta come contatto. Se i posti non sono coperti, ondata 2 coi
-        successivi, ancora shortlist volte quelli che mancano. Poi il server
-        sceglie i `slots` migliori per _fresh_score: gli altri della rosa sono
-        RINVIATI, tengono l'anzianita' e restano in cima al round dopo.
+        Ondata 1: proposte ai primi ceil(shortlist * slots) della classifica.
+        Chi accetta entra nella rosa; chi rifiuta (solo per energia) perde
+        l'anzianita'; chi non risponde non e' raggiungibile e non conta come
+        contatto. Se i posti non sono coperti, ondata 2 coi successivi, ancora
+        shortlist volte quelli che mancano. Poi il server sceglie i `slots`
+        migliori per _fresh_score: gli altri della rosa sono RINVIATI, tengono
+        l'anzianita' e restano in cima al round dopo.
         """
         cid_of = self._node_to_cid
         accepted: list[int] = []
@@ -837,6 +687,8 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
                     accepted.append(n)
                 else:
                     self._n_refused += 1
+                    # [B] contattato: l'anzianita' riparte da zero, cosi' non
+                    # torna in testa alla classifica al round successivo
                     self._last_seen[cid_of[n]] = server_round
             need = slots - len(accepted)
         picked = sorted(accepted,
@@ -844,54 +696,18 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         self._n_deferred = len(accepted) - len(picked)
         return picked
 
-    def _negotiate(self, ranking: list[int], slots: int,
-                   server_round: int) -> list[int]:
-        """Fase 2b: proposte ai candidati, rifiuti rimpiazzati.
-
-        Ondata 1: i primi `slots` della classifica. Ondata i: tanti nuovi
-        candidati quanti rifiuti nell'ondata precedente, scorrendo la
-        classifica. Al massimo `max_waves` ondate: oltre, il round parte con
-        meno client (il costo di un'altra ondata e' una sessione radio per
-        candidato e un altro ritardo sul round).
-        """
-        cid_of = self._node_to_cid
-        accepted: list[int] = []
-        asked: set[int] = set()
-        while len(accepted) < slots and self._waves < self.max_waves:
-            batch = [n for n in ranking if n not in asked][: slots - len(accepted)]
-            if not batch:
-                break
-            self._waves += 1
-            asked.update(batch)
-            envs = {cid_of[n]: self._assign_work(cid_of[n]) for n in batch}
-            replies = self._propose(batch, envs)
-            for n in batch:
-                r = replies.get(n)
-                if r is not None and int(self._rep(r, "smart-accept", 0)) == 1:
-                    accepted.append(n)
-                elif r is None and self.proposal_nonresp:
-                    # [B] SAGE-smart 2 senza broadcast: non raggiunto, ne'
-                    # rifiuto ne' contatto (come in _negotiate_pick)
-                    continue
-                else:
-                    self._n_refused += 1
-                    # [B] contattato: l'anzianita' riparte da zero, cosi' non
-                    # torna in testa alla classifica al round successivo
-                    self._last_seen[cid_of[n]] = server_round
-        return accepted
-
     def _mark_half(self, selected: list[int]) -> None:
         """Disattivata: le mezze epoche di SAGE qui non servono, la riduzione
         del lavoro per batteria scarica la decide il client."""
         self._half = set()
 
-    # ============================================================ Fase 4
+    # ============================================================ passo 6
     def _batches_for(self, cid: int) -> tuple[int, ...]:
         """Taglie di batch dell'envelope, dalla piu' piccola (preferita)."""
         return self.batch_choices
 
     def _assign_work(self, cid: int) -> Envelope:
-        prof = self.world.profile(cid)          # statico: dalla Fase 0
+        prof = self.world.profile(cid)          # statico: dal round 0
         batches = self._batches_for(cid)
         b_ref = self._batch_for(cid)
         peff = effective_profile(prof, self._w_known.get(cid, self.w_enroll))
@@ -928,8 +744,6 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
             deadline_s=float(self._deadline_s) if math.isfinite(self._deadline_s)
             else 1e12,
             soc_min=float(self.soc_min), probe_samples=self.probe_samples,
-            refuse_deadline=self.refuse_deadline,
-            refuse_load_only=self.refuse_load_only,
             partial_work=self.partial_work,
         )
 
@@ -959,7 +773,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         rec["dataset-size"] = int(self._n_of(cid) or 0)
         return ConfigRecord(rec)
 
-    # ============================================================ Fase 7
+    # ============================================================ passo 7
     def _rep(self, reply: Message, key: str, default=None):
         return self._metric(reply, key, default=default)
 
@@ -1022,12 +836,11 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         return out
 
     def _steps(self, reply: Message) -> float:
-        """tau_i di FedNova: i passi che il client dichiara di aver fatto."""
+        """Passi di SGD dichiarati dal client (colonne tau_* del CSV)."""
         if self._is_optout(reply):
             return 0.0
         return float(self._rep(reply, "smart-steps", 0))
 
-    # ============================================================ Fase 8
     def _on_round_result(
         self, cid: int, n_ex: int, dt_s: float, e_wh: float, e_lin_wh: float,
         reply: Message, server_round: int,
@@ -1045,7 +858,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
 
         # report del client, con l'istante in cui e' stato fatto: fine del
         # suo training e upload, dopo il ritardo iniziale del round. Da qui
-        # partono le stime dei round successivi (Fase 2a).
+        # partono le previsioni dei round successivi (passo 1).
         self._record(cid, soc1, w, chg, self._clock_s + self._overhead_s + dt_s)
         if n_ex > 0:
             self._n[cid] = int(n_ex)
@@ -1122,7 +935,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
             "smart_soc_err": float(max((r["soc_err"] for r in rep), default=0.0)),
             "smart_mean_k": mean(list(self._k_cal.values())),
             "smart_deadline_s": float(self._deadline_s),
-            # Fase 2: qualita' e costo dello stato usato per selezionare
+            # passi 1 e 4: qualita' e costo dello stato usato per selezionare
             "smart_info_err": float(self._info_err),
             "smart_n_queried": int(self._n_queried),
             "smart_n_refused": int(self._n_refused),
@@ -1130,11 +943,11 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
             "smart_overhead_s": float(self._overhead_s),
         }
         if self.partial_work:
-            # [B] solo con il lavoro parziale: le altre run hanno le colonne di prima
+            # [B] solo con il lavoro parziale (nopartial ha le colonne di prima)
             st["smart_n_partial"] = int(sum(1 for r in done if r.get("partial")))
-        if self._smart2:
-            # [B] solo SAGE-smart 2: rinviati (accettato ma non scelto), non
-            # raggiunti senza broadcast, errore medio del workload noto (verifica)
+        if self._protocol_cols:
+            # [B] rinviati (accettato ma non scelto), non raggiunti senza
+            # broadcast, errore medio del workload noto (verifica)
             st["smart_n_deferred"] = int(self._n_deferred)
             st["smart_n_noreply"] = int(self._n_noreply)
             st["smart_w_err"] = float(self._w_err)
@@ -1148,50 +961,27 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
             st["smart_info_err"])
         return st
 
-    # -------------------------------------------------- aggregazione FedNova
+    # ------------------------------------------------------- aggregazione
     def aggregate_train(self, server_round, replies):
-        """Aggregazione step-normalized (FedNova, Wang et al. NeurIPS 2020).
+        """Media FedAvg pesata per i dati; col lavoro parziale, per i campioni
+        visti davvero.
 
-            w_i     = p_i = |d_i| / |D|          peso dai soli dati
-            tau_i   = passi di gradiente DICHIARATI dal client
-            tau_eff = sum_i p_i * tau_i          passi efficaci
-            x <- x + tau_eff * sum_i p_i * (Delta_i / tau_i)
-
-        La divisione per tau_i e' la normalizzazione: sottopesa chi ha fatto
-        piu' passi. tau_eff davanti evita che il passo globale si rimpicciolisca
-        per effetto della divisione.
-
-        [B] QUANDO tau E' UGUALE PER TUTTI QUESTA E' ESATTAMENTE FedAvg:
-        tau_eff = tau e la formula si riduce alla media pesata per p_i.
-
-        [B] tau DIPENDE ANCHE DA n_i, non solo da E e B. Con partizioni
-        Dirichlet n varia di 4-5 volte, quindi la distorsione esiste anche a
-        E e B fissi: FedAvg standard e' gia' sbilanciato nelle baseline, e i
-        paper originali non lo correggono. Qui serve perche' (E, B) variano
-        per client per costruzione.
-
-        [B] CIO' CHE CONTA E' LA DISPERSIONE DI tau, NON IL SUO VALORE.
-        L'update di ogni client viene moltiplicato per tau_eff/tau_i: il
-        client con tau minimo e' amplificato di quel rapporto. Nella versione
-        con (E, B) assegnati dal server, un client collegato alla rete
-        riceveva le epoche massime a prescindere dai suoi dati e arrivava a
-        tau=390 contro i 13 degli altri; l'update del client marginale pesava
-        trenta volte quello del client in carica e l'accuratezza globale
-        crollava da 0.50 a 0.14 finche' quel device restava in carica. Da qui
-        la deadline nell'envelope e la colonna tau_spread, la grandezza da
-        sorvegliare.
-
-        [B] tau_i e' quello DICHIARATO dal client, non ricostruito da E e B:
-        con l'early stopping (Fase 6) il client puo' fermarsi a meta' epoca.
-
-        [B] BATCHNORM FUORI DA FEDNOVA. running_mean, running_var e
-        num_batches_tracked non sono passi di gradiente: normalizzarli per
-        tau e rimoltiplicarli per tau_eff li ESTRAPOLA (la somma dei fattori
-        tau_eff * sum_i p_i / tau_i e' > 1 appena i tau differiscono) oltre i
-        valori di qualsiasi client. Il 14/10, col B dinamico 16-256 (spread
-        15-16), il fastTest di SAGE-smart e' collassato dal round 1: accuracy
-        0.10, loss 9-11. Le statistiche si mediano come in FedAvg (pesi p_i);
-        FedNova resta sui soli parametri allenabili.
+        La media per i dati la fa super() (PhysicalFedAvg) sulle reply di
+        _aggregatable (senza opt-out e fuori envelope), BatchNorm compresa.
+        Qui si aggiungono:
+          - le colonne della policy nel CSV (_policy_stats);
+          - le colonne tau_* coi passi di SGD dichiarati dai client
+            (tau_min, tau_max, tau_eff = media pesata per i dati, tau_spread
+            = max/min): solo diagnostica, nessun effetto sulla media;
+          - [B] 06/11 LAVORO PARZIALE: nei round in cui qualcuno ha fatto meno
+            di un'epoca, la media e' pesata per i campioni visti davvero,
+            min(n, passi * B), invece che per n: un update da meta' dati non
+            deve pesare come uno da tutti. Negli altri round resta la media di
+            super(), identica.
+        [B] 16/11: FedNova (normalizzazione per i passi, Wang et al. NeurIPS
+        2020) tolto. Era spento dal 30/10: contributo esterno, e nelle due
+        ablazioni la media pesata per i dati andava uguale o meglio (FedNova
+        -0.9 / -1.0 punti).
         """
         arrays, metrics = super().aggregate_train(server_round, replies)
         # il server sa quanto e' durato il round: ha aspettato le risposte
@@ -1213,9 +1003,8 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         # global_evaluate non li riconosce. Leggere per chiave garantisce anche
         # lo stesso ordine fra record globale e locali.
         keys = list(self._global_arrays.keys())
-        glob = [self._global_arrays[k].numpy().astype(np.float64) for k in keys]
         rows = []
-        wts = []        # campioni visti davvero (smart-weight), solo col lavoro parziale
+        wts = []        # campioni visti davvero (smart-weight), per il lavoro parziale
         # stesse reply che super() ha mediato: senza opt-out e fuori envelope
         for r in self._aggregatable(replies):
             if not r.has_content():
@@ -1237,68 +1026,31 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         tot = sum(n for n, _, _ in rows)
         p = [n / tot for n, _, _ in rows]
         tau_eff = sum(pi * tau for pi, (_, tau, _) in zip(p, rows))
-
-        # statistiche di BatchNorm: media pesata per i dati, come FedAvg
-        is_bn = [k.endswith(("running_mean", "running_var", "num_batches_tracked"))
-                 for k in keys]
-        out = [g.copy() for g in glob]
-        for j in range(len(keys)):
-            if is_bn[j]:
-                # [B] np.asarray + reshape: num_batches_tracked e' un array a 0
-                # dimensioni, e sum() lo degraderebbe a scalare numpy, che
-                # flwr.app.Array rifiuta (crash del fastTest del 14/10)
-                out[j] = np.asarray(
-                    sum(pi * w[j].astype(np.float64) for pi, (_, _, w) in zip(p, rows)),
-                    dtype=np.float64,
-                ).reshape(glob[j].shape)
-        # parametri allenabili: FedNova
-        for pi, (_, tau, w) in zip(p, rows):
-            for j, wj in enumerate(w):
-                if not is_bn[j]:
-                    out[j] += tau_eff * pi * (wj.astype(np.float64) - glob[j]) / tau
-
         taus = [tau for _, tau, _ in rows]
         self._round_stats.setdefault(int(server_round), {}).update({
             "tau_min": int(min(taus)),
             "tau_max": int(max(taus)),
             "tau_eff": float(tau_eff),
-            # rapporto di amplificazione del client marginale: sopra ~6-8
-            # l'aggregazione comincia a essere dominata da un solo update
             "tau_spread": float(max(taus) / max(1.0, min(taus))),
         })
+        log(INFO, "round %s: FedAvg su %s client | tau %s-%s, tau_eff %.1f, "
+            "spread %.1f", server_round, len(rows), int(min(taus)),
+            int(max(taus)), tau_eff, max(taus) / max(1.0, min(taus)))
 
-        log(INFO, "round %s: %s su %s client | tau %s-%s, tau_eff %.1f, "
-            "spread %.1f", server_round, "FedNova" if self.fednova else "FedAvg",
-            len(rows), int(min(taus)), int(max(taus)), tau_eff,
-            max(taus) / max(1.0, min(taus)))
         if self.partial_work and any(w < n for w, (n, _, _) in zip(wts, rows)):
-            # [B] 06/11 LAVORO PARZIALE: media pesata per i campioni VISTI,
-            # min(n, passi * B), invece che per n. Cambia solo il peso di chi
-            # ha fatto meno di un'epoca (un update da meta' dati non deve pesare
-            # come uno da tutti); nei round senza lavoro parziale resta la media
-            # di super(), identica. BatchNorm mediata allo stesso modo.
             tot_w = sum(wts)
             q = [w / tot_w for w in wts]
             merged = ArrayRecord()
             for j, k in enumerate(keys):
+                ref = self._global_arrays[k].numpy()
                 avg = np.asarray(sum(qi * row[2][j].astype(np.float64) for qi, row in zip(q, rows)),
-                                 dtype=np.float64).reshape(glob[j].shape)
-                dt = self._global_arrays[k].numpy().dtype
-                if np.issubdtype(dt, np.integer):
+                                 dtype=np.float64).reshape(ref.shape)
+                if np.issubdtype(ref.dtype, np.integer):
                     avg = np.rint(avg)
-                merged[k] = Array(avg.astype(dt))
+                merged[k] = Array(avg.astype(ref.dtype))
             self._round_stats.setdefault(int(server_round), {}).update({
                 "smart_weight_frac": float(tot_w / sum(n for n, _, _ in rows)),
             })
             return merged, metrics
 
-        if not self.fednova:
-            # ablazione: la media pesata per i dati di super(), sulle stesse
-            # reply (BatchNorm compresa, mediata allo stesso modo); le colonne
-            # tau_* restano nel CSV per confronto
-            return arrays, metrics
-
-        merged = ArrayRecord()
-        for k, o in zip(keys, out):
-            merged[k] = Array(o.astype(np.float32))
-        return merged, metrics
+        return arrays, metrics

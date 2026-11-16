@@ -1,6 +1,30 @@
 COSE DA FARE - stato al 03/11/2026
 ==================================
 
+[16/11] SAGE-smart 2 E' L'UNICO SAGE-SMART (chiesto dall'utente), si chiama
+"SAGE-smart" e basta. sage_smart_{lin,peuk,nm} = ex sage_smart2_socfc, senza
+token: fra i tre cambia solo la batteria dei device.
+  - sage_smart.py: tolti negoziazione 1, stima solo idle, loadavg, rifiuto per
+    deadline (dlrefuse/dlload, anche in client_policy), previsione con 1 - w
+    in classifica, FedNova, carico massimo all'iscrizione, broadcast ai primi
+    M. Interruttori rimasti (spengono): nostale, noest, noneg (torna il
+    broadcast), e5, b128, nopartial. Le funzioni del percorso di SAGE-smart
+    hanno lo stesso AST di prima: sage_smart nuovo = socfc.
+  - _shard.sh: sage_smart, leave-one-out sage_smart_<token>, cumulata coi
+    nomi vecchi (cum0, cum1, cum2p, pcum4, sage_smart2_nofc/_rev2/_rev3,
+    sage_smart2_socfc = sage_smart). Uguali alle run fatte: nofc, rev2, rev3,
+    socfc; cum0 e cum1 cambiano solo il carico all'iscrizione (ininfluente con
+    E = 5 fisso); cum2p e pcum4 NO (l'utente: la cumulata si rifa' tutta).
+  - experiment.toml: plus4 -> sage_smart_*, nome campagna invariato.
+  DA FARE:
+  - prima di rilanciare la campagna: cancellare i sage_smart_* vecchi (e i
+    plus4) dalla cartella v2, poi fastTest di sage_smart_nm.
+  - ablation.sh definitivo (l'utente lo vuole dopo); ablation_cum.sh e
+    workload_sweep.sh elencano ancora etichette tolte (cum2, cum3, pcum5,
+    plus*, noinfo, sage_smart2): danno "etichetta sconosciuta, salto".
+  - broadcast_top_m non lo usa piu' nessuno: togliere da run.sh, pyproject,
+    experiment.toml, fedavg.py, server_app. check_fasttest: avviso FedNova.
+
 A. RUN SULLA GPU 2 DI CORINNA (in quest'ordine)
 -----------------------------------------------
 
@@ -338,6 +362,18 @@ Numeri dell'introduzione aggiornati con la v2.
      1-1.7 punti e 130 s). Etichette sage_smart2_rev2 (cum1 + negoz. + stima,
      E 5 e B 128 fissi) e sage_smart2_rev3 (+ E adattivo col parziale); il 4
      e' socfc. 2 run. Figura: fig_cumulative_ablation_smart2_reverse.png.
+     RISULTATO (beta 0.1, seed 2026): l'ordine NON cambia niente.
+       negoz.+stima    diritto 53.4 -> 52.0, 1117 Wh, morti 5 -> 3
+                       inverso 45.6 -> 45.7, 1999 -> 2007 Wh, morti 32 -> 32
+       E adattivo      diritto -3.7 punti, inverso -4.3; energia -44% in entrambi
+       B adattivo      diritto +11.5, inverso +10.6
+     Nell'ordine inverso negoz.+stima non toglie morti: con E 5 e B 128 i round
+     durano 375 s, la run 26 h, e i telefoni muoiono per le altre app (idle
+     1092 Wh contro 730 di training; i morti si sono allenati 13 volte, i vivi
+     53). Il rifiuto protegge solo dal training. Effetti costanti nei due
+     ordini: controllo 9-10 -> 1 Wh, errore SoC giu' (4.1 -> 3.0 / 0.96 ->
+     0.52), piu' telefoni in carica scelti (0.29 -> 0.72 / 1.18 -> 1.43 per
+     round), SoC finale +2.9 / +0.9 punti.
      Da decidere: in campagna 6' (nofc, accuratezza) o 7' (socfc, batteria);
      controllo proposto: nofc e socfc a beta 0.1 coi seed 42 e 73 (4 run, ~4 h).
 

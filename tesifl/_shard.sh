@@ -74,107 +74,43 @@ for seed in $SEEDS; do
                   else
                     algo="sage_soc"; extra="sage-a=${QA} sage-b=${QB}"
                   fi ;;
+      # [B] 16/11: sage_smart e' l'ex SAGE-smart 2 (previsione del SoC,
+      # negoziazione con rosa e scelta fresca, niente broadcast, lavoro
+      # parziale), l'unico SAGE-smart: fra _lin, _peuk e _nm cambia solo la
+      # batteria dei device. Le altre etichette SPENGONO componenti
+      # (smart-ablation in server_app): nostale, noest, noneg, e5, b128,
+      # nopartial.
       sage_smart) algo="sage_smart"; extra="sage-a=${QA} sage-b=${QB}" ;;
-      # ablazione di SAGE-smart (ablation.sh): toglie un solo componente,
-      # vedi smart-ablation in server_app
-      sage_smart_nostale|sage_smart_noest|sage_smart_noneg|sage_smart_e5|\
-sage_smart_nonova|sage_smart_b128)
+      # ablazione leave-one-out: un componente spento, il nome e' il token
+      sage_smart_nostale|sage_smart_noest|sage_smart_noneg|sage_smart_e5|sage_smart_b128|sage_smart_nopartial)
                   algo="sage_smart"
                   extra="sage-a=${QA} sage-b=${QB} smart-ablation='${base#sage_smart_}'" ;;
-      # ablazione CUMULATA (ablation_cum.sh): dal gradino 0, tutto spento, si
-      # accende un componente per gradino: anzianita', E adattivo, B piccolo,
-      # negoziazione, stima del SoC. Il gradino 6 (+ FedNova) e' sage_smart.
+      # ablazione CUMULATA (ablation_cum.sh), nomi delle run gia' fatte.
+      # Ordine diritto: 0 cum0, 1 cum1 (+ anzianita'), 2 cum2p (+ E adattivo
+      # col lavoro parziale), 3 pcum4 (+ B adattivo), 4 sage_smart2_nofc
+      # (+ negoziazione), 5 sage_smart (+ previsione del SoC).
+      # Ordine inverso: 0 cum0, 1 cum1, 2 sage_smart2_rev2 (+ negoziazione e
+      # previsione, E = 5 e B = 128 fissi), 3 sage_smart2_rev3 (+ E
+      # adattivo), 4 sage_smart (+ B adattivo).
+      # [B] 16/11: cum2p e pcum4 erano girate col carico MASSIMO
+      # all'iscrizione (tolto): col codice di oggi non tornano identiche.
+      # Le altre sono uguali alle run fatte fino al 12/11.
       sage_smart_cum0) algo="sage_smart"
-                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='nostale+noest+noneg+e5+nonova+b128'" ;;
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='nostale+noest+noneg+e5+b128+nopartial'" ;;
       sage_smart_cum1) algo="sage_smart"
-                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='noest+noneg+e5+nonova+b128'" ;;
-      sage_smart_cum2) algo="sage_smart"
-                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='noest+noneg+nonova+b128'" ;;
-      # [B] 10/11 gradino 2 col lavoro parziale dentro l'E adattivo (il client
-      # decide quanto lavorare, anche meno di un'epoca se E = 2 non sta nella
-      # deadline), per la cumulata di SAGE-smart 2 a sei gradini: 2 = cum2p,
-      # 3 = pcum4 (= cum3 + lavoro parziale), 4 = nofc, 5 = socfc
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='noest+noneg+e5+b128+nopartial'" ;;
       sage_smart_cum2p) algo="sage_smart"
-                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='noest+noneg+nonova+b128+partial'" ;;
-      sage_smart_cum3) algo="sage_smart"
-                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='noest+noneg+nonova'" ;;
-      sage_smart_cum4) algo="sage_smart"
-                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='noest+nonova'" ;;
-      sage_smart_cum5) algo="sage_smart"
-                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='nonova'" ;;
-      # esperimento sul workload (workload_sweep.sh): negoziazione e stima del
-      # SoC spente insieme, che i relatori vedono come un componente solo
-      sage_smart_noinfo) algo="sage_smart"
-                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='noneg+noest'" ;;
-      # [B] 05/11 SAGE-smart "plus": il client rifiuta la proposta anche se il
-      # lavoro minimo non sta nella deadline, e la stima del SoC usa il
-      # workload medio riportato. Le varianti tolgono negoziazione o stima.
-      # (senza entrambe = sage_smart_noinfo: i due interruttori non contano)
-      sage_smart_plus) algo="sage_smart"
-                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='dlrefuse+loadavg'" ;;
-      sage_smart_plus_noneg) algo="sage_smart"
-                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='noneg+dlrefuse+loadavg'" ;;
-      sage_smart_plus_noest) algo="sage_smart"
-                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='noest+dlrefuse+loadavg'" ;;
-      # [B] 06/11 "plus2": come plus, ma il rifiuto per deadline scatta solo
-      # se a riposo il client ci starebbe (colpa del carico del momento).
-      # Col plus i telefoni lenti con molti dati rifiutavano sempre.
-      sage_smart_plus2) algo="sage_smart"
-                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='dlload+loadavg'" ;;
-      # [B] 06/11 "plus3": plus2 + lavoro parziale. Chi non sta nella deadline
-      # nemmeno con E_lo (lento + molti dati) fa i passi che ci stanno invece
-      # di arrivare in ritardo; nella media pesa per i campioni visti.
-      sage_smart_plus3) algo="sage_smart"
-                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='dlload+loadavg+partial'" ;;
-      # [B] 09/11 "plus4" = SAGE-smart del paper: plus3 + all'iscrizione il
-      # server assume il workload MEDIO della popolazione (0.118 a x1) invece
-      # del massimo. Col massimo, a beta 1.0, chi non era mai contattato veniva
-      # stimato scarico e non veniva piu' interrogato (6 mai scelti a x1).
-      sage_smart_plus4) algo="sage_smart"
-                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='dlload+loadavg+partial+enrollmean'" ;;
-      # [B] 09/11 SAGE-smart 2: la stima PREVEDE (SoC con le ricariche
-      # attese, workload che torna verso la media del client) e la
-      # negoziazione RETTIFICA: proposte a una rosa di 1.5 k, il server sceglie
-      # i k migliori sullo stato fresco pesando per 1 - w; chi resta fuori e'
-      # rinviato senza perdere anzianita'. Il client rifiuta solo per energia
-      # (niente dlload), lavoro parziale come plus4. Broadcast spento: chi e'
-      # raggiungibile si scopre dalle risposte (10% non risponde).
-      #   sage_smart2          completo
-      #   sage_smart2_nopick   senza rosa: proposte ai soli k (negoziazione 1)
-      #   sage_smart2_nofc     senza previsione: classifica sull'ultimo report
-      #   sage_smart2_noinfo   senza entrambe: ultimo report, niente proposte
-      sage_smart2) algo="sage_smart"
-                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='partial+enrollmean+forecast+pick+nobcast'" ;;
-      sage_smart2_nopick) algo="sage_smart"
-                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='partial+enrollmean+forecast+nobcast'" ;;
-      sage_smart2_nofc) algo="sage_smart"
-                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='noest+partial+enrollmean+pick+nobcast'" ;;
-      sage_smart2_noinfo) algo="sage_smart"
-                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='noest+noneg+partial+enrollmean+nobcast'" ;;
-      # [B] 10/11 SAGE-smart 2 CORRETTO: previsione del solo SoC in classifica
-      # (token socfc). sage_smart2 pesava la classifica per 1 - w atteso ed
-      # escludeva la catena di workload high (-1.5 punti a beta 0.1, 4
-      # telefoni mai scelti); qui il workload pesa solo nella scelta finale.
-      sage_smart2_socfc) algo="sage_smart"
-                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='partial+enrollmean+socfc+pick+nobcast'" ;;
-      # [B] 12/11 cumulata di SAGE-smart 2 in ORDINE INVERSO (l'ordine conta:
-      # dopo l'E adattivo negoziazione e stima hanno poco da correggere).
-      # 0 cum0, 1 cum1, 2 = cum1 + negoziazione e stima (E = 5, B = 128
-      # fissi), 3 = + E adattivo col lavoro parziale, 4 = + B adattivo =
-      # sage_smart2_socfc (stessi token)
-      sage_smart2_rev2) algo="sage_smart"
-                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='e5+nonova+b128+enrollmean+socfc+pick+nobcast'" ;;
-      sage_smart2_rev3) algo="sage_smart"
-                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='nonova+b128+partial+enrollmean+socfc+pick+nobcast'" ;;
-      # [B] 06/11 ablazione CUMULATA del plus3 (ABL_PLUS3=1 bash
-      # ablation_cum.sh). I gradini 0-3 sono sage_smart_cum0..3 (gia' fatti
-      # a x1), poi: 4 = gradino 3 + lavoro parziale; 5 = + negoziazione, col
-      # rifiuto per deadline solo se colpa del carico; 6 = + stima del SoC col
-      # workload medio = sage_smart_plus3. FedNova e' spento di default.
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='noest+noneg+b128'" ;;
       sage_smart_pcum4) algo="sage_smart"
-                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='noest+noneg+partial'" ;;
-      sage_smart_pcum5) algo="sage_smart"
-                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='noest+dlload+partial'" ;;
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='noest+noneg'" ;;
+      sage_smart2_nofc) algo="sage_smart"
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='noest'" ;;
+      sage_smart2_rev2) algo="sage_smart"
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='e5+b128+nopartial'" ;;
+      sage_smart2_rev3) algo="sage_smart"
+                  extra="sage-a=${QA} sage-b=${QB} smart-ablation='b128'" ;;
+      # nome di sage_smart nelle cumulate fatte fino al 12/11 (stessa run)
+      sage_smart2_socfc) algo="sage_smart"; extra="sage-a=${QA} sage-b=${QB}" ;;
       escs_sd)    algo="escs-sd" ;;
       escs_sp)    algo="escs-sp" ;;
       escs_md)    algo="escs-md" ;;

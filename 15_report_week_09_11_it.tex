@@ -131,25 +131,24 @@ Il server:
 
 Partendo da un protocollo ridotto all'osso, a ogni gradino si aggiunge un
 componente. Tutte le run usano il seed 2026, la batteria da datasheet, il
-carico nominale delle altre app e 250 round; le barre della
-Figura~\ref{fig:cum} e i valori della Tabella~\ref{tab:cum} sono la media su
-$\beta = 0.1$, $0.5$ e $1.0$.
+carico nominale delle altre app, 250 round e $\beta = 0.1$.
 
 \begin{itemize}
   \item[0] \textbf{Base}: punteggio $a \cdot \mathrm{SoC} + b \cdot D$, $E = 5$ e
         $B = 128$ fissi, niente negoziazione, SoC dall'ultimo report (nessuna
         stima), FedAvg, broadcast dello stato a tutti i telefoni a ogni round.
   \item[1] + termine di anzianità ($c$).
-  \item[2] + $E$ adattivo, scelto dal client dentro l'envelope; comprende il
+  \item[2] + negoziazione e stima del SoC lato server insieme, come descritto
+        nella Sezione~\ref{sec:protocol}.
+  \item[3] + $E$ adattivo, scelto dal client dentro l'envelope; comprende il
         lavoro parziale.
-  \item[3] + $B$ adattivo, scelto dal client fra 16, 32, 64 e 128.
-  \item[4] + negoziazione e stima del SoC lato server insieme, come descritto
-        nella Sezione~\ref{sec:protocol}. Questo è SAGE-smart 2.
+  \item[4] + $B$ adattivo, scelto dal client fra 16, 32, 64 e 128.
+        Questo è SAGE-smart 2.
 \end{itemize}
 
 \begin{figure}[H]
   \centering
-  \includegraphics[width=\textwidth]{fig_cumulative_ablation_smart2.png}
+  \includegraphics[width=\textwidth]{fig_cumulative_ablation_smart2_reverse.png}
   \label{fig:cum}
 \end{figure}
 
@@ -160,13 +159,13 @@ $\beta = 0.1$, $0.5$ e $1.0$.
     \toprule
     Gradino & Accuratezza (\%) & Dispositivi scarichi & SoC medio finale (\%) & Energia (Wh) \\
     \midrule
-    0 base                & 41.9          & 33.7           & 35.7          & 2016 \\
-    1 + anzianità         & 47.5 (+5.6)   & 31.0 ($-$2.7)  & 34.5 ($-$1.2) & 2024 (+0.4\,\%) \\
-    2 + $E$ adattivo      & 45.0 ($-$2.5) & 3.7 ($-$27.3)  & 38.3 (+3.8)   & 1098 ($-$45.7\,\%) \\
-    3 + $B$ adattivo      & 56.5 (+11.5)  & 5.0 (+1.3)     & 39.5 (+1.2)   & 1106 (+0.7\,\%) \\
-    4 + negoziazione + stima & 56.1 ($-$0.4) & 3.3 ($-$1.7) & 39.0 ($-$0.5) & 1101 ($-$0.5\,\%) \\
+    0 base                & 39.6          & 30             & 34.0          & 2040 \\
+    1 + anzianità         & 45.6 (+6.0)   & 32 (+2)        & 33.2 ($-$0.8) & 1999 ($-$2.0\,\%) \\
+    2 + negoziazione + stima & 45.7 (+0.1) & 32 (0)        & 36.1 (+2.9)   & 2007 (+0.4\,\%) \\
+    3 + $E$ adattivo      & 41.4 ($-$4.3) & 7 ($-$25)      & 36.4 (+0.3)   & 1111 ($-$44.6\,\%) \\
+    4 + $B$ adattivo      & 52.0 (+10.6)  & 3 ($-$4)       & 40.7 (+4.3)   & 1117 (+0.5\,\%) \\
     \midrule
-    FedAvg (riferimento)  & 51.1          & 66.0           & 14.4          & 1984 \\
+    FedAvg (riferimento)  & 49.8          & 57             & 20.2          & 2077 \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -177,21 +176,21 @@ $\beta = 0.1$, $0.5$ e $1.0$.
 
 \begin{table}[H]
   \centering
-  \caption{Gradino 3 (broadcast dello stato, niente negoziazione, SoC
-  dall'ultimo report) contro gradino 4 (SAGE-smart 2), media sui tre $\beta$.}
+  \caption{Gradino 1 (broadcast dello stato, niente negoziazione, SoC
+  dall'ultimo report) contro gradino 2, $\beta = 0.1$.}
   \label{tab:negest}
   \begin{tabular}{lcc}
     \toprule
-    & Gradino 3 & Gradino 4 (SAGE-smart 2) \\
+    & Gradino 1 & Gradino 2 \\
     \midrule
-    Energia di controllo (Wh per run)                  & 10.3  & 1.0 \\
-    Errore del SoC usato per la classifica (punti)     & 1.27  & 0.73 \\
-    Telefoni in carica scelti per round                & 1.14  & 1.44 \\
-    Proposte rifiutate                                 & ---   & 0.5\,\% \\
-    Telefoni rinviati per round (mantengono l'anzianità) & --- & 6.7 \\
-    Dispositivi scarichi                               & 5.0   & 3.3 \\
-    Accuratezza (\%)                                   & 56.5  & 56.1 \\
-    Energia (Wh)                                       & 1106  & 1101 \\
+    Energia di controllo (Wh per run)                  & 8.8   & 0.9 \\
+    Errore del SoC usato per la classifica (punti)     & 4.10  & 3.03 \\
+    Telefoni in carica scelti per round                & 0.29  & 0.72 \\
+    Proposte rifiutate                                 & ---   & 2.0\,\% \\
+    Telefoni rinviati per round (mantengono l'anzianità) & --- & 5.6 \\
+    Dispositivi scarichi                               & 32    & 32 \\
+    Accuratezza (\%)                                   & 45.6  & 45.7 \\
+    Energia (Wh)                                       & 1999  & 2007 \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -200,24 +199,24 @@ $\beta = 0.1$, $0.5$ e $1.0$.
   \item \textbf{Niente broadcast.} Il server non contatta più tutti i 100
         telefoni a ogni round solo per sapere chi è raggiungibile: le risposte
         alle proposte danno sia la raggiungibilità sia lo stato. L'energia di
-        controllo cala del 90\,\% (da 10.3 a \SI{1.0}{Wh}).
+        controllo cala del 90\,\% (da 8.8 a \SI{0.9}{Wh}).
   \item \textbf{Informazione migliore con meno messaggi.} Grazie alla
         previsione e alle risposte, il SoC che il server usa per ordinare i
-        telefoni è più vicino a quello vero: 0.73 punti di errore contro 1.27.
+        telefoni è più vicino a quello vero: 3.03 punti di errore contro 4.10.
   \item \textbf{La scelta finale usa lo stato di adesso.} La scelta fresca evita
         i telefoni occupati in quel momento e preferisce quelli in carica, il cui
-        training non costa batteria: si scelgono il 26\,\% di telefoni in carica
-        in più (1.44 contro 1.14 per round).
+        training non costa batteria: si scelgono il 150\,\% di telefoni in carica
+        in più (0.72 contro 0.29 per round).
   \item \textbf{Essere interpellato non costa nulla al telefono.} I rifiuti sono
-        rari (0.5\,\%), perché un telefono rifiuta solo per energia, e i 6.7
+        rari (2.0\,\%), perché un telefono rifiuta solo per energia, e i 5.6
         telefoni rinviati per round mantengono la loro anzianità. È l'opposto di
         SAGE-smart, dove essere interpellato e rifiutare faceva retrocedere un
         telefono.
 \end{itemize}
-Il risultato è la stessa accuratezza e la stessa energia con il 34\,\% di
-dispositivi scarichi in meno, un protocollo più economico e un'informazione più
-precisa. La variazione di accuratezza ($-$0.4 punti in media: $-$1.4, $-$0.4 e
-+0.6 per i tre $\beta$) è dentro il rumore di un singolo seed: due varianti che
+Il risultato è la stessa accuratezza, la stessa energia e gli stessi
+dispositivi scarichi, con un SoC medio finale più alto di 2.9 punti, un
+protocollo più economico e un'informazione più precisa. La variazione di
+accuratezza (+0.1 punti) è dentro il rumore di un singolo seed: due varianti che
 scelgono gli stessi telefoni con lo stesso lavoro nei round 1 e 2 hanno già
 un'accuratezza diversa al round 1 (2.02\,\% contro 1.51\,\%), e da lì le due
 run seguono traiettorie diverse. Con un solo seed, differenze sotto circa 2

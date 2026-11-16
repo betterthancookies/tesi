@@ -47,7 +47,7 @@ cosi' B varia davvero solo per i client lenti, occupati o scarichi.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 from device.fuel_gauge import DeviceReading
 
@@ -58,8 +58,6 @@ K_BATCHES = "smart-batches"
 K_DEADLINE = "smart-deadline-s"
 K_SOC_MIN = "smart-soc-min"
 K_PROBE = "smart-probe-samples"
-K_REFUSE_DL = "smart-refuse-deadline"
-K_REFUSE_LOAD = "smart-refuse-load-only"
 K_PARTIAL = "smart-partial-work"
 
 
@@ -67,14 +65,12 @@ K_PARTIAL = "smart-partial-work"
 class Envelope:
     """Proposta del server: dentro questi limiti decide il client.
 
-    refuse_deadline: il client rifiuta la proposta anche se E_lo non sta
-    nella deadline col workload di adesso (vedi accepts_proposal).
-    refuse_load_only: con refuse_deadline, rifiuta per la deadline SOLO se
-    a riposo (workload 0) ci starebbe: il ritardo e' colpa del carico del
-    momento.
     partial_work: al training, se nemmeno E_lo sta nella deadline il client
     fa i passi di SGD che ci stanno (meno di E_lo epoche) invece di lavorare
-    in ritardo (vedi decide). Viaggiano nel messaggio solo se accesi.
+    in ritardo (vedi decide). Viaggia nel messaggio solo se acceso.
+    [B] 16/11: tolti refuse_deadline e refuse_load_only (rifiuto della
+    proposta per la deadline, SAGE-smart plus/plus2-4): il client rifiuta
+    solo per energia.
     """
 
     e_lo: int
@@ -83,8 +79,6 @@ class Envelope:
     deadline_s: float
     soc_min: float
     probe_samples: int
-    refuse_deadline: bool = False
-    refuse_load_only: bool = False
     partial_work: bool = False
 
     def to_config(self) -> dict:
@@ -96,10 +90,6 @@ class Envelope:
             K_SOC_MIN: float(self.soc_min),
             K_PROBE: int(self.probe_samples),
         }
-        if self.refuse_deadline:
-            cfg[K_REFUSE_DL] = 1
-        if self.refuse_load_only:
-            cfg[K_REFUSE_LOAD] = 1
         if self.partial_work:
             cfg[K_PARTIAL] = 1
         return cfg
@@ -113,8 +103,6 @@ class Envelope:
             deadline_s=float(cfg[K_DEADLINE]),
             soc_min=float(cfg[K_SOC_MIN]),
             probe_samples=int(cfg[K_PROBE]),
-            refuse_deadline=bool(int(cfg[K_REFUSE_DL])) if K_REFUSE_DL in cfg else False,
-            refuse_load_only=bool(int(cfg[K_REFUSE_LOAD])) if K_REFUSE_LOAD in cfg else False,
             partial_work=bool(int(cfg[K_PARTIAL])) if K_PARTIAL in cfg else False,
         )
 
@@ -167,48 +155,19 @@ def can_afford_minimum(reading: DeviceReading, env: Envelope, n_samples: int) ->
 
 
 def accepts_proposal(reading: DeviceReading, env: Envelope, n_samples: int) -> bool:
-    """Controllo di accettazione della proposta (Fase 2b di sage_smart).
+    """Controllo di accettazione della proposta (passo 4 di sage_smart).
 
     Il client accetta se riesce a fare almeno il lavoro minimo dell'envelope
-    senza intaccare la riserva, con lo stato di ADESSO. E' lo stesso
-    controllo che fara' di nuovo al momento del training: qui serve a
-    rifiutare PRIMA di scaricare il modello, cosi' il server puo' chiamare
-    un altro client nello stesso round.
+    senza intaccare la riserva, con lo stato di ADESSO; in carica accetta
+    sempre. E' lo stesso controllo che fara' di nuovo al momento del
+    training: qui serve a rifiutare PRIMA di scaricare il modello, cosi' il
+    server puo' chiamare un altro client nello stesso round.
 
-    [B] 05/11, con env.refuse_deadline: rifiuta anche se E_lo non sta nella
-    deadline nemmeno col B piu' veloce, col workload di ADESSO. Senza, un
-    client molto carico accetta e poi lavora fuori deadline: allunga il round
-    e l'idle di tutti (esperimento sul workload, x3: round medio 455 s contro
-    181 s a x1, 98% degli envelope limitati dalla deadline). Il workload e'
-    l'informazione che ha solo il client; al training la regola non cambia
-    (il modello e' gia' scaricato, vedi decide).
-
-    [B] 06/11, con anche env.refuse_load_only: rifiuta per la deadline solo
-    se A RIPOSO (workload 0) ci starebbe, cioe' se il ritardo e' colpa del
-    carico di adesso ("sono occupato, chiedimelo dopo"). Chi non ci sta
-    nemmeno a riposo (telefono lento con molti dati) accetta come nella v2:
-    col solo refuse_deadline rifiutava sempre e non partecipava mai (x1: 8
-    client low mai selezionati, Gini delle partecipazioni 0.32 -> 0.43).
+    [B] rifiuta SOLO per energia. Chi non sta nella deadline accetta e fa i
+    passi che ci stanno (lavoro parziale, vedi decide): il rifiuto per
+    deadline (05-06/11) escludeva i telefoni lenti con molti dati.
     """
-    if not can_afford_minimum(reading, env, n_samples):
-        return False
-    if env.refuse_deadline and not can_meet_deadline(reading, env, n_samples):
-        if env.refuse_load_only and not can_meet_deadline(at_rest(reading), env, n_samples):
-            return True
-        return False
-    return True
-
-
-def at_rest(reading: DeviceReading) -> DeviceReading:
-    """La stessa lettura con workload 0: il device senza altre app."""
-    return replace(reading, workload=0.0)
-
-
-def can_meet_deadline(reading: DeviceReading, env: Envelope, n_samples: int) -> bool:
-    """E_lo col B piu' veloce dell'envelope sta nella deadline, col workload
-    attuale? Stessa durata (training + stima della loss) che usa decide."""
-    return min(reading.work_time_s(env.e_lo, b, n_samples, env.probe_samples)
-               for b in env.batches) <= env.deadline_s
+    return can_afford_minimum(reading, env, n_samples)
 
 
 def decide(reading: DeviceReading, env: Envelope, n_samples: int,

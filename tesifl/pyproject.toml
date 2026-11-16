@@ -66,14 +66,14 @@ smart-probe-samples = 256    # campioni per stimare la loss locale
 smart-max-waves = 2          # ondate di proposte per round (1 = nessun rimpiazzo)
 smart-batch-min = 16         # B piu' piccolo (preferito) dell'envelope
 smart-batch-max = 64         # B piu' grande, se il piccolo non ci sta
-smart-ablation = "none"      # none | nostale | noest | noneg | e5 | nonova | b128
-                             # anche piu' d'uno uniti da "+" (ablazione cumulata)
+smart-ablation = "none"      # none | nostale | noest | noneg | e5 | b128 | nopartial
+                             # spegne componenti, anche piu' d'uno uniti da "+"
                              # (_shard.sh la ricava dall'etichetta sage_smart_<x>_nm)
-# --- broadcast dello stato a inizio round (SAGE, ESCS, SAGE-smart)
+# --- broadcast dello stato a inizio round (SAGE, ESCS; SAGE-smart solo con noneg)
 broadcast = false            # run.sh lo prende da experiment.toml
-broadcast-nonresp = 0.10     # frazione di client che non risponde
+broadcast-nonresp = 0.10     # frazione di client che non risponde (anche alle proposte)
 broadcast-timeout-s = 1.0    # attesa delle risposte mancanti
-broadcast-top-m = 0          # 0 = tutti; M = primi M per stima (solo SAGE-smart)
+broadcast-top-m = 0          # non lo usa piu' nessuno (era solo di SAGE-smart)
 # --- batteria dei device (la batteria FISICA del mondo, per tutti gli
 # algoritmi): "lin" (lineare) | "peuk" (Peukert) | "nm" (datasheet).
 # _shard.sh la ricava dal suffisso dell'etichetta.

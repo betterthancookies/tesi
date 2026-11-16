@@ -56,13 +56,13 @@ algorithms = [
   "sage_lin",
   "sage_peuk",
   "sage_nm",
-  # 09/11: SAGE-smart del paper = plus4 (rifiuto per deadline solo se colpa
-  # del carico, stima col workload medio, lavoro parziale, workload medio
-  # all'iscrizione). Le run vecchie sage_smart_{lin,peuk,nm} restano nella
-  # cartella; le baseline gia' presenti vengono saltate da run.sh.
-  "sage_smart_plus4_lin",
-  "sage_smart_plus4_peuk",
-  "sage_smart_plus4_nm",
+  # [B] 16/11: sage_smart = ex SAGE-smart 2, l'unico SAGE-smart (fra i tre
+  # cambia solo la batteria dei device). In questa cartella i
+  # sage_smart_{lin,peuk,nm}_*.csv sono del SAGE-smart VECCHIO: prima di
+  # rilanciare vanno cancellati, altrimenti run.sh li salta come gia' fatti.
+  "sage_smart_lin",
+  "sage_smart_peuk",
+  "sage_smart_nm",
   "escs_sd_lin",
   "escs_sd_peuk",
   "escs_sd_nm",
@@ -304,8 +304,10 @@ smart_epochs_min     = 2      # E_lo: minimo di epoche dell'envelope
 smart_deadline_mult  = 1.0    # deadline = mult * mediana dei tempi nominali (E, B di [algo])
 smart_probe_samples  = 256    # campioni locali per stimare la loss prima di decidere
 # Negoziazione prima del training (documento "Client Server Protocol" del
-# relatore, opzione 3 con l'opzione 2): il server ordina i client con una
-# stima del SoC, propone l'envelope ai candidati, chi rifiuta viene sostituito.
+# relatore, opzione 3 con l'opzione 2): il server ordina i client con la
+# previsione del SoC, propone l'envelope a una rosa di 1.5 volte i posti e
+# sceglie sullo stato appena riportato; se le accettazioni non bastano, una
+# seconda ondata (chi rifiuta lo fa solo per energia).
 smart_max_waves      = 2      # ondate di proposte per round (1 = nessun rimpiazzo)
 # B di SAGE-smart (le baseline usano batch_size = 128). L'envelope propone le
 # potenze di 2 fra smart_batch_min e smart_batch_max; il client sceglie il
@@ -318,7 +320,8 @@ smart_max_waves      = 2      # ondate di proposte per round (1 = nessun rimpiaz
 #   SoC   0.500  0.543  0.575  0.574  0.578  0.576
 # l'accuracy cresce sempre al calare di B; il SoC e' piatto da 32 in su e
 # cala sotto. 16 e' il punto piu' vicino all'ideale (acc e SoC massimi).
-# [B] TETTO A 64, non 256. SAGE-smart aggrega con FedNova, che amplifica
+# [B] TETTO A 64, non 256 (14/10, quando SAGE-smart usava FedNova: spento dal
+# 30/10, tolto dal codice il 16/11). SAGE-smart aggregava con FedNova, che amplifica
 # l'update di chi fa pochi passi di tau_eff/tau_i. Col range 16-256 un client
 # fuori deadline ripiegava su B=256 e faceva ~18 passi contro ~290: spread
 # 15-16 (soglia ~6-8) e modello collassato nel fastTest del 14/10. A 64 lo
@@ -337,10 +340,14 @@ smart_batch_max      = 128    # 64 per ResNet-20; 128 richiesto per ResNet-18 (S
 # ~2.1 J, se non viene selezionato; il solo payload se viene selezionato);
 # chi non risponde e' escluso dal round; il round si allunga della latenza
 # o del timeout. Stima: ~3 Wh di broadcast + ~1 Wh di attesa su 250 round.
+# [B] 16/11: SAGE-smart NON usa il broadcast (lo sostituisce la negoziazione:
+# le risposte alle proposte danno raggiungibilita' e stato; broadcast_nonresp
+# e broadcast_timeout_s valgono per le proposte). Lo usa solo l'ablazione
+# senza negoziazione (noneg).
 broadcast            = true
 broadcast_nonresp    = 0.10   # client che non rispondono (indicazione del relatore)
 broadcast_timeout_s  = 1.0    # [ASSUNZIONE] attesa delle risposte mancanti (~3x promozione + RTT)
-broadcast_top_m      = 0      # 0 = tutti; M > 0 = solo i primi M per stima (nota 3, solo SAGE-smart)
+broadcast_top_m      = 0      # [B] 16/11: non lo usa piu' nessuno (era solo di SAGE-smart)
 
 # ESCS
 escs_min_battery       = 0.20   # B_LVL_min, Table 4 del paper
