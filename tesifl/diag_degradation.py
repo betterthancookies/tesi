@@ -1,27 +1,4 @@
 #!/usr/bin/env python3
-"""Diagnostica della degradazione post-picco.
-
-    python diag_degradation.py                    # tutte le celle
-    python diag_degradation.py --dir results_c200_n30
-
-LA DOMANDA. Ogni algoritmo raggiunge un picco e poi cala. Due spiegazioni
-incompatibili:
-  (a) i client si esauriscono, il pool si restringe e si allontana dalla
-      distribuzione globale, quindi il modello peggiora;
-  (b) e' ottimizzazione: learning rate costante, 5 epoche locali su dati
-      non-IID, client drift -- il calo ci sarebbe anche senza morti.
-
-IL TEST. Le run con ZERO morti separano i due casi. Se calano anche quelle,
-(a) e' esclusa come causa unica. Lo script le isola e le confronta.
-
-COSA GUARDA, per ogni run:
-  peak       round e accuratezza del massimo
-  drop       picco meno media degli ultimi 20 round
-  morti@peak quanti client erano gia' esauriti al momento del picco
-  loss       se la loss globale sale mentre l'accuratezza scende, e' vera
-             degradazione; se sale mentre l'accuratezza tiene, e' solo
-             perdita di calibrazione e non va confusa con la prima.
-"""
 from __future__ import annotations
 import argparse, csv, glob, os, re
 import numpy as np
@@ -109,7 +86,6 @@ def main():
             print("     dell'ottimizzazione.")
     print()
 
-    # --- correlazione fra morti e calo
     if some and zero:
         x = np.array([r["dead_end"] for r in allrows], dtype=float)
         y = np.array([r["drop"] for r in allrows], dtype=float)
@@ -118,7 +94,6 @@ def main():
             print("  (vicina a 0 = il calo non dipende dai morti)")
     print()
 
-    # --- le peggiori, per capire dove guardare
     print("=" * 78)
     print("LE 12 RUN CON IL CALO MAGGIORE")
     print("=" * 78)

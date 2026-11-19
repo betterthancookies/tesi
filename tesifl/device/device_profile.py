@@ -1,17 +1,3 @@
-"""Popolazione di client: tre tier hardware in parti uguali.
-
-Ogni tier differisce per tre grandezze, capacita' di batteria, velocita' di
-calcolo e potenza di training, prese da constants.TIERS (i tre telefoni di
-Mandheling, vedi experiment.toml). Con `tiers_enabled=False` la popolazione
-torna omogenea e identica a prima: e' l'ablazione che separa l'effetto
-dell'eterogeneita' hardware da quello della politica di selezione.
-
-[B] L'ASSEGNAZIONE E' PERMUTATA, non `cid % 3`. La taglia della partizione
-Dirichlet dipende dal cid, quindi un'assegnazione ordinata correlerebbe il
-tier con la quantita' di dati locali e i due effetti sarebbero inseparabili.
-La permutazione dipende dal seed, quindi resta riproducibile.
-"""
-
 from __future__ import annotations
 
 import json
@@ -38,7 +24,6 @@ class DeviceProfile:
     macs_per_s: float
     peukert_n: float
     tier: str = "uniform"
-    # potenza del telefono durante il training, costante (non dipende da B)
     train_power_w: float = TRAIN_POWER_W_UNIFORM
 
 
@@ -48,14 +33,6 @@ def generate_profiles(
     capacity_mah: float | None = None,
     tiers_enabled: bool = True,
 ) -> list[DeviceProfile]:
-    """Popolazione di n_clients device.
-
-    tiers_enabled=True  tre tier in parti uguali, permutati col seed.
-                        `capacity_mah` viene IGNORATA: la capacita' la
-                        definisce il tier.
-    tiers_enabled=False tutti identici, con `capacity_mah` o la costante.
-                        E' la configurazione delle campagne precedenti.
-    """
     if not tiers_enabled:
         cap = BATTERY_CAPACITY_MAH if capacity_mah is None else float(capacity_mah)
         return [
@@ -76,10 +53,6 @@ def generate_profiles(
         profiles.append(DeviceProfile(
             cid=cid,
             battery_capacity_mah=float(t["capacity_mah"]),
-            # [B] la velocita' scala il throughput, quindi entra sia nel
-            # consumo (round piu' corto = meno energia) sia nella durata del
-            # round, che il modello di idle definisce come il training del
-            # selezionato piu' lento: un tier lento penalizza anche gli altri.
             macs_per_s=float(t["macs_per_s"]),
             peukert_n=PEUKERT_N,
             tier=tier_of[cid],

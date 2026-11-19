@@ -46,9 +46,6 @@ class ResNet20(nn.Module):
         return self.fc(x)
 
 class BlockR18(nn.Module):
-    """Blocco base di ResNet-18 (He et al. 2016): due conv 3x3 con BN, e
-    scorciatoia con conv 1x1 + BN quando cambia la dimensione."""
-
     def __init__(self, in_ch, out_ch, stride=1):
         super().__init__()
         self.conv1 = nn.Conv2d(in_ch, out_ch, 3, stride, 1, bias=False)
@@ -69,11 +66,6 @@ class BlockR18(nn.Module):
 
 
 class ResNet18(nn.Module):
-    """ResNet-18 nella variante per CIFAR (32x32): primo strato conv 3x3 a
-    stride 1 e niente max-pooling iniziale, quattro stadi da due blocchi
-    (64, 128, 256, 512 canali). 11.22 M parametri e 555 MMAC di forward per
-    immagine con 100 classi (experiment.toml, [model.specs])."""
-
     def __init__(self, num_classes=100):
         super().__init__()
         self.conv1 = nn.Conv2d(3, 64, 3, 1, 1, bias=False)

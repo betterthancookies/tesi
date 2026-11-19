@@ -1,41 +1,15 @@
 #!/usr/bin/env bash
-# Avvia / ferma / controlla un SuperLink per GPU.
-#
-#   bash superlinks.sh start          # ne avvia uno per ogni GPU in GPUS
-#   bash superlinks.sh status         # run attive e processi di ogni SuperLink
-#   bash superlinks.sh wait-idle G    # aspetta che il SuperLink della GPU G
-#                                     # non abbia piu' run ne' processi vivi
-#   bash superlinks.sh stop
-#
-# PERCHE' UNO PER GPU
-# [B] la GPU si sceglie all'AVVIO DEL SUPERLINK. flwr run non esegue nulla:
-# consegna la run al SuperLink, che la fa girare in un sottoprocesso figlio.
-# Quel figlio eredita l'ambiente del SuperLink, non quello della shell da cui
-# lanci flwr run -- per questo CUDA_VISIBLE_DEVICES davanti a flwr run non ha
-# alcun effetto. Un SuperLink per GPU, avviato con la sua variabile, e ogni
-# shard che parla col proprio.
-#
-# [B] DATABASE SEPARATI E NUOVI. La coda delle run vive in state.db. Con un
-# database condiviso i tre SuperLink si contenderebbero la stessa coda. E la
-# coda SOPRAVVIVE: se il SuperLink muore, le run lanciate nel frattempo
-# restano dentro e partono tutte insieme al riavvio successivo (11/09). Per
-# questo ogni avvio parte da un database vuoto (il vecchio resta in .prev).
 
 set -u
 cd "$(dirname "$0")"
 
-# di default le GPU della campagna (EXP_TOML se c'e', altrimenti
-# experiment.toml), cosi' start/status/stop a mano usano le stesse porte di
-# run.sh. [B] 19/10: prima sempre experiment.toml; con una campagna da un
-# altro file e altre GPU (ablation.sh su Stanis, GPU 1) il wait-idle di
-# _shard.sh cercava la porta di una GPU che non era nella lista.
 GPUS=${GPUS:-$(python3 -c "import os, tomllib; print(*tomllib.load(open(os.environ.get('EXP_TOML') or 'experiment.toml', 'rb'))['campaign']['gpus'])")}
 PORT_BASE=${PORT_BASE:-39101}
 STATE_DIR=${STATE_DIR:-$HOME/.flwr/sweep}
 CONF=${CONF:-$HOME/.flwr/config.toml}
 PROJECT=${PROJECT:-$PWD}
-WAIT_MAX=${WAIT_MAX:-300}   # wait-idle: attesa massima di una run ancora attiva
-WAIT_ORPHAN=${WAIT_ORPHAN:-30}  # wait-idle: attesa di un processo senza run attiva
+WAIT_MAX=${WAIT_MAX:-300}
+WAIT_ORPHAN=${WAIT_ORPHAN:-30}
 
 read -ra GPU_ARR <<< "$GPUS"
 
@@ -46,13 +20,6 @@ sl_pid() { pgrep -f "control-api-address 127.0.0.1:$(port_of "$1")" | head -1; }
 
 descendants() { local c; for c in $(pgrep -P "$1"); do echo "$c"; descendants "$c"; done; }
 
-# processi flwr-simulation discendenti del SuperLink della GPU $1: uno per
-# run in corso. Solo i SUOI, non quelli di altri SuperLink o di altri utenti.
-# [B] ZOMBIE ESCLUSI. Finita la run, flwr-simulation termina ma il SuperLink
-# (flwr 1.32) non ne raccoglie lo stato di uscita: resta "<defunct>", uno per
-# run, finche' il SuperLink non si riavvia. Sono i "task che aumentano a ogni
-# run" del vecchio server. Uno zombie non usa CPU, memoria ne' GPU e non si
-# puo' uccidere: non va aspettato. sim_procs="zombie" li elenca a parte.
 sim_procs() {
   local root p st; root=$(sl_pid "$1"); [ -n "$root" ] || return 0
   for p in $(descendants "$root"); do
@@ -65,8 +32,6 @@ sim_procs() {
   done
 }
 
-# id delle run non finite (pending, starting, running) sul SuperLink della
-# GPU $1, una per riga; "?" se flwr ls non risponde
 active_runs() {
   timeout 30 flwr ls "$(name_of "$1")" --format json 2>/dev/null | python3 -c '
 import json, sys
@@ -79,7 +44,6 @@ for r in runs:
     if not str(r.get("status", "")).lower().startswith("finished"):
         print(r["run-id"], r.get("status", ""), sep=":")'
 }
-# solo gli id, per flwr stop
 run_ids() { echo "$1" | cut -d: -f1; }
 
 count() { [ "$1" = "?" ] && echo "?" || echo "$1" | grep -c .; }
@@ -88,10 +52,6 @@ case "${1:-status}" in
 
 start)
   mkdir -p "$STATE_DIR"
-  # --- voci in config.toml, aggiunte una sola volta
-  # [B] insecure = true e' obbligatorio: il SuperLink parte con --insecure,
-  # ma flwr senza quella riga usa TLS (default) e non si collega. Sul vecchio
-  # server le voci erano scritte a mano; sul nuovo le crea questo script.
   for gpu in "${GPU_ARR[@]}"; do
     n=$(name_of "$gpu"); p=$(port_of "$gpu")
     if ! grep -q "^\[superlink\.${n}\]" "$CONF" 2>/dev/null; then
@@ -117,10 +77,6 @@ start)
       mv -f "$db" "${db}.prev"; rm -f "${db}-wal" "${db}-shm"
       echo "  ${n}: coda vecchia spostata in ${db}.prev"
     fi
-    # [B] 16/10: senza "exec" la subshell in background restava viva come
-    # genitore del SuperLink, con lo stdout del chiamante aperto: con
-    # "bash run.sh --fastTest | tee ..." il tee non riceveva mai EOF e il
-    # comando non tornava piu', pur avendo finito.
     ( cd "$PROJECT" && \
       export CUDA_VISIBLE_DEVICES="$gpu" HF_HUB_OFFLINE=1 RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO=0 && \
       exec nohup flower-superlink --insecure --simulation --isolation subprocess \
@@ -139,10 +95,6 @@ start)
   ;;
 
 status)
-  # [B] prima qui c'era "task avviati" = righe "Started task" nel log: un
-  # contatore cumulativo, che per costruzione cresceva a ogni run e non
-  # poteva mai scendere. Ora: run non finite (flwr ls) e processi di
-  # simulazione vivi. A riposo devono essere 0, durante una run 1.
   for gpu in "${GPU_ARR[@]}"; do
     n=$(name_of "$gpu"); p=$(port_of "$gpu")
     pid=$(sl_pid "$gpu")
@@ -158,27 +110,18 @@ status)
   ;;
 
 wait-idle)
-  # [B] UNA RUN ALLA VOLTA PER GPU. Il CSV di una run arriva prima che la run
-  # sia davvero finita (valutazione finale, Ray che si spegne): lanciando
-  # subito la successiva le due si sovrapponevano sulla GPU e le run attive
-  # crescevano a ogni run. _shard.sh chiama questo prima di ogni run.
-  # [B] Due attese diverse:
-  #   run ancora attiva in flwr ls  -> fino a WAIT_MAX (300 s), poi stop;
-  #   solo il processo, run finita  -> WAIT_ORPHAN (30 s), poi lo chiudo.
-  # Gli zombie (vedi sim_procs) non contano: il 13/10 lo sweep aspettava 300 s
-  # a ogni run un "[flwr-simulation] <defunct>", gia' terminato.
   gpu="${2:?uso: bash superlinks.sh wait-idle <gpu>}"
   n=$(name_of "$gpu"); t0=$(date +%s); t=0; last=-60
   [ -n "$(sl_pid "$gpu")" ] || exit 0
   while :; do
     runs=$(active_runs "$gpu"); procs=$(sim_procs "$gpu")
     known=1
-    [ "$runs" = "?" ] && { runs=""; known=0; }   # flwr ls muto: prudenza
+    [ "$runs" = "?" ] && { runs=""; known=0; }
     [ -z "$runs" ] && [ -z "$procs" ] && break
-    t=$(( $(date +%s) - t0 ))             # tempo vero, flwr ls non e' istantaneo
+    t=$(( $(date +%s) - t0 ))
     limit=$WAIT_MAX
     [ -z "$runs" ] && [ "$known" = "1" ] && limit=$WAIT_ORPHAN
-    if [ $(( t - last )) -ge 60 ]; then   # un segno di vita al minuto
+    if [ $(( t - last )) -ge 60 ]; then
       echo "  ${n}: aspetto la chiusura della run precedente (${t}s/${limit}s):" \
            "run [$(echo $runs)] processi [$(echo $procs)]"
       last=$t
@@ -213,7 +156,6 @@ stop)
     n=$(name_of "$gpu")
     pid=$(sl_pid "$gpu")
     [ -n "$pid" ] || continue
-    # i figli non muoiono col padre: vanno chiusi a mano (solo i suoi)
     procs=$(sim_procs "$gpu")
     kill "$pid"; echo "  ${n}: fermato (pid ${pid})"
     sleep 3

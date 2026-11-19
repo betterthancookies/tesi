@@ -1,49 +1,3 @@
-"""Decisione client-driven di (E, B): la Fase 5 della proposta.
-
-Il server propone un ENVELOPE (Fase 4), il client sceglie dentro l'envelope
-con informazioni che solo lui ha nel momento in cui inizia (late binding):
-
-    SoC attuale e stato di carica   -> quanto lavoro puo' permettersi
-    workload attuale                -> quanto durera' quel lavoro
-    loss del modello globale sui
-    propri dati                     -> quanto lavoro vale la pena di fare
-
-Niente torch ne' flwr qui: sono funzioni pure, testabili da sole.
-
-LA REGOLA, in quattro passi
-1. Utilita' statistica  u = min(1, L / ln C)
-   L e' la loss del modello globale su un campione dei dati locali, ln C la
-   loss di un classificatore che tira a caso su C classi. u ~ 1 vuol dire che
-   il modello globale non ha ancora imparato nulla di questi dati.
-   [B] nessun parametro: ln C e' il riferimento naturale della cross-entropy.
-
-2. Riserva disponibile  h = (SoC - soc_min) / (1 - soc_min), in [0, 1]
-   h = 1 se il device e' in carica: la batteria non paga il training.
-
-3. Epoche desiderate  E* = E_lo + round((E_hi - E_lo) * u * h)
-   Il prodotto u*h e' la tabella della proposta: tanta loss E tanta carica
-   -> tante epoche; poca loss O poca carica -> poche epoche.
-
-4. Vincoli, verificati sulla TRAIETTORIA, non sullo stato attuale:
-   - energia:  SoC previsto A FINE ROUND (training + upload) >= soc_min
-   - deadline: durata prevista col workload ATTUALE <= deadline del server
-   B "piu' economico per passo di SGD": si parte dal B piu' piccolo
-   dell'envelope e si scende da E* verso E_lo finche' i vincoli sono
-   rispettati; solo se a quel B non ci sta nemmeno E_lo si passa al B
-   successivo (piu' grande: epoca piu' corta e meno cara).
-   Se a nessun B la deadline e' rispettabile si fa E_lo col B piu' veloce e
-   lo si dichiara. Se nemmeno E_lo e' sostenibile per la batteria, il client
-   si ritira dal round (opt-out) senza toccare la riserva.
-
-[B] PERCHE' IL B PIU' PICCOLO. Con la potenza di training costante per tier
-l'energia per CAMPIONE cala al crescere di B (meno costo fisso per batch), ma
-quella per PASSO di SGD cresce: con la stessa energia un B piccolo fa molti
-piu' passi. Lo sweep su B (experiment.toml, smart_batch_min) mostra
-l'accuracy crescere al calare di B; il B minimo dell'envelope (16) e' il
-compromesso con il SoC finale. Il client riduce prima E e poi sale di B:
-cosi' B varia davvero solo per i client lenti, occupati o scarichi.
-"""
-
 from __future__ import annotations
 
 import math
@@ -51,7 +5,6 @@ from dataclasses import dataclass
 
 from device.fuel_gauge import DeviceReading
 
-# chiavi del ConfigRecord con cui viaggia l'envelope
 K_E_LO = "smart-e-lo"
 K_E_HI = "smart-e-hi"
 K_BATCHES = "smart-batches"
@@ -63,16 +16,6 @@ K_PARTIAL = "smart-partial-work"
 
 @dataclass(frozen=True)
 class Envelope:
-    """Proposta del server: dentro questi limiti decide il client.
-
-    partial_work: al training, se nemmeno E_lo sta nella deadline il client
-    fa i passi di SGD che ci stanno (meno di E_lo epoche) invece di lavorare
-    in ritardo (vedi decide). Viaggia nel messaggio solo se acceso.
-    [B] 16/11: tolti refuse_deadline e refuse_load_only (rifiuto della
-    proposta per la deadline, SAGE-smart plus/plus2-4): il client rifiuta
-    solo per energia.
-    """
-
     e_lo: int
     e_hi: int
     batches: tuple[int, ...]
@@ -122,7 +65,7 @@ class Plan:
     utility: float = 0.0
     e_target: int = 0
     reason: str = ""
-    steps_cap: int = 0          # > 0: lavoro parziale, al massimo tanti passi
+    steps_cap: int = 0
 
 
 def statistical_utility(loss: float, n_classes: int = 10) -> float:
@@ -142,9 +85,6 @@ def _energy_ok(reading: DeviceReading, soc_end: float, soc_min: float) -> bool:
 
 
 def can_afford_minimum(reading: DeviceReading, env: Envelope, n_samples: int) -> bool:
-    """Il round minimo (E_lo, batch migliore, stima della loss inclusa) lascia
-    la riserva intatta? Si verifica PRIMA della stima della loss: se la
-    risposta e' no, non vale la pena spendere nemmeno quella."""
     if reading.charging:
         return True
     for b in env.batches:
@@ -155,24 +95,11 @@ def can_afford_minimum(reading: DeviceReading, env: Envelope, n_samples: int) ->
 
 
 def accepts_proposal(reading: DeviceReading, env: Envelope, n_samples: int) -> bool:
-    """Controllo di accettazione della proposta (passo 4 di sage_smart).
-
-    Il client accetta se riesce a fare almeno il lavoro minimo dell'envelope
-    senza intaccare la riserva, con lo stato di ADESSO; in carica accetta
-    sempre. E' lo stesso controllo che fara' di nuovo al momento del
-    training: qui serve a rifiutare PRIMA di scaricare il modello, cosi' il
-    server puo' chiamare un altro client nello stesso round.
-
-    [B] rifiuta SOLO per energia. Chi non sta nella deadline accetta e fa i
-    passi che ci stanno (lavoro parziale, vedi decide): il rifiuto per
-    deadline (05-06/11) escludeva i telefoni lenti con molti dati.
-    """
     return can_afford_minimum(reading, env, n_samples)
 
 
 def decide(reading: DeviceReading, env: Envelope, n_samples: int,
            loss: float, n_classes: int = 10) -> Plan:
-    """Sceglie (E, B) dentro l'envelope. Vedi la docstring del modulo."""
     u = statistical_utility(loss, n_classes)
     h = headroom(reading, env.soc_min)
     span = max(0, env.e_hi - env.e_lo)
@@ -187,8 +114,6 @@ def decide(reading: DeviceReading, env: Envelope, n_samples: int,
                 out.append((b, t, soc_end))
         return out
 
-    # B dal piu' piccolo: dentro ogni B si riduce E, e si sale di B solo se
-    # a quel B non ci sta nemmeno E_lo
     for b in sorted(env.batches):
         for e in range(e_target, env.e_lo - 1, -1):
             t, soc_end = reading.predict(e, b, n_samples, p)
@@ -196,17 +121,6 @@ def decide(reading: DeviceReading, env: Envelope, n_samples: int,
                 return Plan(False, e, b, t, soc_end, True, u, e_target,
                             "target" if e == e_target else "ridotto")
 
-    # [B] 06/11, LAVORO PARZIALE (env.partial_work): nessun E >= E_lo sta
-    # nella deadline. Invece di fare E_lo in ritardo (il round aspetta e tutti
-    # pagano idle), il client fa i passi di SGD che stanno nella deadline, col
-    # B piu' piccolo che la batteria regge (piu' passi per lo stesso tempo,
-    # come nel resto della regola). Riguarda soprattutto i telefoni lenti con
-    # molti dati, che non stanno nella deadline nemmeno a riposo: col solo
-    # rifiuto per deadline non partecipavano mai, accettando arrivavano
-    # sempre in ritardo (workload x1: ~430 ritardi su 495). L'update pesa nella
-    # media per i campioni visti davvero (smart-weight, vedi sage_smart).
-    # Solo se E_lo e' sostenibile per la batteria (feasible): il caso
-    # "riserva" (ritiro) resta quello di prima.
     feasible = options(env.e_lo)
     if feasible and env.partial_work:
         for b in sorted(env.batches):
@@ -216,9 +130,6 @@ def decide(reading: DeviceReading, env: Envelope, n_samples: int,
                 return Plan(False, env.e_lo, b, t, soc_end, t <= env.deadline_s, u, e_target,
                             "parziale", steps_cap=k)
 
-    # nessun E rispetta la deadline: E_lo col batch piu' veloce, se la
-    # batteria lo regge. La deadline e' un vincolo di comparabilita', la
-    # riserva no.
     if feasible:
         b, t, soc_end = min(feasible, key=lambda o: o[1])
         return Plan(False, env.e_lo, b, t, soc_end, False, u, e_target,
@@ -227,15 +138,10 @@ def decide(reading: DeviceReading, env: Envelope, n_samples: int,
 
 
 def steps_per_epoch(n_samples: int, batch: int) -> int:
-    """ceil(n / B), come len(DataLoader) nel client."""
     return max(1, math.ceil(n_samples / batch))
 
 
 def deadline_steps(reading: DeviceReading, env: Envelope, n_samples: int, batch: int) -> int:
-    """Massimo numero di passi di SGD (al piu' E_lo epoche) la cui durata,
-    stima della loss compresa e col workload attuale, sta nella deadline.
-    Almeno 1: se non ci sta nemmeno un passo, se ne fa uno (ritardo minimo).
-    La durata e' lineare nelle epoche, quindi la ricerca binaria e' esatta."""
     spe = steps_per_epoch(n_samples, batch)
 
     def fits(k: int) -> bool:
@@ -244,7 +150,7 @@ def deadline_steps(reading: DeviceReading, env: Envelope, n_samples: int, batch:
     hi = env.e_lo * spe
     if fits(hi):
         return hi
-    lo = 0                       # fits(0): la sola stima della loss, si assume
+    lo = 0
     while hi - lo > 1:
         mid = (lo + hi) // 2
         if fits(mid):
@@ -256,12 +162,6 @@ def deadline_steps(reading: DeviceReading, env: Envelope, n_samples: int, batch:
 
 def affordable_steps(reading: DeviceReading, env: Envelope, n_samples: int,
                      batch: int, cap: int) -> int:
-    """Massimo numero di passi di SGD che lasciano SoC finale >= soc_min.
-
-    E' il S_max della proposta (budget energetico). Serve da guardia durante
-    il training: se la previsione fosse ottimistica, il client si fermerebbe
-    qui e invierebbe un update parziale invece di intaccare la riserva.
-    """
     if reading.charging:
         return cap
     spe = max(1, math.ceil(n_samples / batch))
@@ -273,7 +173,7 @@ def affordable_steps(reading: DeviceReading, env: Envelope, n_samples: int,
 
     if ok(cap):
         return cap
-    lo, hi = 0, cap          # ok(lo) e' vero se il minimo era sostenibile
+    lo, hi = 0, cap
     while hi - lo > 1:
         mid = (lo + hi) // 2
         if ok(mid):

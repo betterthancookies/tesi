@@ -1,49 +1,4 @@
 #!/usr/bin/env python3
-"""Pareto SoC / accuracy per modello di batteria, uno per algoritmo.
-
-Da ~/tesifl (dopo una campagna con le etichette di experiment.toml):
-
-    python plot_battery_models.py --dir results_<name>
-    python plot_battery_models.py --dir results_<name> --beta 0.5
-    python plot_battery_models.py --dir results_<name> --path
-
-Per SAGE, SAGE-smart ed ESCS-SD mette sullo stesso piano le tre run che
-differiscono per la BATTERIA DEI DEVICE, cioe' quella fisica del mondo
-(tier, workload, idle e ricarica uguali):
-
-                lineare           Peukert            datasheet (nm)
-    SAGE        sage_lin (*)      sage_peuk          sage_nm
-    SAGE-smart  sage_smart_lin    sage_smart_peuk    sage_smart_nm
-    ESCS-SD     escs_sd_lin       escs_sd_peuk       escs_sd_nm
-
-(*) il SAGE del paper; sage_peuk e sage_nm sono l'ablazione, quindi per SAGE
-fra lin e gli altri due cambia anche l'algoritmo.
-
-Il grafico e' quello di fig5 di plot_curves.py (fig_pareto_soc):
-    x  SoC medio a fine run, morti contati come 0
-    y  accuracy media degli ultimi TAIL round
-    marker piu' grande = piu' client esauriti (†)
-stessi assi, stessi marker, stesso posizionamento delle etichette. Cambia
-solo il colore, che qui indica la BATTERIA (uguale nei tre algoritmi):
-rosso lineare, arancio Peukert, verde datasheet.
-
-Produce in --dir, con suffisso _ball (tutti i beta) o _b<beta>:
-    figB_pareto_soc_sage_<b>.png
-    figB_pareto_soc_sage_smart_<b>.png
-    figB_pareto_soc_escs_sd_<b>.png
-    figB_pareto_soc_models_<b>.png      i tre affiancati, stessa scala y
-
-[B] DEFAULT: tutti i beta insieme (media su tutte le run, beta x seed), come
-la serie _ball di plot_curves, ma per ogni algoritmo SOLO sui beta presenti in
-tutte e tre le varianti: se una manca di un beta, mediare il resto
-confronterebbe regimi diversi. Le run escluse vengono stampate. Come li' i tre beta sono regimi diversi: la
-media serve al quadro d'insieme, le conclusioni vanno verificate per beta
-(--beta 0.1 / 0.5 / 1.0). Nella serie pooled le barre d'errore non si
-disegnano, perche' sarebbero la dispersione FRA beta e non incertezza.
-
---path collega i tre punti di ogni algoritmo nell'ordine lin -> peuk -> nm:
-la direzione dice cosa cambia migliorando il modello di batteria.
-"""
 import argparse
 import csv
 import glob
@@ -70,12 +25,6 @@ MODELS = [("lin", "lin", "#d62728"),
 
 
 def collect(results_dir, beta):
-    """label -> {btag -> lista di (SoC finale, accuracy di coda, morti)}.
-
-    Stesso calcolo di plot_curves.fig_pareto_soc, ma sulle etichette singole
-    (il raggruppamento di plot_curves fonderebbe escs_sd con escs_sp/md/mp)
-    e tenendo il beta di ogni run, per poter mediare sui soli beta comuni.
-    """
     want = None if beta == pc.ALL else pc.btag(beta)
     stats = {}
     for path in glob.glob(os.path.join(results_dir, "*_seed*.csv")):
@@ -98,24 +47,16 @@ def collect(results_dir, beta):
 
 
 def common_betas(stats, labels):
-    """Beta presenti in TUTTE le varianti disponibili dell'algoritmo.
-
-    [B] mediare su beta diversi confronterebbe regimi diversi: se ESCS-nm ha
-    solo beta 1.0 e ESCS-lin tutti e tre, la differenza fra i due punti
-    sarebbe in gran parte l'effetto del beta, non della batteria.
-    """
     sets = [set(stats[lab]) for lab in labels.values() if lab in stats]
     return sorted(set.intersection(*sets)) if sets else []
 
 
 def restrict(stats, labels, betas):
-    """label -> lista di punti, sui soli beta indicati."""
     return {lab: [p for b in betas for p in stats[lab].get(b, [])]
             for lab in labels.values() if lab in stats}
 
 
 def draw(ax, stats, name, labels, beta, path=False):
-    """Un Pareto come fig5 per un algoritmo. Ritorna i modelli disegnati."""
     bars = beta != pc.ALL
     items, pts, drawn = [], [], []
     for key, short, color in MODELS:
@@ -134,7 +75,7 @@ def draw(ax, stats, name, labels, beta, path=False):
         if D > 0:
             tag += f" ({D:.0f}†)"
         items.append((mx, my, tag, color))
-        pts.append((mx, my))         # --path: lin -> peuk -> nm
+        pts.append((mx, my))
         drawn.append(key)
     if path and len(pts) > 1:
         for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
@@ -150,7 +91,6 @@ def draw(ax, stats, name, labels, beta, path=False):
 
 
 def beta_label(beta, betas):
-    """Beta mostrati nel titolo: 'all β pooled' solo se ci sono davvero tutti."""
     if beta != pc.ALL:
         return pc.beta_str(beta)
     shown = ", ".join(b[0] + "." + b[1:] if len(b) == 2 else b for b in betas)
@@ -182,7 +122,6 @@ def main():
         if not betas:
             continue
         present.append((key, name, labels, betas, restrict(raw, labels, betas)))
-        # quali run restano fuori perche' il loro beta manca a un'altra variante
         left_out = [f"{lab} b{b}" for lab in labels.values() if lab in raw
                     for b in sorted(raw[lab]) if b not in betas]
         if left_out:
@@ -204,7 +143,6 @@ def main():
         print(f"  {out}" + (f"   (mancano: {', '.join(labels[m] for m in missing)})"
                             if missing else ""))
 
-    # i tre affiancati, stessa scala y per confrontare gli algoritmi
     fig, axes = plt.subplots(1, len(present), figsize=(7.2 * len(present), 5.8),
                              sharey=True, squeeze=False)
     for ax, (key, name, labels, betas, stats) in zip(axes[0], present):

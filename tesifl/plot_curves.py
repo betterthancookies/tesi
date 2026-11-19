@@ -1,102 +1,4 @@
 #!/usr/bin/env python3
-"""Grafici dal CSV della curva energia-accuratezza.
-
-Da ~/tesifl (dopo analyze_rounds.py):  python plot_curves.py
-
-Titoli, assi ed etichette delle figure sono in INGLESE: finiscono in tesi e
-nelle slide. I commenti restano in italiano.
-
-Produce in results/, UNA SERIE PER OGNI BETA (suffisso _b01, _b05, _b10):
-  fig1_energy_accuracy_b*.png  accuracy in funzione dell'energia spesa.
-  fig2_accuracy_rounds_b*.png  accuracy in funzione del round.
-  fig3_pareto_b*.png           energia totale vs accuracy di coda.
-  fig4_soc_b*.png              SoC a fine run, con morti e mediana.
-  fig5_pareto_soc_b*.png       accuracy di coda vs SoC medio A FINE RUN.
-  fig6_peak_soc_b*.png         accuracy MASSIMA vs SoC medio NEL ROUND DEL
-                               PICCO, col round annotato.
-  fig7_thr_soc_b*.png          SoC medio nel round in cui si raggiunge una
-                               SOGLIA comune di accuracy.
-  fig8_accounting_b*.png       frecce batteria lineare -> datasheet nel
-                               piano (morti, accuracy).
-  fig9_reserve_b*.png          SoC del client piu' scarico e morti CUMULATI,
-                               round per round: mostra se la riserva tiene.
-  fig10_lowbat_b*.png          come fig4, ma il pannello in basso conta i
-                               device in RISPARMIO ENERGETICO (SoC < 20%,
-                               morti inclusi) invece dei soli morti. Serve la
-                               colonna n_soc_low: c'e' solo nelle run fatte
-                               dopo il 15/10, senza la figura viene saltata.
-
-RAGGRUPPAMENTO DELLE VARIANTI
-Il suffisso di ogni etichetta e' la batteria dei device (lin, peuk, nm:
-lineare, Peukert, datasheet). Le quattro varianti di ESCS sono collassate in
-una curva per batteria, la media di {sd, sp, md, mp}:
-    ESCS (lin)    i quattro escs_*_lin
-    ESCS (peuk)   i quattro escs_*_peuk
-    ESCS (nm)     i quattro escs_*_nm
-SAGE e SAGE-smart restano separati: sage_lin (il SAGE del paper),
-sage_peuk e sage_nm (l'ablazione), sage_smart_lin / _peuk / _nm.
-
-[B] con device omogenei escs_sd ed escs_md danno risultati IDENTICI, e cosi'
-escs_sp ed escs_mp: la distinzione system-based / model-based del paper e'
-inerte in una popolazione senza eterogeneita' di tempo di training. La media
-sulle quattro varianti e' quindi di fatto la media fra deterministico e
-probabilistico, con peso doppio ciascuno.
-
-[B] le barre d'errore sui gruppi NON sono varianza fra seed: sono dispersione
-fra VARIANTI (e fra seed, se piu' d'uno). Con un seed solo misurano quanto le
-varianti differiscono fra loro, il che e' comunque informativo ma va detto.
-
-[B] le varianti ESCS terminano a round diversi (escs_sp si esaurisce prima di
-escs_sd). Nelle curve per round la media usa, a ogni round, le sole varianti
-ancora vive: dove una si esaurisce la curva del gruppo puo' avere un gradino.
-Il pannello dei morti di fig9 lo rende visibile.
-
---no-group disattiva il raggruppamento e ripristina le dodici curve separate.
-
-SERIE AGGREGATA SUI BETA (suffisso _ball)
-Oltre a una serie per ogni beta viene prodotta una serie "pooled" che mette
-insieme tutte le beta, con le stesse nove figure.
-
-[B] i tre beta sono REGIMI DIVERSI, non ripetizioni dello stesso esperimento:
-a beta 0.1 l'accuratezza di coda sta intorno a 0.45 e a beta 1.0 intorno a
-0.55, e il numero di client esauriti cambia di un fattore due. Mediarli
-produce un numero che non corrisponde a nessuna condizione sperimentale
-reale, e la dispersione che si vede NON e' incertezza ma effetto del beta.
-La serie _ball serve a dare un quadro d'insieme in una slide; le conclusioni
-vanno tratte dalle serie per beta. Le figure pooled lo dicono in didascalia.
-
-COSA E' L'ENERGIA: la carica estratta dalla batteria, convertita in Wh come
-V_nom * C_Ah * (-dSoC), sommata su tutti i client e tutti i round (training,
-comunicazione, idle). Il dSoC lo calcola la batteria del mondo della run:
-con quella lineare coincide con P*dt, con Peukert le correnti basse costano
-meno, col datasheet la stessa energia costa piu' carica a batteria scarica.
-E' l'energia che la batteria PAGA, non il lavoro utile prodotto dal device
-(quello e' energy_lin_wh nel CSV).
-
-[B] con device identici il SoC medio e' una trasformazione affine ESATTA
-dell'energia cumulata:
-    SoC_medio = SoC_medio_iniz - E / (N * V_nom * C_Ah)
-quindi fig3 e fig5 hanno lo stesso asse x, specchiato e riscalato. Cio' che
-il SoC aggiunge e' la DISPERSIONE: a parita' di consumo totale, quanti client
-sono morti.
-
-[B] fig5, fig6 e fig7 differiscono per il MOMENTO in cui si misura, e la
-scelta non e' neutrale:
-  fig5  fine run      -- stesso round per tutti, ma accuracy diverse
-  fig6  picco         -- stessa "qualita' migliore", ma round diversi: chi
-                         raggiunge il picco presto appare con SoC alto per
-                         il solo fatto di aver misurato prima. Il round e'
-                         annotato apposta, per rendere visibile la disparita'.
-  fig7  soglia comune -- stesso risultato di apprendimento per tutti, quindi
-                         il confronto sul SoC e' equo. Chi non raggiunge la
-                         soglia esce dal grafico, il che e' informativo.
-Fra le tre, fig7 e' quella difendibile in tesi; fig6 e' utile ma va letta
-con il round accanto.
-
-Le curve sono la MEDIA sulle run con banda +-1 dev. std (nessuna banda nella
-serie pooled): la stessa statistica dei Pareto, cosi' i numeri coincidono.
-I beta non si mescolano mai in una stessa figura: sono regimi diversi.
-"""
 import argparse
 import csv
 import glob
@@ -110,12 +12,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.transforms import Bbox
 
-# label del CSV -> gruppo mostrato nei grafici. Il suffisso e' la batteria
-# dei device, cioe' quella fisica del mondo in cui la run ha girato:
-#   lin    lineare     (fedavg, fedprox, sage_lin = SAGE del paper, *_lin)
-#   peuk   Peukert     (*_peuk)
-#   nm     datasheet   (*_nm)
-# Le quattro varianti ESCS confluiscono in un gruppo per batteria.
 _ESCS = ("sd", "sp", "md", "mp")
 _BATT = ("lin", "peuk", "nm")
 GROUP = {
@@ -124,11 +20,10 @@ GROUP = {
     **{f"sage_smart_{b}": f"sage_smart_{b}" for b in _BATT},
     "fedavg": "fedavg", "fedprox": "fedprox",
 }
-GROUPED = True          # spento da --no-group
+GROUPED = True
 
 
 def group_of(label):
-    """Nome del gruppo di un'etichetta; identita' se il raggruppamento e' off."""
     if not GROUPED:
         return label
     return GROUP.get(label, label)
@@ -154,28 +49,24 @@ COLOR = {"fedavg": "#444444", "fedprox": "#1f77b4",
          **{f"sage_smart_{b}": "#9467bd" for b in _BATT},
          "escs_lin": "#17becf", "escs_peuk": "#bcbd22", "escs_nm": "#1a7f37",
          **{f"escs_{v}_{b}": c for v, c in _ESCS_COLOR.items() for b in _BATT}}
-# tratteggio = lineare, punteggiato = Peukert, continuo = datasheet
 _DASH = {"lin": "--", "peuk": ":", "nm": "-"}
 STYLE = {**{f"sage_{b}": _DASH[b] for b in _BATT},
          **{f"sage_smart_{b}": _DASH[b] for b in _BATT},
          **{f"escs_{b}": _DASH[b] for b in _BATT},
          **{f"escs_{v}_{b}": _DASH[b] for v in _ESCS for b in _BATT}}
-# coppie (batteria lineare, batteria da datasheet): stesso algoritmo, unica
-# differenza la batteria dei device. [B] per SAGE la coppia sage_lin ->
-# sage_nm cambia anche l'algoritmo (paper -> ablazione).
 PAIRS = ([("sage_lin", "sage_nm"), ("sage_smart_lin", "sage_smart_nm")]
          + [(f"escs_{v}_lin", f"escs_{v}_nm") for v in _ESCS])
 PAIRS_GROUPED = [("sage_lin", "sage_nm"), ("sage_smart_lin", "sage_smart_nm"),
                  ("escs_lin", "escs_nm")]
 
-TAIL = 20        # round di coda su cui mediare l'accuracy finale
-THRESHOLD = 0.40  # soglia di accuracy per fig7
+TAIL = 20
+THRESHOLD = 0.40
 
 PAT_BETA = re.compile(r"^(.+)_b([0-9]+)_seed([0-9]+)\.csv$")
 PAT_PLAIN = re.compile(r"^(.+)_seed([0-9]+)\.csv$")
 
 
-ALL = "all"          # pseudo-beta: tutte le beta messe insieme
+ALL = "all"
 
 
 def btag(beta):
@@ -185,7 +76,6 @@ def btag(beta):
 
 
 def beta_str(beta):
-    """Nome del beta da mostrare nei titoli."""
     return "all \u03b2 pooled" if beta == ALL else beta
 
 
@@ -196,23 +86,12 @@ POOLED_NOTE = ("Pooled across \u03b2 = 0.1, 0.5, 1.0, which are different "
 
 
 def _place_labels(ax, items, pad=2.0):
-    """Annota i punti scegliendo, per ognuno, un offset che non si sovrappone.
-
-    [B] con i gruppi appaiati (FedAvg/FedProx sono identici per costruzione) le
-    etichette finiscono l'una sull'altra e diventano illeggibili. Qui ogni
-    etichetta prova una lista di posizioni in ordine di preferenza e prende la
-    prima libera; se nessuna lo e', prende quella con la sovrapposizione
-    minore. Le zone occupate sono le etichette gia' poste PIU' i marker.
-
-    items: lista di (x, y, testo, colore).
-    """
     if not items:
         return
     fig = ax.figure
     fig.canvas.draw()
     renderer = fig.canvas.get_renderer()
 
-    # zone da evitare: i marker dei punti
     taken = []
     for x, y, _, _ in items:
         px, py = ax.transData.transform((x, y))
@@ -227,7 +106,6 @@ def _place_labels(ax, items, pad=2.0):
              (9, 34, "left", "bottom"), (-9, 34, "right", "bottom"),
              (9, -34, "left", "top"), (-9, -34, "right", "top")]
 
-    # i punti piu' esterni scelgono per primi: hanno meno spazio libero attorno
     xs = [i[0] for i in items]
     cx = sum(xs) / len(xs)
     order = sorted(range(len(items)), key=lambda i: -abs(items[i][0] - cx))
@@ -247,7 +125,6 @@ def _place_labels(ax, items, pad=2.0):
                 ix = max(0.0, min(bb.x1, t.x1) - max(bb.x0, t.x0))
                 iy = max(0.0, min(bb.y1, t.y1) - max(bb.y0, t.y0))
                 ov += ix * iy
-            # penalizza le etichette che escono dagli assi
             ab = ax.get_window_extent(renderer=renderer)
             if bb.x0 < ab.x0 or bb.x1 > ab.x1 or bb.y0 < ab.y0 or bb.y1 > ab.y1:
                 ov += 1e4
@@ -264,14 +141,6 @@ def _place_labels(ax, items, pad=2.0):
 
 
 def fig_accounting(results_dir, out, beta):
-    """Effetto della batteria dei device: una freccia per coppia.
-
-    [B] la coda della freccia e' la run con batteria LINEARE, la punta la
-    stessa run con batteria da DATASHEET (nm). La componente orizzontale dice
-    quanti device in piu' o in meno si esauriscono con la batteria realistica,
-    quella verticale quanto cambia l'accuratezza. Per SAGE la coppia cambia
-    anche l'algoritmo (paper -> ablazione).
-    """
     by_lab = _rows_by_beta(results_dir, beta)
     pt = {}
     for lab, runs in by_lab.items():
@@ -310,8 +179,6 @@ def fig_accounting(results_dir, out, beta):
                                     shrinkA=6, shrinkB=6, alpha=0.9))
         ax.plot(x0, y0, marker="o", ms=7, mfc="white", mec=c, mew=1.8)
         ax.plot(x1, y1, marker="o", ms=8, color=c)
-        # [B] se piu' code puntassero alla stessa testa, la testa si etichetta
-        # una volta sola
         labels.append((x0, y0, LABEL.get(lin, lin), COLOR.get(lin, c)))
         if peu not in heads:
             heads.add(peu)
@@ -342,7 +209,6 @@ def smooth(y, w=11):
 
 
 def load_curve(path):
-    """-> beta -> algorithm -> seed -> [(round, energy, acc)]"""
     data = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
     with open(path) as fh:
         rd = csv.DictReader(fh)
@@ -350,16 +216,9 @@ def load_curve(path):
         for r in rd:
             beta = r["beta"] if has_beta else "n/d"
             algo = r["algorithm"]
-            # [B] la chiave e' (variante, seed), non il solo seed: dopo il
-            # raggruppamento piu' varianti condividono lo stesso seed e si
-            # sovrascriverebbero a vicenda. Ogni variante entra nel gruppo
-            # come una "ripetizione" in piu'.
             data[beta][group_of(algo)][f"{algo}#{r['seed']}"].append(
                 (int(r["round"]), float(r["energy_wh"]), float(r["accuracy"]))
             )
-    # [B] pseudo-beta "all": ogni (beta, variante, seed) entra come una
-    # ripetizione in piu' del gruppo. La chiave include il beta, altrimenti
-    # le curve di beta diversi si sovrascriverebbero.
     betas = [b for b in data if b != ALL]
     for b in betas:
         for a in data[b]:
@@ -383,13 +242,6 @@ def order_of(d):
 
 
 def _mean_band(seeds, smooth_w):
-    """Media sulle run, round per round, con banda +-1 dev. std.
-
-    [B] MEDIA, non mediana: e' la stessa statistica di fig3/fig5, cosi' la
-    fine delle curve coincide con i punti dei Pareto. Con la mediana, nella
-    serie pooled sui tre beta la curva finiva sul beta di mezzo e ignorava
-    beta 0.1 (SAGE-smart: 0.68 in fig2 contro 0.62 in fig5).
-    """
     n = min(len(v) for v in seeds)
     E = np.mean([[x[1] for x in v[:n]] for v in seeds], axis=0)
     R = [x[0] for x in seeds[0][:n]]
@@ -399,7 +251,6 @@ def _mean_band(seeds, smooth_w):
 
 
 def _rows_by_beta(results_dir, beta):
-    """label -> lista di righe (una per seed) dei CSV per-round del beta."""
     want = btag(beta)
     out = defaultdict(list)
     pooled = beta == ALL
@@ -423,7 +274,6 @@ def _rows_by_beta(results_dir, beta):
 
 
 def _acc_rows(rows):
-    """(round, accuracy, mean_soc, n_soc_zero) per le righe con accuracy."""
     out = []
     for r in rows:
         if not r.get("accuracy"):
@@ -437,8 +287,6 @@ def _acc_rows(rows):
 
 
 def _band_title(beta, ns):
-    """[B] nella serie pooled la banda non si disegna, come le barre di
-    fig3/fig5: sarebbe la dispersione FRA beta, non incertezza."""
     if beta == ALL:
         return f"(mean over {ns} runs)"
     return f"(mean over {ns} seeds, ±1 std band)"
@@ -490,8 +338,6 @@ def fig_accuracy_rounds(d, out, beta, smooth_w):
 
 def fig_pareto(d, out, beta):
     fig, ax = plt.subplots(figsize=(8, 5.5))
-    # [B] nella serie pooled le barre sarebbero dispersione fra beta, non
-    # incertezza: mostrarle inviterebbe a leggerle come errore. Solo il punto.
     bars = beta != ALL
     ns = 0
     labels = []
@@ -499,8 +345,6 @@ def fig_pareto(d, out, beta):
         seeds = list(d[a].values())
         ns = max(ns, len(seeds))
         E = [v[-1][1] for v in seeds]
-        # media di coda, non massimo: a beta basso l'accuracy oscilla molto e
-        # il massimo premia chi ha avuto un round fortunato
         A = [float(np.mean([x[2] for x in v[-TAIL:]])) for v in seeds]
         mx, my = float(np.mean(E)), float(np.mean(A))
         ax.errorbar(mx, my, xerr=np.std(E) if bars else None,
@@ -524,12 +368,6 @@ def fig_pareto(d, out, beta):
 def fig_soc(results_dir, out, beta, count_key="n_soc_zero",
             count_ylabel="Depleted clients",
             count_title="Devices depleted by end of run", count_color="#d62728"):
-    """SoC finale per algoritmo, dai CSV per-round del beta richiesto.
-
-    Il pannello in basso conta i device per la colonna `count_key`: i morti
-    (n_soc_zero, fig4) o quelli in risparmio energetico (n_soc_low, fig10).
-    Se una run non ha la colonna la figura non viene prodotta.
-    """
     by_lab = _rows_by_beta(results_dir, beta)
     if not by_lab:
         return False
@@ -569,14 +407,6 @@ def fig_soc(results_dir, out, beta, count_key="n_soc_zero",
 
 
 def _scatter_soc_acc(stats, out, beta, xlabel, ylabel, title, note=None):
-    """Scatter comune a fig5/fig6/fig7.
-
-    stats: label -> lista di (soc, acc, morti, annot) una per seed.
-
-    [B] nella serie pooled le barre d'errore sono soppresse: sarebbero la
-    dispersione FRA BETA, cioe' l'effetto del regime, e disegnarle come barre
-    invita a leggerle come incertezza. Resta il solo punto medio.
-    """
     if not stats:
         return False
     bars = beta != ALL
@@ -614,7 +444,6 @@ def _scatter_soc_acc(stats, out, beta, xlabel, ylabel, title, note=None):
 
 
 def fig_pareto_soc(results_dir, out, beta):
-    """Accuracy di coda vs SoC medio A FINE RUN."""
     by_lab = _rows_by_beta(results_dir, beta)
     stats = {}
     for lab, runs in by_lab.items():
@@ -637,14 +466,6 @@ def fig_pareto_soc(results_dir, out, beta):
 
 
 def fig_peak_soc(results_dir, out, beta):
-    """Accuracy MASSIMA vs SoC medio NEL ROUND DEL PICCO.
-
-    [B] il momento di misura differisce fra algoritmi: chi raggiunge il picco
-    presto appare con SoC alto per il solo fatto di aver misurato prima. Il
-    round del picco e' annotato accanto a ogni punto proprio per questo.
-    A beta basso l'accuracy oscilla di ~0.1 fra round consecutivi, quindi il
-    massimo e' in parte il round piu' fortunato.
-    """
     by_lab = _rows_by_beta(results_dir, beta)
     stats = {}
     for lab, runs in by_lab.items():
@@ -671,11 +492,6 @@ def fig_peak_soc(results_dir, out, beta):
 
 
 def fig_threshold_soc(results_dir, out, beta, threshold=THRESHOLD):
-    """SoC medio nel round in cui si raggiunge una SOGLIA comune.
-
-    [B] questo e' il confronto equo: tutti misurati allo stesso risultato di
-    apprendimento. Chi non raggiunge la soglia non compare, ed e' un dato.
-    """
     by_lab = _rows_by_beta(results_dir, beta)
     stats, missing = {}, []
     for lab, runs in by_lab.items():
@@ -708,13 +524,6 @@ def fig_threshold_soc(results_dir, out, beta, threshold=THRESHOLD):
 
 
 def _per_round_group(runs, key):
-    """Media sulle run del gruppo, round per round, di una colonna.
-
-    [B] le varianti terminano a round diversi: a ogni round si media sulle
-    sole run che sono arrivate fin li'. Dove una variante si esaurisce la
-    curva puo' avere un gradino, ed e' un'informazione, non un artefatto.
-    Ritorna (round, media, n_run_vive).
-    """
     series = []
     for rows in runs:
         d = {}
@@ -737,12 +546,6 @@ def _per_round_group(runs, key):
 
 
 def fig_reserve(results_dir, out, beta, reserve=0.20):
-    """SoC del client piu' scarico e morti cumulati, round per round.
-
-    Mostra se la riserva tiene e quando i device iniziano a morire, per ogni
-    algoritmo e batteria (tratteggio lineare, punteggiato Peukert, continuo
-    datasheet).
-    """
     by_lab = _rows_by_beta(results_dir, beta)
     if not by_lab:
         return False
@@ -813,7 +616,6 @@ def main():
     if args.no_pooled:
         data.pop(ALL, None)
 
-    # ordine: prima i beta singoli, poi la serie aggregata
     for beta in sorted(b for b in data if b != ALL) + ([ALL] if ALL in data else []):
         if args.beta and beta != args.beta:
             continue

@@ -15,30 +15,6 @@ from device.world_state import WorldState
 
 
 class PhysicalFedAvg(FedAvg):
-    """FedAvg sul mondo fisico, base di tutte le strategie.
-
-    BROADCAST DELLO STATO (opzione 1 del documento "Client Server Protocol"
-    del relatore, call del 16/10). Se `broadcast` e' attivo, a inizio round
-    il server chiede lo stato a tutti i client vivi (o ai primi
-    `broadcast_top_m`, nota 3 del documento) e:
-      - una frazione `broadcast_nonresp` non risponde (fuori copertura,
-        spento): e' esclusa dalla selezione di QUESTO round;
-      - chi risponde paga uno scambio di controllo: sessione radio intera se
-        poi non viene selezionato, il solo payload se viene selezionato
-        (subito dopo riceve il modello, stessa sessione);
-      - il round si allunga della latenza dello scambio, o del timeout
-        `broadcast_timeout_s` se qualcuno non risponde.
-    [B] NEL SIMULATORE IL BROADCAST NON CAMBIA L'INFORMAZIONE: i client non
-    hanno una vita autonoma da cui leggere un valore diverso da quello che il
-    mondo gia' conosce. SAGE ed ESCS usano il SoC del mondo, SAGE-smart la sua
-    stima (errore misurato < 1 punto di SoC): fanno le veci della risposta al
-    broadcast. Il broadcast c'e' per CONTARNE IL COSTO: se si dichiara di
-    avere un SoC fidato a inizio round, l'energia e il tempo per ottenerlo
-    vanno pagati (richiesta del relatore, con ~10% di client che non
-    rispondono). Si attiva per le strategie che selezionano sullo stato
-    (SAGE, ESCS, SAGE-smart), non per FedAvg e FedProx che scelgono a caso.
-    """
-
     def __init__(
         self,
         world: WorldState,
@@ -62,43 +38,21 @@ class PhysicalFedAvg(FedAvg):
         self.bcast_nonresp = float(broadcast_nonresp)
         self.bcast_timeout_s = float(broadcast_timeout_s)
         self.bcast_top_m = int(broadcast_top_m)
-        # [B] RNG propria: i non rispondenti non devono spostare la sequenza
-        # della selezione casuale ne' quella di altri componenti
         self._bcast_rng = np.random.default_rng(selection_seed + 104729)
         self._bcast_responders: list[int] = []
         self._bcast_round: dict = {}
         self._bcast_overhead_s = 0.0
         self._bcast_energy_wh = 0.0
-        # client VIVI del round, prima di escludere chi non risponde al
-        # broadcast: e' il pool su cui SAGE e SAGE-smart calcolano il tetto 0.2
         self._n_alive = 0
         self._node_to_cid: dict[int, int] = {}
-        self._epochs_sent: dict[int, int] = {}   # cid -> epoche del round in corso
-        # [B] il batch ora e' per client: in SAGE-smart lo sceglie il client,
-        # e l'addebito energetico deve usare quello EFFETTIVO (la potenza di
-        # training scala con B) e non il valore globale.
+        self._epochs_sent: dict[int, int] = {}
         self._batch_sent: dict[int, int] = {}
-        # [B] i pesi globali inviati nel round: servono a FedNova per
-        # ricavare Delta_i = w_i - w_globale. FedAvg standard non ne ha
-        # bisogno perche' media direttamente i pesi finali.
         self._global_arrays = None
-        self._round_stats: dict[int, dict] = {}  # per il CSV per-round
-        # durata dell'ultimo round (training piu' lento + ritardo iniziale):
-        # il server la conosce, ha aspettato le risposte
+        self._round_stats: dict[int, dict] = {}
         self._last_round_s = 0.0
-        # [B] 27/10: tempo simulato cumulato a fine round (colonne round_s e
-        # sim_time_s del CSV), per i grafici in funzione del tempo T. Solo
-        # registrazione: e' la stessa durata che il mondo usa per idle e
-        # ricarica, non cambia nulla della fisica.
         self._sim_time_s = 0.0
-        # [B] 30/10: SoC di ogni device a fine round (file .devsoc) e numero
-        # di partecipazioni con training per device (file .devinfo). Solo
-        # registrazione, per i grafici di distribuzione.
         self._dev_soc: dict[int, list[float]] = {}
         self._participations: dict[int, int] = {}
-        # [B] selezione vuota = fine della run. Serve a sage_soc, che termina
-        # per esaurimento del pool e non per numero di round: senza questo
-        # flag Flower continuerebbe a valutare tutti i client fino a R_max.
         self._exhausted = False
 
     def _ensure_mapping(self, grid: Grid) -> None:
@@ -131,9 +85,6 @@ class PhysicalFedAvg(FedAvg):
         if self.broadcast:
             self._charge_broadcast(selected)
 
-        # [B] il workload avanza qui, prima che il server calcoli le durate e
-        # selezioni: cosi' la selezione di questo round vede lo stato corrente,
-        # non quello del round precedente.
         self.world.begin_round()
 
         self._global_arrays = arrays
@@ -191,19 +142,10 @@ class PhysicalFedAvg(FedAvg):
         idx = self._rng.choice(len(available), size=k, replace=False)
         return [available[i] for i in idx]
 
-    # ------------------------------------------------------------ broadcast
     def _broadcast_targets(self, available: list[int], server_round: int) -> list[int]:
-        """A chi chiedere lo stato. Default: a tutti i vivi. SAGE-smart, che
-        ha una stima con cui ordinare, puo' limitarsi ai primi M (nota 3)."""
         return list(available)
 
     def _broadcast(self, available: list[int], server_round: int) -> list[int]:
-        """Richiesta di stato a inizio round: ritorna chi ha risposto.
-
-        Chi non risponde e' escluso dalla selezione di questo round. La
-        latenza e' quella di uno scambio di controllo (promozione + RTT +
-        payload); se qualcuno non risponde il server aspetta il timeout.
-        """
         targets = self._broadcast_targets(available, server_round)
         resp = [n for n in targets if self._bcast_rng.random() >= self.bcast_nonresp]
         self._bcast_responders = resp
@@ -214,9 +156,6 @@ class PhysicalFedAvg(FedAvg):
         return resp
 
     def _charge_broadcast(self, selected: list[int]) -> None:
-        """Addebita gli scambi del broadcast. Il selezionato riceve subito
-        dopo il modello: lo scambio cade nella stessa sessione radio e paga
-        il solo payload. Gli altri pagano una sessione intera."""
         sel = {int(n) for n in selected}
         for n in self._bcast_responders:
             e, _ = self.world.apply_control(self._node_to_cid[int(n)],
@@ -229,21 +168,9 @@ class PhysicalFedAvg(FedAvg):
         return None
 
     def _device_record(self, cid: int) -> ConfigRecord | None:
-        """Sensori del device simulato da allegare al messaggio di training.
-
-        None per tutte le strategie server-side: il client non ne ha bisogno.
-        sage_smart lo usa per dare al client cio' che un telefono vero
-        leggerebbe dal sistema operativo (SoC, workload, carica).
-        """
         return None
 
     def _work_done(self, cid: int, n_ex: int, reply: Message) -> tuple[float, int]:
-        """(durata in s, batch) del lavoro che il client ha DAVVERO eseguito.
-
-        Default: quello assegnato dal server, che il client esegue per intero.
-        sage_smart lo sostituisce con quello che il client dichiara, perche'
-        li' (E, B) li decide il client.
-        """
         b = self._batch_sent.get(cid, self.batch_size)
         dt = self.world.round_duration_s(
             cid,
@@ -254,33 +181,18 @@ class PhysicalFedAvg(FedAvg):
         return dt, b
 
     def _charge_communication(self, cid: int, reply: Message) -> tuple[float, float]:
-        """Comunicazione del round di un client: download del modello e upload
-        dell'update. sage_smart la riduce per chi si ritira (opt-out)."""
         return self.world.apply_communication(cid)
 
     def _round_overhead_s(self) -> float:
-        """Secondi spesi prima del training (scambi di controllo): il
-        broadcast dello stato, se attivo. sage_smart aggiunge la negoziazione."""
         return self._bcast_overhead_s if self.broadcast else 0.0
 
     def _aggregatable(self, replies: list[Message]) -> list[Message]:
-        """Reply che entrano nella media. Default: tutte.
-
-        sage_smart esclude i client che si sono ritirati dal round (opt-out):
-        hanno pagato la comunicazione ma non hanno un update da mediare.
-        """
         return replies
 
     def _on_round_result(
         self, cid: int, n_ex: int, dt_s: float, e_wh: float, e_lin_wh: float,
         reply: Message, server_round: int,
     ) -> None:
-        """Hook per le sottoclassi, chiamato dopo l'addebito fisico.
-
-        e_wh      Wh di carica pagati dalla batteria del mondo (training +
-                  upload): e_wh / (V_nom * C_nom) e' il calo di SoC esatto
-        e_lin_wh  Wh al carico, P*dt
-        """
         return None
 
     def _is_available(self, cid: int) -> bool:
@@ -297,7 +209,6 @@ class PhysicalFedAvg(FedAvg):
     def aggregate_train(
         self, server_round: int, replies: list[Message]
     ) -> tuple[ArrayRecord | None, MetricRecord | None]:
-        # nessuna reply: niente da aggregare, e super() dividerebbe per zero
         self._last_round_s = float(self._round_overhead_s())
         if not replies:
             return None, None
@@ -322,14 +233,6 @@ class PhysicalFedAvg(FedAvg):
             self._on_round_result(cid, n_ex, dt, float(e_tr + e_cm),
                                   float(l_tr + l_cm), reply, server_round)
 
-        # [B] idle DOPO il training: il round dura quanto il selezionato piu'
-        # lento, e ogni client paga la differenza (modello ESCS Sez. 4.2). Chi
-        # non e' stato selezionato paga l'intera durata. L'ordine conta: se
-        # l'idle venisse prima, un client al limite morirebbe di idle invece
-        # che di training e il conteggio cambierebbe.
-        # [B] il ritardo prima del training (messaggi di controllo di
-        # sage_smart) allunga il round: in idle lo pagano tutti tranne i
-        # selezionati, che in quel tempo stanno parlando col server.
         overhead = float(self._round_overhead_s())
         self._last_round_s = max(durations.values(), default=0.0) + overhead
         self._sim_time_s += self._last_round_s
@@ -343,8 +246,6 @@ class PhysicalFedAvg(FedAvg):
             "sim_time_s": float(self._sim_time_s),
         })
         if self.broadcast:
-            # [B] l'energia del broadcast e' gia' dentro energy_ctrl_wh (e
-            # quindi nel totale): qui la si riporta a parte per leggerla
             self._round_stats[int(server_round)].update({
                 **self._bcast_round,
                 "bcast_overhead_s": float(self._bcast_overhead_s),

@@ -1,12 +1,8 @@
-"""tesiFL: A Flower / PyTorch app."""
-
 import csv
 import os
 import time
 from pathlib import Path
 
-# [B] accuracy per round, popolata da global_evaluate: sorgente diretta, non
-# dipende dai nomi dei campi di Result (che cambiano fra versioni di Flower)
 _ACC_BY_ROUND: dict[int, tuple[float, float]] = {}
 
 import torch
@@ -24,21 +20,14 @@ from tesiFL.data.partition import load_centralized_dataset, num_classes, partiti
 from tesiFL.task import test
 from tesiFL.data.model import build_model
 
-# Create ServerApp
 app = ServerApp()
 
-# [B] nome del modello, impostato da main() e letto da global_evaluate().
-# Quest'ultima e' passata come callback a strategy.start() e non riceve il
-# Context, quindi non puo' leggere run_config da se'.
 _MODEL_NAME = "resnet20"
 _DATASET = "cifar10"
 
 
 @app.main()
 def main(grid: Grid, context: Context) -> None:
-    """Main entry point for the ServerApp."""
-
-    # Read run config
     fraction_evaluate: float = context.run_config["fraction-evaluate"]
     num_rounds: int = context.run_config["num-server-rounds"]
     lr: float = context.run_config["learning-rate"]
@@ -50,33 +39,20 @@ def main(grid: Grid, context: Context) -> None:
     global _MODEL_NAME, _DATASET
     _MODEL_NAME = str(context.run_config["model-name"])
     _DATASET = str(context.run_config["dataset"])
-    # [B] le costanti fisiche (MAC per campione, taglia del modello) le legge
-    # device/constants.py da experiment.toml: se il modello della run e'
-    # un altro, energia e tempi sarebbero calcolati per il modello sbagliato
-    # senza alcun errore visibile. Meglio fermarsi.
     from device.constants import MODEL_DATASET, MODEL_NAME
     if (_MODEL_NAME, _DATASET) != (MODEL_NAME, MODEL_DATASET):
         raise ValueError(
             f"run con {_MODEL_NAME}/{_DATASET} ma la fisica (experiment.toml, "
             f"[model]) e' per {MODEL_NAME}/{MODEL_DATASET}: cambia [model] li'")
 
-    # [B] senza questo l'init del modello e' casuale a ogni run e i confronti
-    # tra algoritmi non sono validi (accuracy iniziale diversa a round 0)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    # [B] senza questo cuDNN sceglie kernel non deterministici e due run con
-    # la stessa selezione divergono nell'accuracy (non nell'energia)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-    # Load global model
-    # [B] costruito DOPO manual_seed: l'inizializzazione dei pesi consuma la
-    # RNG di torch, quindi farlo prima renderebbe il seed inefficace.
     global_model = build_model(_MODEL_NAME, num_classes(_DATASET))
     arrays = ArrayRecord(global_model.state_dict())
 
-    # Mondo fisico: stesso seed -> stessa popolazione (confronto equo tra
-    # metodi, i node_id di Ray cambiano ma i cid/profili no)
     n_clients = len(grid.get_node_ids())
     capacity_mah = float(context.run_config["battery-capacity-mah"])
     k_per_round = int(context.run_config["clients-per-round"])
@@ -85,10 +61,7 @@ def main(grid: Grid, context: Context) -> None:
     idle_on = bool(context.run_config["idle-enabled"])
     recharge_on = bool(context.run_config["recharge-enabled"])
     recharge_avail = bool(context.run_config["recharge-available"])
-    # batteria dei device: "lin" | "peuk" | "nm" (vedi WorldState)
     battery = str(context.run_config["world-battery"])
-    # [B] 04/11, esperimento sul workload: moltiplica gli stati del workload
-    # (etichette *_x<m> in _shard.sh); 1.0 = campagne normali
     workload_scale = float(context.run_config["workload-scale"])
     world = build_world_state(n_clients=n_clients, seed=seed,
                               capacity_mah=capacity_mah,
@@ -110,7 +83,6 @@ def main(grid: Grid, context: Context) -> None:
           f" | idle {'ON' if idle_on else 'OFF'}"
           f" | ricarica {('ON, modalita ' + ('a: disponibile' if recharge_avail else 'b: unavailable')) if recharge_on else 'OFF'}")
 
-    # Initialize strategy: FedAvg + bookkeeping fisico (Sez. 4 del piano)
     common = dict(
         world=world,
         epochs=epochs,
@@ -119,9 +91,6 @@ def main(grid: Grid, context: Context) -> None:
         selection_seed=seed,
         fraction_evaluate=fraction_evaluate,
     )
-    # broadcast dello stato a inizio round: solo per chi seleziona sullo
-    # stato (SAGE, ESCS). FedAvg e FedProx scelgono a caso; SAGE-smart lo
-    # sostituisce con la negoziazione (stampa nel suo ramo, sotto).
     bcast = dict(
         broadcast=bool(context.run_config["broadcast"]),
         broadcast_nonresp=float(context.run_config["broadcast-nonresp"]),
@@ -133,17 +102,12 @@ def main(grid: Grid, context: Context) -> None:
               f"non risponde, timeout {bcast['broadcast_timeout_s']} s, "
               f"{'tutti' if bcast['broadcast_top_m'] <= 0 else 'primi ' + str(bcast['broadcast_top_m'])}")
     if algorithm.startswith("escs"):
-        # escs, escs-sd, escs-sp, escs-md, escs-mp
         suffix = algorithm.split("-")[-1] if "-" in algorithm else "sd"
         if len(suffix) != 2 or suffix[0] not in "sm" or suffix[1] not in "dp":
             raise ValueError(
                 f"variante ESCS non valida: '{algorithm}' "
                 "(usa escs-sd, escs-sp, escs-md, escs-mp)"
             )
-        # [B] ESCS ha bisogno della latenza di training di OGNI client prima
-        # del primo round (nel paper e' un dato di profilo): la si predice
-        # sulla vera taglia della partizione, ricostruita qui con lo stesso
-        # partitioner (stesso beta e seed) che usano i client.
         sizes = partition_sizes(
             num_partitions=n_clients,
             beta=float(context.run_config["beta"]),
@@ -172,9 +136,6 @@ def main(grid: Grid, context: Context) -> None:
             f"b={context.run_config['sage-b']}, c={context.run_config['sage-c']})"
         )
     elif algorithm == "sage_smart":
-        # [B] la taglia dei dataset e' un dato di ISCRIZIONE (Fase 0 della
-        # proposta): serve al server per la deadline e per l'envelope prima
-        # che il client abbia mai risposto. Stesso partitioner di ESCS.
         sizes = partition_sizes(
             num_partitions=n_clients,
             beta=float(context.run_config["beta"]),
@@ -187,22 +148,15 @@ def main(grid: Grid, context: Context) -> None:
             batch_min=int(context.run_config["smart-batch-min"]),
             batch_max=int(context.run_config["smart-batch-max"]),
         )
-        # [B] 16/11: SAGE-smart e' l'ex SAGE-smart 2 (vedi la docstring di
-        # PhysicalSAGESmart): previsione del SoC, negoziazione con rosa e
-        # scelta fresca, niente broadcast, lavoro parziale sono i default.
-        # smart-ablation SPEGNE componenti, per le ablazioni (piu' componenti
-        # uniti da "+", es. "noest+noneg"). Un solo parametro (e non i singoli
-        # valori) perche' --run-config non ammette chiavi ripetute e quelle
-        # singole sono gia' in ALGOCFG.
         ablation = str(context.run_config["smart-ablation"])
         ablations = {
             "none":      {},
-            "nostale":   {"stale_weight": 0.0},                       # niente c
-            "noest":     {"forecast": False},                         # SoC dell'ultimo report
-            "noneg":     {"negotiation": False},                      # niente proposte
-            "e5":        {"epochs_min": epochs, "epochs_cap_mult": 1},  # E = 5 fisso
-            "b128":      {"batch_min": batch_size, "batch_max": batch_size},  # B = 128
-            "nopartial": {"partial_work": False},                     # niente lavoro parziale
+            "nostale":   {"stale_weight": 0.0},
+            "noest":     {"forecast": False},
+            "noneg":     {"negotiation": False},
+            "e5":        {"epochs_min": epochs, "epochs_cap_mult": 1},
+            "b128":      {"batch_min": batch_size, "batch_max": batch_size},
+            "nopartial": {"partial_work": False},
         }
         parts = [p for p in ablation.split("+") if p and p != "none"]
         unknown = [p for p in parts if p not in ablations]
@@ -212,14 +166,10 @@ def main(grid: Grid, context: Context) -> None:
         for p in parts:
             smart.update(ablations[p])
         if smart.get("negotiation", True):
-            # chi e' raggiungibile e in che stato lo dicono le risposte alle
-            # proposte: niente broadcast, la frazione broadcast-nonresp non
-            # risponde alle proposte
             bcast = dict(bcast, broadcast=False)
             print("[strategy] SAGE-smart: niente broadcast dello stato, "
                   f"{bcast['broadcast_nonresp']:.0%} di non risposte sulle proposte")
         elif bcast["broadcast"]:
-            # ablazione noneg: senza proposte torna il broadcast dello stato
             print(f"[strategy] SAGE-smart senza negoziazione: broadcast dello stato, "
                   f"{bcast['broadcast_nonresp']:.0%} non risponde, timeout "
                   f"{bcast['broadcast_timeout_s']} s")
@@ -249,9 +199,6 @@ def main(grid: Grid, context: Context) -> None:
         )
 
     elif algorithm == "sage_soc":
-        # ablazione di SAGE: SoC con a + b = 1, niente termine rinnovabile,
-        # niente soglia di eleggibilita'. NB: non accetta sage-c.
-        # Etichette sage_peuk e sage_nm (mondi Peukert e datasheet).
         strategy = PhysicalSAGEAblation(
             sage_a=float(context.run_config["sage-a"]),
             sage_b=float(context.run_config["sage-b"]),
@@ -274,7 +221,6 @@ def main(grid: Grid, context: Context) -> None:
             f"o 'escs-XY'"
         )
 
-    # Start strategy, run FedAvg for `num_rounds`
     result = strategy.start(
         grid=grid,
         initial_arrays=arrays,
@@ -289,7 +235,7 @@ def main(grid: Grid, context: Context) -> None:
             out_dir=str(context.run_config["results-dir"]),
         )
         print(f"\n[log] metriche per round in {csv_path}")
-    except Exception as exc:  # il CSV non deve far fallire la simulazione
+    except Exception as exc:
         print(f"\n[log] CSV per round non scritto: {exc}")
 
     s = world.stats()
@@ -312,7 +258,6 @@ def main(grid: Grid, context: Context) -> None:
     )
 
     if context.run_config["save-model"]:
-        # Save final model to disk
         print("\nSaving final model to disk...")
         state_dict = result.arrays.to_torch_state_dict()
         torch.save(state_dict, "final_model.pt")
@@ -320,22 +265,13 @@ def main(grid: Grid, context: Context) -> None:
 
 def _write_round_csv(strategy, algorithm: str, seed: int, history,
                      out_dir: str = "results") -> Path:
-    """Una riga per round: accuracy + stato fisico cumulato.
-
-    Le metriche derivate (round-to-accuracy alle varie soglie, energia spesa
-    per arrivarci, curva energia-accuratezza) si calcolano da qui in fase di
-    analisi, senza dover rieseguire le simulazioni.
-    """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d_%H%M%S")
     path = out_dir / f"{algorithm}_seed{seed}_{stamp}_{os.getpid()}.csv"
 
-    # sorgente primaria: quanto registrato da global_evaluate
     acc_by_round: dict[int, tuple[float, float]] = dict(_ACC_BY_ROUND)
 
-    # fallback: i dizionari per round di Result (evaluate_metrics_serverapp e
-    # simili), usati solo se l'accumulatore fosse vuoto
     if not acc_by_round:
         for attr in ("evaluate_metrics_serverapp",
                      "evaluate_metrics_clientapp",
@@ -363,26 +299,14 @@ def _write_round_csv(strategy, algorithm: str, seed: int, history,
                 break
 
     stats = getattr(strategy, "_round_stats", {}) or {}
-    # [B] solo i round in cui c'e' stato training: dopo l'esaurimento del pool
-    # (sage_soc) global_evaluate puo' aver registrato accuracy per round senza
-    # partecipanti, che nel CSV sarebbero righe con energia vuota.
     rounds = sorted(stats) if stats else sorted(acc_by_round)
 
     cols = ["round", "accuracy", "loss", "total_energy_wh", "energy_train_wh",
             "energy_comm_wh", "energy_lin_wh", "mean_soc", "median_soc", "min_soc", "max_soc",
             "n_soc_zero", "n_failed", "n_recharging", "total_recharges"]
-    # [B] colonne nuove IN CODA: i lettori esistenti accedono per nome, quindi
-    # analyze_rounds.py e plot_curves.py continuano a funzionare senza modifiche.
     known = set(cols)
     extra = sorted({k for st in stats.values() for k in st} - known)
     cols += extra
-    # [B] 30/10: file per device, scritti PRIMA del CSV principale. _shard.sh
-    # prende il .csv piu' recente della cartella della run e poi sposta questi
-    # due accanto a lui: con un'estensione diversa da .csv non possono essere
-    # scambiati per il CSV della run.
-    #   .devsoc   una riga per round: round, SoC di ogni device (ordine cid)
-    #   .devinfo  una riga per device: tier, workload, SoC iniziale e finale,
-    #             scarico, ricariche, energia per voce, partecipazioni
     try:
         dev_soc = getattr(strategy, "_dev_soc", {}) or {}
         world = getattr(strategy, "world", None)
@@ -403,7 +327,7 @@ def _write_round_csv(strategy, algorithm: str, seed: int, history,
                 for row in rows:
                     w.writerow([row[k] if not isinstance(row[k], float) else f"{row[k]:.6f}"
                                 for k in keys[:-1]] + [part.get(row["cid"], 0)])
-    except Exception as exc:  # i file per device non devono bloccare il CSV
+    except Exception as exc:
         print(f"[log] file per device non scritti: {exc}")
     with open(path, "w", newline="") as fh:
         w = csv.writer(fh)
@@ -419,21 +343,15 @@ def _write_round_csv(strategy, algorithm: str, seed: int, history,
 
 
 def global_evaluate(server_round: int, arrays: ArrayRecord) -> MetricRecord:
-    """Evaluate model on central data."""
-
-    # Load the model and initialize it with the received weights
     model = build_model(_MODEL_NAME, num_classes(_DATASET))
     model.load_state_dict(arrays.to_torch_state_dict())
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model.to(device)
 
-    # Load entire test set
     test_dataloader = load_centralized_dataset(_DATASET)
 
-    # Evaluate the global model on the test set
     test_loss, test_acc = test(model, test_dataloader, device)
 
     _ACC_BY_ROUND[int(server_round)] = (float(test_acc), float(test_loss))
 
-    # Return the evaluation metrics
     return MetricRecord({"accuracy": test_acc, "loss": test_loss})

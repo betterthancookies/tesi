@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""Diagnostica dei CSV per-round: quanti round hanno davvero addestrato e
-quanto costano rispetto a quello che il modello fisico prevede.
-
-    python check_runs.py                 # tutti i CSV in results/
-    python check_runs.py --dir results   --beta 05
-"""
 from __future__ import annotations
 
 import argparse
@@ -32,7 +26,7 @@ def analyse(path: Path) -> dict:
         if e is None:
             continue
         if prev is None:
-            deltas.append(e)      # il round 1 e' esso stesso un incremento
+            deltas.append(e)
         else:
             d = e - prev
             if d > 1e-12:
@@ -41,7 +35,6 @@ def analyse(path: Path) -> dict:
                 flat += 1
         prev = e
 
-    # round identici al precedente in TUTTE le colonne: nessun training
     frozen = 0
     for a, b in zip(rows, rows[1:]):
         if all(a.get(k) == b.get(k) for k in a if k != "round"):

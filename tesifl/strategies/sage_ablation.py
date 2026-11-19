@@ -12,31 +12,6 @@ from strategies.sage import _js
 
 
 class PhysicalSAGEAblation(PhysicalFedAvg):
-    """Variante della tesi: SAGE con un SoC al posto di E_i.
-
-        max  sum_i y_i * (a*SoC_i + b*D_i)      a + b = 1
-
-    Nella campagna gira nei mondi Peukert e datasheet (etichette sage_peuk e
-    sage_nm); il SAGE del paper gira in quello lineare (sage_lin).
-
-    DIFFERENZE RISPETTO A `PhysicalSAGE`, tutte volute:
-    1. la risorsa e' il SoC del device con a + b = 1 (pesi tarati per beta,
-       sage_ab in experiment.toml) invece della terna (a, b, c) del paper.
-       Come in SAGE il SoC e' quello della batteria del mondo.
-    2. niente termine rinnovabile (c = 0): non c'e' un corrispettivo fisico
-       nel world state, e il rumore di R_i sporcherebbe il confronto.
-    3. niente soglia di eleggibilita' (2e): i client a SoC zero sono gia'
-       fuori da `available`, perche' il world state li marca failed. Il
-       vincolo (2b) e' sul POOL disponibile, non su N: se il pool scende sotto
-       k/0.2 l'ILP diventa infeasible e la run termina per esaurimento.
-
-    Meta' epoche sotto SoC 0.3 e divergenza D_i come in SAGE. I pesi (a, b)
-    vanno scelti per beta, quindi sage_lin e sage_peuk/sage_nm differiscono
-    per batteria E per algoritmo (pesi, rinnovabile, soglia): va tenuto
-    presente leggendo i risultati. Fra sage_peuk e sage_nm cambia solo la
-    batteria.
-    """
-
     def __init__(
         self,
         *args,
@@ -44,7 +19,7 @@ class PhysicalSAGEAblation(PhysicalFedAvg):
         sage_b: float = 0.5,
         sage_k: int = 2,
         half_epochs_threshold: float = 0.3,
-        max_fraction: float = 0.2,   # k_per_round / N
+        max_fraction: float = 0.2,
         class_distributions: dict[int, np.ndarray] | None = None,
         **kwargs,
     ) -> None:
@@ -56,8 +31,8 @@ class PhysicalSAGEAblation(PhysicalFedAvg):
         self.half_th = float(half_epochs_threshold)
         self.max_frac = float(max_fraction)
 
-        self._dist: dict[int, np.ndarray] = {}   # cid -> distribuzione classi
-        self._div: dict[int, float] = {}         # cid -> JSD media
+        self._dist: dict[int, np.ndarray] = {}
+        self._div: dict[int, float] = {}
         self._half: set[int] = set()
 
         if class_distributions:
@@ -66,9 +41,7 @@ class PhysicalSAGEAblation(PhysicalFedAvg):
                 self._dist[int(cid)] = arr / arr.sum()
             self._recompute_div()
 
-    # ------------------------------------------------------------ componenti
     def _resource(self, cid: int) -> float:
-        """SoC della batteria del device."""
         return float(self.world.snapshot(cid).soc)
 
     def _divergence(self, cid: int) -> float:
@@ -76,7 +49,6 @@ class PhysicalSAGEAblation(PhysicalFedAvg):
             return self._div[cid]
         return float(np.mean(list(self._div.values()))) if self._div else 0.0
 
-    # ------------------------------------------------------------- selezione
     def _select_clients(
         self, available: list[int], k: int, server_round: int
     ) -> list[int]:
@@ -85,18 +57,11 @@ class PhysicalSAGEAblation(PhysicalFedAvg):
             return []
         cid_of = self._node_to_cid
 
-        # niente soglia di eleggibilita': i client a SoC zero sono gia' fuori
-        # da `available`, perche' il world state li marca failed.
         pool = available
         m = len(pool)
-        # (2a) k + r con r 0-indicizzato, e tetto sulla frazione del POOL dei
-        # VIVI (_n_alive): chi non risponde al broadcast e' irraggiungibile in
-        # questo round, ma non deve abbassare il tetto. Senza broadcast
-        # _n_alive == m. Il terzo termine evita di chiedere piu' client di
-        # quelli raggiungibili.
         hi = min(self.k + server_round - 1,
                  int(np.floor(self.max_frac * max(m, self._n_alive))), m)
-        lo = self.k   # non si clampa: se lo > hi l'ILP e' infeasible, ed e' voluto
+        lo = self.k
 
         score = {
             n: self.a * self._resource(cid_of[n])
@@ -136,12 +101,10 @@ class PhysicalSAGEAblation(PhysicalFedAvg):
         if cid in self._half:
             cfg["epochs"] = max(1, int(self.epochs) // 2)
 
-    # ---------------------------------------------------------------- update
     def _on_round_result(
         self, cid: int, n_ex: int, dt_s: float, e_wh: float, e_lin_wh: float,
         reply: Message, server_round: int,
     ) -> None:
-        # nessuna contabilita' energetica locale: il SoC lo tiene il world state
         dist = self._metric(reply, "class-dist", default=None)
         if dist is None:
             return

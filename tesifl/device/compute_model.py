@@ -9,21 +9,12 @@ from device.device_profile import DeviceProfile
 
 
 def training_macs(epochs: int, n_samples: int) -> float:
-    #MACs totali di un round locale: fwd*factor x campioni x epoche
     return TRAIN_MACS_FACTOR * MODEL_MACS_FWD_PER_SAMPLE * epochs * n_samples
 
 
 def training_time_s(
     profile: DeviceProfile, epochs: int, n_samples: int, batch_size: int
 ) -> float:
-    """Durata di un round: calcolo + overhead per batch.
-
-    [B] l'overhead fisso per batch e' l'unico modo in cui B entra nel costo:
-    la potenza di training e' costante per tier (DeviceProfile.train_power_w),
-    quindi l'energia di un'epoca, P * t, CALA al crescere di B. Non c'e' un
-    batch energeticamente ottimo interno: la scelta di B e' una questione di
-    accuracy (passi di SGD per epoca), che il modello fisico non vede.
-    """
     n_batches = max(1, n_samples // batch_size)
     compute_s = training_macs(epochs, n_samples) / profile.macs_per_s
     overhead_s = epochs * n_batches * BATCH_OVERHEAD_S
@@ -31,11 +22,6 @@ def training_time_s(
 
 
 def probe_time_s(profile: DeviceProfile, n_samples: int) -> float:
-    """Solo forward su n_samples: la stima della loss locale prima del training.
-
-    [B] niente fattore 3 (non c'e' backward) e niente overhead per batch: e'
-    una singola passata in valutazione, trascurabile rispetto al resto.
-    """
     if n_samples <= 0:
         return 0.0
     return MODEL_MACS_FWD_PER_SAMPLE * n_samples / profile.macs_per_s

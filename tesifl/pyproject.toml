@@ -8,11 +8,6 @@ version = "1.1.6"
 description = ""
 license = {file = "LICENSE"}
 dependencies = [
-    # [B] Flower esige ">=" qui (fab-format-version = 1): "==" fa fallire flwr
-    # run. Ma con ">=" pip prende l'ultima versione, e la 1.39 non accetta piu'
-    # --serverappio-api-address (superlinks.sh). La versione delle campagne e'
-    # la 1.32.1: su un server nuovo installala PRIMA di "pip install -e .":
-    #     pip install "flwr[simulation]==1.32.1"
     "flwr[simulation]>=1.32.1",
     "flwr-datasets[vision]>=0.6.0",
     "torch==2.10.0",
@@ -33,60 +28,39 @@ serverapp = "tesiFL.server_app:app"
 clientapp = "tesiFL.client_app:app"
 
 [tool.flwr.app.config]
-# =====================================================================
-# NON MODIFICARE QUI: questi sono solo i DEFAULT che Flower richiede di
-# dichiarare. I valori usati davvero vengono da experiment.toml, che
-# run.sh passa con --run-config a ogni run. Modificare qui non ha effetto
-# se lanci con run.sh.
-# =====================================================================
 num-server-rounds = 250
-clients-per-round = 6        # lo sweep lo sovrascrive con round(0.2 * N)
-battery-capacity-mah = 200.0 # usata SOLO con tiers-enabled = false
+clients-per-round = 6
+battery-capacity-mah = 200.0
 
-# --- eterogeneita': tre tier hardware + workload concorrente.
-# Tutti e tre a false riproducono esattamente le campagne precedenti: e'
-# l'ablazione che separa l'effetto dell'eterogeneita' da quello della
-# politica di selezione.
-tiers-enabled = true      # 3 tier in parti uguali, 200/300/400 mAh, 1x/2x/4x
-workload-enabled = true   # 3 catene di Markov, assegnate indipendentemente
-workload-scale = 1.0      # moltiplica gli stati del workload (etichette *_x<m>, workload_sweep.sh)
-idle-enabled = true       # consumo fra i round, modello ESCS Sez. 4.2
+tiers-enabled = true
+workload-enabled = true
+workload-scale = 1.0
+idle-enabled = true
 
-# --- ricarica sporadica, probabilita' p = 0.05 * (1 - SoC) per round.
-# recharge-available sceglie la modalita':
-#   true  (a) in carica il device resta selezionabile e si allena a costo zero
-#   false (b) in carica il device e' fuori dalla federazione (N-1 client)
-# --- SAGE-smart: selezione con anzianita', (E,B) decisi dal client
-smart-stale-weight = 0.3     # peso (c) del termine di anzianita' nel punteggio
-smart-stale-max = 25         # round dopo i quali l'anzianita' e' al massimo
-smart-soc-min = 0.20         # riserva che il client protegge
-smart-epochs-min = 2         # E_lo dell'envelope
-smart-deadline-mult = 1.0    # deadline = mult * mediana dei tempi nominali
-smart-probe-samples = 256    # campioni per stimare la loss locale
-smart-max-waves = 2          # ondate di proposte per round (1 = nessun rimpiazzo)
-smart-batch-min = 16         # B piu' piccolo (preferito) dell'envelope
-smart-batch-max = 64         # B piu' grande, se il piccolo non ci sta
-smart-ablation = "none"      # none | nostale | noest | noneg | e5 | b128 | nopartial
-                             # spegne componenti, anche piu' d'uno uniti da "+"
-                             # (_shard.sh la ricava dall'etichetta sage_smart_<x>_nm)
-# --- broadcast dello stato a inizio round (SAGE, ESCS; SAGE-smart solo con noneg)
-broadcast = false            # run.sh lo prende da experiment.toml
-broadcast-nonresp = 0.10     # frazione di client che non risponde (anche alle proposte)
-broadcast-timeout-s = 1.0    # attesa delle risposte mancanti
-broadcast-top-m = 0          # non lo usa piu' nessuno (era solo di SAGE-smart)
-# --- batteria dei device (la batteria FISICA del mondo, per tutti gli
-# algoritmi): "lin" (lineare) | "peuk" (Peukert) | "nm" (datasheet).
-# _shard.sh la ricava dal suffisso dell'etichetta.
+smart-stale-weight = 0.3
+smart-stale-max = 25
+smart-soc-min = 0.20
+smart-epochs-min = 2
+smart-deadline-mult = 1.0
+smart-probe-samples = 256
+smart-max-waves = 2
+smart-batch-min = 16
+smart-batch-max = 64
+smart-ablation = "none"
+broadcast = false
+broadcast-nonresp = 0.10
+broadcast-timeout-s = 1.0
+broadcast-top-m = 0
 world-battery = "nm"
-model-name = "resnet20"      # "resnet20" | "resnet18" (experiment.toml, [model])
-dataset = "cifar10"          # "cifar10" | "cifar100"
-augment = false              # crop + flip sul train dei client ([model].augment)
+model-name = "resnet20"
+dataset = "cifar10"
+augment = false
 recharge-enabled = true
 recharge-available = true
 fraction-evaluate = 1.0
-local-epochs = 5          # era 1: con 1 le mezze epoche di SAGE non esistono
-learning-rate = 0.01      # paper SAGE
-batch-size = 128          # paper SAGE
+local-epochs = 5
+learning-rate = 0.01
+batch-size = 128
 save-model = false
 beta = 0.5
 seed = 42
@@ -100,28 +74,5 @@ escs-selection = "d"
 escs-min-battery = 0.20
 escs-min-nq = 0.20
 escs-cap-probabilistic = false
-escs-first-round-all = true   # Alg. 1 righe 5-6 del paper: round 1 = tutti
-results-dir = "results"       # dove l'app scrive il CSV per round; va cambiata
-                              # per ogni processo se si parallelizza su piu' GPU
-
-
-#######################################################################
-# CONFIGURATION MIGRATION NOTICE:
-#
-# What was previously called "federation config" for SuperLink
-# connections in pyproject.toml has been renamed and moved.
-#
-# These settings are now **SuperLink connection configuration**
-# and are defined in the Flower configuration file.
-#
-# The entries below are commented out intentionally and are kept
-# only as a migration reference.
-#
-# Docs: https://flower.ai/docs/framework/ref-flower-configuration.html
-#######################################################################
-
-# [tool.flwr.federations]
-# default = "local-sim"
-
-# [tool.flwr.federations.local-sim]
-# options.num-supernodes = 30
+escs-first-round-all = true
+results-dir = "results"

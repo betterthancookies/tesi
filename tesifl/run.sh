@@ -1,35 +1,4 @@
 #!/usr/bin/env bash
-# Unico punto di lancio. Configura tutto in experiment.toml, poi:
-#
-#   bash run.sh              esegue la campagna
-#   bash run.sh --fastTest   run minuscola (FedAvg, beta 0.5, 3 round) che
-#                            verifica ambiente, GPU, dataset e valori; scrive
-#                            in results_fasttest/, non tocca la campagna
-#   FT_ALGO=sage_smart_nm bash run.sh --fastTest   la stessa con un'altra
-#                            etichetta (es. per vedere i B scelti da SAGE-smart)
-#   bash run.sh --dry        stampa cosa farebbe e si ferma
-#   bash run.sh --resume     salta i CSV gia' presenti (default: attivo)
-#   bash run.sh --force      rifa' tutto anche se i CSV ci sono
-#
-#   EXP_TOML=altro.toml bash run.sh   campagna, algoritmi e [algo] da un
-#       altro file (lo usa sweep_batch.sh). La FISICA viene sempre da
-#       experiment.toml: la legge device/constants.py nei processi Flower.
-#
-# COSA FA
-#   - controlla l'ambiente (comandi, GPU vista da torch, dataset in cache);
-#   - avvia un SuperLink per GPU (superlinks.sh) e verifica che rispondano;
-#   - assegna i beta alle GPU a giro (beta i -> GPU i mod n_gpu): con una GPU
-#     per beta girano in parallelo, sfalsati e con l'ordine degli algoritmi
-#     ruotato; i beta che condividono una GPU girano IN SEQUENZA nella stessa
-#     sessione tmux. Con una GPU sola l'intera campagna e' una fila unica;
-#   - archivia i CSV in results_<name>/ con nomi deterministici;
-#   - a fine corsa unisce i .tsv e rimuove le cartelle di transito.
-#
-# [B] SFALSAMENTO E ROTAZIONE. Il 09/09 i tre shard partirono insieme sulla
-# stessa prima configurazione e si contesero la GPU: ~20% dei round di FedAvg
-# non addestro' nessun client, in silenzio e senza errori nei log. Lo
-# scoprimmo solo dai CSV. Da qui stagger_s e la rotazione, e la regola che
-# due run non condividono mai una GPU.
 
 set -u
 cd "$(dirname "$0")"
@@ -50,7 +19,6 @@ CONDA_ENV=${CONDA_ENV:-tesifl}
 export EXP_TOML=${EXP_TOML:-experiment.toml}
 [ -f "$EXP_TOML" ] || { echo "ERRORE: $EXP_TOML non esiste"; exit 1; }
 
-# ---- legge experiment.toml una volta sola ---------------------------
 eval "$(python3 - <<'PY'
 import os, tomllib, shlex
 c = tomllib.load(open(os.environ["EXP_TOML"], "rb"))
@@ -106,11 +74,6 @@ read -ra ALGO_ARR <<< "$ALGOS"
 NG=${#GPU_ARR[@]}
 [ "$NG" -gt 0 ] || { echo "ERRORE: nessuna GPU in experiment.toml"; exit 1; }
 
-# ---- controlli d'ambiente -------------------------------------------
-# [B] cambio server (ottobre 2026): ambiente, dataset in cache e config.toml
-# di flwr vanno ricreati, e ogni pezzo mancante fallisce in un punto diverso
-# (spesso dentro il SuperLink, dove non lo vedi). Meglio fermarsi qui.
-# tmux e conda.sh servono solo alla campagna: nel fastTest sono avvisi.
 WARN=""
 preflight() {
   local ok=1 gpu="${GPU_ARR[0]}" cmd
@@ -164,7 +127,6 @@ preflight() {
   [ "$ok" = "1" ]
 }
 
-# avvia i SuperLink delle GPU date e controlla che rispondano
 start_superlinks() {
   local gpus="$1" i=0 g
   GPUS="$gpus" bash superlinks.sh start
@@ -179,7 +141,6 @@ start_superlinks() {
   echo ""
 }
 
-# ---- fastTest -------------------------------------------------------
 if [ "$FAST" = "1" ]; then
   FT_RESULTS="results_fasttest"; FT_ROUNDS=3; FT_BETA=0.5; FT_TIMEOUT=1800
   FT_ALGO=${FT_ALGO:-fedavg}
@@ -189,7 +150,6 @@ if [ "$FAST" = "1" ]; then
   echo ""
   preflight || { echo "=== PROBLEMI nell'ambiente: NON procedere ==="; exit 1; }
   [ "$DRY" = "1" ] && exit 0
-  # il SuperLink e' lo stesso della campagna (GPU in prima posizione)
   start_superlinks "$GPUS" || exit 1
   rm -rf "$FT_RESULTS"; mkdir -p "$FT_RESULTS"
   t0=$(date +%s)
@@ -207,8 +167,6 @@ if [ "$FAST" = "1" ]; then
   exit "$rc"
 fi
 
-# ---- beta -> GPU ----------------------------------------------------
-# GPU_BETAS[j] = "beta:rotazione ..." dei beta assegnati alla GPU j
 declare -a GPU_BETAS
 for i in "${!BETA_ARR[@]}"; do
   j=$(( i % NG ))
@@ -233,7 +191,6 @@ echo ""
 preflight || { echo "=== PROBLEMI nell'ambiente: annullo ==="; exit 1; }
 [ "$DRY" = "1" ] && exit 0
 
-# ---- SuperLink, uno per GPU -----------------------------------------
 start_superlinks "$GPUS" || exit 1
 
 mkdir -p "$RESULTS"
@@ -242,8 +199,6 @@ for j in "${!GPU_ARR[@]}"; do
   [ -n "${GPU_BETAS[$j]:-}" ] || continue
   gpu="${GPU_ARR[$j]}"
   sess="${NAME}_gpu${gpu}"
-  # gli shard della stessa GPU in fila: ";" e non "&&", cosi' uno shard con
-  # run fallite non blocca i beta successivi
   shards=""
   for pair in ${GPU_BETAS[$j]}; do
     beta="${pair%%:*}"; rot="${pair##*:}"
@@ -275,10 +230,7 @@ while true; do
   sleep 60
 done
 
-# ---- pulizia --------------------------------------------------------
 for g in "${GPU_ARR[@]}"; do
-  # [B] ogni run ha la sua sottocartella: un CSV rimasto li' e' di una run
-  # andata in timeout, e il nome della cartella dice quale
   left=$(find "${RESULTS}/_gpu${g}" -name '*.csv' 2>/dev/null | wc -l)
   if [ "$left" -gt 0 ]; then
     echo "  ATTENZIONE: ${left} CSV di run in timeout in ${RESULTS}/_gpu${g}/:"
@@ -293,7 +245,7 @@ if [ -n "$tsvs" ]; then
   cat $tsvs | grep -v "^seed" >> "${RESULTS}/runs.tsv" 2>/dev/null
   rm -f $tsvs
 fi
-cp "$EXP_TOML" "${RESULTS}/experiment.toml"   # com'era configurata la campagna
+cp "$EXP_TOML" "${RESULTS}/experiment.toml"
 
 echo ""
 echo "=== fatto: $(ls ${RESULTS}/*_b*_seed*.csv 2>/dev/null | wc -l) CSV su ${TOTAL} ==="

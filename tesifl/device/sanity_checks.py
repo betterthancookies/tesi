@@ -1,9 +1,3 @@
-"""Suite di verifica per il package device/ (popolazione omogenea, Peukert).
-
-USO, dalla root del progetto:
-    python -m device.sanity_checks
-"""
-
 from __future__ import annotations
 
 import sys
@@ -28,9 +22,7 @@ def approx(a: float, b: float, tol: float = 0.01) -> bool:
     return abs(a - b) <= tol
 
 
-# =====================================================================
 print("=== 1. device_profile.py -- popolazione omogenea ===")
-# =====================================================================
 from device.device_profile import generate_profiles
 
 profs = generate_profiles(n_clients=30)
@@ -43,9 +35,7 @@ check("il seed non influenza i profili (mondo fisico deterministico)",
 check("i cid sono 0..n-1 senza buchi",
       [p.cid for p in profs] == list(range(30)))
 
-# =====================================================================
 print("\n=== 2. battery_model.py -- formule contro gli handout ===")
-# =====================================================================
 from device.battery_model import (
     delta_soc, energy_wh_from_delta_soc, load_power_to_battery_current,
     peukert_capacity_ah,
@@ -58,7 +48,7 @@ class _Fake:
     peukert_n = 1.1
 
 
-cp = peukert_capacity_ah(_Fake())  # type: ignore[arg-type]
+cp = peukert_capacity_ah(_Fake())
 check("Peukert capacity, Esempio 5.2 handout (atteso 0.851 Ah)",
       approx(cp, 0.851, tol=0.001), detail=f"{cp:.4f} Ah")
 check("durata a 0.2A, Esempio 5.2 handout (atteso 5.00 h)",
@@ -86,9 +76,7 @@ c_rate_train = i / (p.battery_capacity_mah / 1000.0)
 check("la corrente di training e' un C-rate plausibile (< 2C)",
       c_rate_train < 2.0, detail=f"{c_rate_train:.2f}C")
 
-# =====================================================================
 print("\n=== 3. compute_model -- tempo, overhead, batch ottimo ===")
-# =====================================================================
 from device.compute_model import optimal_batch_size, training_macs, training_time_s
 from device.constants import (
     BATCH_OVERHEAD_S, LENET5_MACS_FWD_PER_SAMPLE, POWER_EXPONENT_BATCH,
@@ -112,7 +100,6 @@ check("batch piu' grandi ammortizzano l'overhead: il round e' piu' corto",
       detail=f"B=32: {training_time_s(p, 5, 1333, 32):.1f}s  "
              f"B=256: {training_time_s(p, 5, 1333, 256):.1f}s")
 
-# ---- il batch ottimo e la sua invarianza ----------------------------
 b_lin = optimal_batch_size(p, peukert=False)
 b_peu = optimal_batch_size(p, peukert=True)
 ratio_atteso = (POWER_EXPONENT_BATCH * (1 - POWER_EXPONENT_BATCH * p.peukert_n)) / (
@@ -129,7 +116,6 @@ check("[B] il batch ottimo NON dipende da epoche e campioni "
 
 
 def _round_energy(profile, bs, epochs=5, n=1333):
-    """Energia di un round a batch bs, come la calcola world_state."""
     from device.constants import (
         BATCH_SIZE_REF, POWER_BATCH_MULT_MAX, POWER_BATCH_MULT_MIN,
     )
@@ -154,9 +140,7 @@ check("B=128 dei paper costa piu' del minimo, e B grande molto di piu'",
       detail=f"B=128 +{100*(energies[128]/energies[b_min]-1):.1f}%  "
              f"B=512 +{100*(energies[512]/energies[b_min]-1):.1f}%")
 
-# =====================================================================
 print("\n=== 4. communication_model.py ===")
-# =====================================================================
 from device.communication_model import (
     comm_energy_j, comm_power_w, comm_time_s, round_payload_mb,
 )
@@ -173,9 +157,7 @@ check("coerenza E = P_media x t",
       approx(comm_power_w() * comm_time_s(), comm_energy_j(), tol=1e-9),
       detail=f"E={comm_energy_j():.3f}J  t={comm_time_s():.3f}s  P={comm_power_w():.2f}W")
 
-# =====================================================================
 print("\n=== 5. world_state.py -- invarianti su una run completa ===")
-# =====================================================================
 from device.constants import V_NOMINAL
 from device.world_state import build_world_state
 
@@ -214,10 +196,6 @@ check("energia totale = train + comm",
 check("n_soc_zero coincide con n_failed",
       s["n_soc_zero"] == s["n_failed"], detail=f"{s['n_failed']}/{N} morti")
 
-# [B] identita' energia-SoC: con device identici ogni Wh sottratto a una
-# cella e' contabilizzato e non esistono altre vie di consumo. Una
-# violazione ha gia' smascherato due difetti (background drain non
-# contabilizzato, disallineamento fra popolazione simulata e SuperNode).
 wh_per_soc = N * V_NOMINAL * p.battery_capacity_mah / 1000.0
 check("[B] identita' E_tot = N*V*C*(SoC_iniz - SoC_fin)",
       approx(s["total_energy_wh"], (soc0 - s["mean_soc"]) * wh_per_soc, tol=0.05),

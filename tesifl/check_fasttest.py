@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-"""Controlla il CSV della run minuscola di `bash run.sh --fastTest`.
-
-    python check_fasttest.py --csv results_fasttest/fedavg_b05_seed2026.csv \
-        --rounds 3 --clients 30 [--label fedavg] [--seconds 140] [--warn "..."]
-
-In ogni mondo la carica spesa dalla batteria e' la somma delle sue voci
-(training + comunicazione + idle + controllo). Nel mondo LINEARE (etichette
-senza suffisso _peuk/_nm, come fedavg) e' anche uguale all'energia del carico.
-Gli intervalli sono larghi (circa 10x attorno ai valori della campagna
-rechargeONdeviceON_ResNet20_batterie, beta 0.5, 3 round: accuracy 0.38,
-training ~0.6 Wh/round, comunicazione ~0.05 Wh/round per 6 client): devono
-scattare per un errore vero, non per una variazione della fisica.
-Con un altro modello o dataset ([model] di experiment.toml) le soglie si
-scalano: accuracy con il numero di classi, training con i MAC per campione e
-la frazione di client, comunicazione con i MB del modello e i client per round.
-Exit code 0 se tutto ok, 1 altrimenti.
-"""
 from __future__ import annotations
 
 import argparse
@@ -30,19 +13,11 @@ COLS = ("round", "accuracy", "loss", "total_energy_wh", "energy_train_wh",
         "mean_soc", "min_soc", "max_soc", "n_soc_zero", "n_clients",
         "mean_workload")
 
-# campagna di riferimento delle soglie: ResNet-20 su CIFAR-10, 30 client, 6 per round
 REF_MACS, REF_PARAMS, REF_CLIENTS, REF_K_FRACTION, REF_K = 40551040, 269722, 30, 0.2, 6
 N_CLASSES = {"cifar10": 10, "cifar100": 100}
 
 
 def scales(clients: int) -> tuple[str, int, tuple[float, float], tuple[float, float]]:
-    """(modello, classi, scale (min, max) del training, della comunicazione).
-
-    [B] 16/10: il MINIMO scala con il costo di UN client, il massimo con i
-    client per round. SAGE nei primi round ne seleziona 2, 3, 4 (k + r - 1)
-    qualunque sia N: con 100 client e il minimo scalato su 20 per round il
-    fastTest dava FAIL su valori esatti.
-    """
     cfg = tomllib.load(open("experiment.toml", "rb"))
     name, ds = cfg["model"]["name"], cfg["model"]["dataset"]
     spec = cfg["model"]["specs"][f"{name}_{ds}"]
@@ -50,10 +25,7 @@ def scales(clients: int) -> tuple[str, int, tuple[float, float], tuple[float, fl
     k = max(1, round(kf * clients))
     macs = spec["macs_fwd_per_sample"] / REF_MACS
     params = spec["n_params"] / REF_PARAMS
-    # training: un client ~ MAC x campioni per client (50k / N); un round ~
-    # MAC x campioni dei selezionati (50k x k_fraction)
     s_train = (macs * REF_CLIENTS / clients, max(1.0, macs * kf / REF_K_FRACTION))
-    # comunicazione: un client ~ MB del modello; un round ~ MB x client per round
     s_comm = (params, max(1.0, params * k / REF_K))
     return f"{name}/{ds}", N_CLASSES.get(ds, 10), s_train, s_comm
 
@@ -114,7 +86,6 @@ def main() -> int:
     print(f"  (modello {model}: soglie training x{s_train[0]:.1f}/x{s_train[1]:.1f}, "
           f"comunicazione x{s_comm[0]:.1f}/x{s_comm[1]:.1f})")
 
-    # --- modello: impara qualcosa ---------------------------------------
     acc = v["accuracy"]
     acc_min = 1.5 / n_cls
     check("accuracy fra 0 e 1", all(0.0 <= a <= 1.0 for a in acc))
@@ -123,9 +94,6 @@ def main() -> int:
     check("loss finita e positiva", all(x > 0 for x in v["loss"]),
           f"{' -> '.join(f'{x:.3f}' for x in v['loss'])}")
 
-    # --- ogni round ha addestrato davvero --------------------------------
-    # [B] 09/09: con la GPU contesa ~20% dei round non addestro' nessuno, senza
-    # errori: si vede solo come energia di training ferma da un round all'altro
     tr = [v["energy_train_wh"][0]] + [b - a for a, b in
                                       zip(v["energy_train_wh"], v["energy_train_wh"][1:])]
     cm = [v["energy_comm_wh"][0]] + [b - a for a, b in
@@ -141,21 +109,17 @@ def main() -> int:
     check("idle in aumento", all(b > a for a, b in
                                  zip(v["energy_idle_wh"], v["energy_idle_wh"][1:])))
 
-    # --- contabilita' dell'energia ----------------------------------------
     parts = [t + c + i + k for t, c, i, k in zip(v["energy_train_wh"], v["energy_comm_wh"],
                                                   v["energy_idle_wh"], v["energy_ctrl_wh"])]
     err_sum = max(abs(p - e) / e for p, e in zip(parts, v["total_energy_wh"]))
     check("carica = training + comunicazione + idle + controllo", err_sum < 1e-3,
           f"errore relativo {err_sum:.1e}")
-    # [B] 04/11: le etichette dell'esperimento sul workload finiscono con
-    # _x<m> (sage_smart_nm_x3): la batteria e' il suffisso che viene prima
     battery_label = re.sub(r"_x[0-9]+(p[0-9]+)?$", "", args.label)
     if not battery_label.endswith(("_peuk", "_nm")):
         err_lin = max(abs(t - e) / e for t, e in zip(v["total_energy_wh"], v["energy_lin_wh"]))
         check("batteria lineare: carica della batteria = energia del carico", err_lin < 1e-3,
               f"errore relativo {err_lin:.1e}")
 
-    # --- SAGE-smart: B ed E scelti dai client --------------------------------
     if args.label.startswith("sage_smart") and "mean_batch" in rows[0]:
         mb = [x for x in (float(r["mean_batch"]) for r in rows if r.get("mean_batch"))
               if math.isfinite(x)]
@@ -167,17 +131,12 @@ def main() -> int:
               bool(mb) and all(b_lo <= b <= b_hi for b in mb),
               "B " + " ".join(f"{b:.0f}" for b in mb)
               + ("  E " + " ".join(f"{e:.1f}" for e in me) if me else ""))
-        # [B] FedNova amplifica di tau_eff/tau_i chi fa pochi passi: sopra ~8
-        # un solo update domina (collasso del 14/10 con spread 15-16).
-        # [B] 30/10: FedNova e' spento di default e la media pesata per i dati
-        # non amplifica nessuno, quindi lo spread alto e' solo un avviso.
         sp = [x for x in (float(r["tau_spread"]) for r in rows if r.get("tau_spread"))
               if math.isfinite(x)]
         if sp and max(sp) > 8.0:
             warns.append("spread dei passi > 8 (" + " ".join(f"{x:.1f}" for x in sp)
                          + "): conta solo se la run usa FedNova")
 
-    # --- broadcast dello stato (solo strategie che selezionano sullo stato) --
     if rows[0].get("bcast_targets") not in (None, ""):
         tg = [int(float(r["bcast_targets"])) for r in rows]
         rs = [int(float(r["bcast_resp"])) for r in rows]
@@ -190,7 +149,6 @@ def main() -> int:
         if not 0.0 <= share <= 0.4:
             warns.append(f"broadcast: non risponde il {share:.0%}, atteso ~10%")
 
-    # --- batterie ----------------------------------------------------------
     soc_ok = all(0.0 <= lo <= m <= hi <= 1.0 for lo, m, hi in
                  zip(v["min_soc"], v["mean_soc"], v["max_soc"]))
     check("SoC ordinati e in [0, 1] (min <= media <= max)", soc_ok)

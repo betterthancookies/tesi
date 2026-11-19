@@ -1,29 +1,4 @@
 #!/usr/bin/env python3
-"""Analisi della griglia multi-seed x multi-beta dai CSV per-round.
-
-Da ~/tesifl (dopo run_grid.sh):
-    python analyze_rounds.py                    tutti i beta trovati
-    python analyze_rounds.py --beta 0.5         solo uno
-    python analyze_rounds.py --dir results_smoke
-
-Legge results/<label>_b<btag>_seed<N>.csv e produce, PER OGNI BETA:
-  - tabella riassuntiva per algoritmo (media +- dev.std sui seed)
-  - distribuzione del SoC a fine run
-  - round-to-accuracy alle soglie richieste, con l'energia spesa per arrivarci
-  - confronti APPAIATI per seed contro un riferimento (default: fedavg)
-e un unico CSV con la curva energia-accuratezza, con colonna beta.
-
-Il confronto appaiato e' necessario perche' la varianza fra seed supera
-quella fra algoritmi: medie con deviazione standard indipendenti
-nasconderebbero differenze sistematiche.
-
-[B] i confronti appaiati usano l'accuracy di CODA (media degli ultimi TAIL
-round), non quella dell'ultimo round: a beta=0.1 l'accuracy oscilla di ~0.1
-fra round consecutivi, quindi il valore finale e' quasi un'estrazione casuale
-da quella oscillazione e i delta che ne derivano sono rumore.
-
-I beta NON si mediano fra loro: sono regimi diversi, non ripetizioni.
-"""
 import argparse
 import csv
 import glob
@@ -33,22 +8,19 @@ import statistics as st
 from collections import defaultdict
 
 THRESHOLDS = (0.25, 0.30, 0.35, 0.40)
-TAIL = 20          # round di coda su cui mediare l'accuracy
+TAIL = 20
 REF = "fedavg"
-# il suffisso e' la batteria dei device: lin / peuk / nm
 ORDER = ["fedavg", "fedprox", "sage_lin", "sage_peuk", "sage_nm",
          "sage_smart_lin", "sage_smart_peuk", "sage_smart_nm",
          "escs_sd_lin", "escs_sp_lin", "escs_md_lin", "escs_mp_lin",
          "escs_sd_peuk", "escs_sp_peuk", "escs_md_peuk", "escs_mp_peuk",
          "escs_sd_nm", "escs_sp_nm", "escs_md_nm", "escs_mp_nm"]
 
-# results/<label>_b<btag>_seed<N>.csv ; il vecchio schema senza beta e' accettato
 PAT_BETA = re.compile(r"^(.+)_b([0-9]+)_seed([0-9]+)\.csv$")
 PAT_PLAIN = re.compile(r"^(.+)_seed([0-9]+)\.csv$")
 
 
 def btag_to_beta(tag):
-    """01 -> 0.1, 05 -> 0.5, 10 -> 1.0."""
     if tag == "na":
         return "n/d"
     return f"{tag[0]}.{tag[1:]}" if len(tag) > 1 else tag
@@ -81,7 +53,6 @@ def summarize(rows):
     body = [r for r in rows if r["energy"] is not None] or [last]
     out = {
         "acc_final": accs[-1]["accuracy"] if accs else None,
-        # [B] media di coda: e' questa che entra nei confronti appaiati
         "acc_tail": (st.mean([r["accuracy"] for r in accs[-TAIL:]])
                      if accs else None),
         "acc_max": max(r["accuracy"] for r in accs) if accs else None,
@@ -93,7 +64,6 @@ def summarize(rows):
         "n_dead": body[-1]["n_soc_zero"],
         "rounds": last["round"],
     }
-    # picco: accuracy massima e stato del mondo nel round in cui avviene
     if accs:
         peak = max(accs, key=lambda r: r["accuracy"])
         out["peak_round"] = peak["round"]
@@ -119,7 +89,6 @@ def agg(vals, fmt="{:.4f}"):
 
 
 def report(beta, data, ref, thr_focus=0.40):
-    """data: label -> seed -> summary"""
     labels = [l for l in ORDER if l in data] + \
              [l for l in sorted(data) if l not in ORDER]
 
@@ -152,7 +121,6 @@ def report(beta, data, ref, thr_focus=0.40):
               f"{agg([r['min_soc'] for r in rs]):>15} "
               f"{agg([r['max_soc'] for r in rs]):>15}")
 
-    # ---- picco e soglia: dove si trova il mondo quando si misura ----
     print(f"\nPICCO E SOGLIA (SoC medio nel momento della misura)")
     print(f"{'algoritmo':<14} {'acc picco':>12} {'round':>7} {'SoC@picco':>12}"
           f" {'SoC@' + f'{thr_focus:.2f}':>12} {'round':>7}")
@@ -227,9 +195,8 @@ def main():
                     help="soglia della tabella picco/soglia")
     args = ap.parse_args()
 
-    # beta -> label -> seed -> summary
     data = defaultdict(lambda: defaultdict(dict))
-    index = []   # (beta, label, seed, path) per la curva
+    index = []
     for path in sorted(glob.glob(os.path.join(args.dir, "*_seed*.csv"))):
         name = os.path.basename(path)
         m = PAT_BETA.match(name)

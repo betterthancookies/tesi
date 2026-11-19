@@ -1,69 +1,22 @@
-"""Workload concorrente: quanto il device e' occupato da ALTRE applicazioni.
-
-Tre catene di Markov a tre stati (idle / light / heavy), una per profilo
-d'uso, assegnate ai client in parti uguali e in modo INDIPENDENTE dal tier
-hardware: un telefono potente non e' per forza piu' occupato di uno modesto.
-
-w = frazione di capacita' di calcolo presa da altre app. Con questa
-definizione il workload entra nel modello senza coefficienti nuovi:
-
-    throughput disponibile = (1 - w) * macs_per_s
-    potenza fra i round    = P_idle + w * (P_train - P_idle)
-
-La seconda interpola fra il consumo a riposo e quello a pieno carico. Entrambe
-usano macs_per_s e P_train DEL TIER: w e' una frazione della capacita' di quel
-telefono.
-
-[B] TRE CATENE INVECE DI UNA. Cosi' differisce anche la persistenza, non solo
-la media: un device poco usato resta fermo a lungo, uno molto usato alterna in
-fretta. Le diagonali sono alte di proposito -- con transizioni frequenti il
-workload diventerebbe rumore bianco round su round, e si perderebbe l'unica
-proprieta' che lo rende interessante, cioe' che uno stato dura.
-
-[B] PERCHE' GIUSTIFICA IL LATE-BINDING. Il workload cambia a ogni round e il
-server non lo conosce quando manda il modello: e' informazione che solo il
-client ha, e solo un istante prima di iniziare. E' il terzo asse del gap
-argument della proposta, e l'unico che il simulatore finora non aveva.
-"""
-
 from __future__ import annotations
 
 import numpy as np
 
 from device.constants import WORKLOAD_CHAINS, WORKLOAD_STATES
 
-STATE_NAMES = list(WORKLOAD_STATES)          # idle, light, heavy
+STATE_NAMES = list(WORKLOAD_STATES)
 STATE_UTIL = np.array(list(WORKLOAD_STATES.values()), dtype=float)
-PROFILE_NAMES = list(WORKLOAD_CHAINS)        # low, medium, high
-# [B] 04/11, esperimento sul workload (call del 30/10): tetto di w quando gli
-# stati sono moltiplicati per `scale`. Con w -> 1 il throughput (1 - w)
-# andrebbe a zero e il training non finirebbe mai.
+PROFILE_NAMES = list(WORKLOAD_CHAINS)
 W_MAX = 0.95
 
 
 def scaled_util(scale: float) -> np.ndarray:
-    """Utilizzazione dei tre stati moltiplicata per `scale`, con tetto W_MAX.
-
-    A scale = 1 i valori sono quelli di experiment.toml, identici bit per bit.
-    """
     if scale <= 0.0:
         raise ValueError(f"workload scale {scale}: deve essere > 0")
     return np.minimum(W_MAX, STATE_UTIL * float(scale))
 
 
 class WorkloadModel:
-    """Stato di occupazione di ogni client, un passo per round.
-
-    enabled=False congela tutto a w=0: e' l'ablazione che riporta il mondo
-    alla popolazione senza workload, per verificare che il resto non cambi.
-
-    scale moltiplica gli stati (esperimento sul workload, workload-scale nella
-    run-config). Le catene NON cambiano: con lo stesso seed la sequenza degli
-    stati di ogni client e' la stessa a ogni scale, cambia solo quanto pesa
-    ogni stato. [B] scala anche l'idle: P_idle(w) cresce con w, quindi il
-    workload alto scarica i telefoni anche senza FL.
-    """
-
     def __init__(self, n_clients: int, seed: int, enabled: bool = True,
                  scale: float = 1.0) -> None:
         self.enabled = bool(enabled)
@@ -77,12 +30,7 @@ class WorkloadModel:
             if not np.allclose(m.sum(axis=1), 1.0):
                 raise ValueError(f"la catena '{p}' ha righe che non sommano a 1")
 
-        # profili in parti uguali, assegnati con una permutazione: senza,
-        # il profilo sarebbe una funzione del cid e quindi correlato alla
-        # partizione dei dati, che pure dipende dal cid.
         self._profile = self._assign_equal(PROFILE_NAMES)
-        # tutti partono da idle: lo stato iniziale conta poco, le catene
-        # convergono alla stazionaria in poche decine di round.
         self._state = {cid: 0 for cid in range(self.n_clients)}
 
     def _assign_equal(self, names: list[str]) -> dict[int, str]:
@@ -90,25 +38,19 @@ class WorkloadModel:
         order = self._rng.permutation(self.n_clients)
         return {int(cid): base[i] for i, cid in enumerate(order)}
 
-    # ------------------------------------------------------------ evoluzione
     def step(self) -> None:
-        """Una transizione per ogni client. Da chiamare a inizio round."""
         if not self.enabled:
             return
         for cid in range(self.n_clients):
             row = self._chains[self._profile[cid]][self._state[cid]]
             self._state[cid] = int(self._rng.choice(len(row), p=row))
 
-    # -------------------------------------------------------------- lettura
     def utilization(self, cid: int) -> float:
-        """w in [0, 1): frazione di calcolo occupata da altre applicazioni."""
         if not self.enabled:
             return 0.0
         return float(self._util[self._state[cid]])
 
     def max_utilization(self) -> float:
-        """w dello stato piu' pesante a questo scale: il caso peggiore che
-        SAGE-smart assume finche' non conosce il workload di un client."""
         return float(self._util.max())
 
     def profile(self, cid: int) -> str:
@@ -130,11 +72,6 @@ class WorkloadModel:
 
 
 def stationary_utilization(scale: float = 1.0) -> dict[str, float]:
-    """Utilizzazione media attesa di ogni profilo, dall'autovettore della catena.
-
-    Serve a verificare che le matrici diano le medie che ci si aspetta, senza
-    doverle simulare: e' il primo dei controlli di validazione.
-    """
     util = scaled_util(scale)
     out = {}
     for name, m in WORKLOAD_CHAINS.items():
