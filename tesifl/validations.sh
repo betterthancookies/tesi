@@ -9,7 +9,6 @@ PHASES=(
   "fedavg_guard_nm_B16"
   "fedavg_nm_B16"
   "fedavg_nm fedavg_nm_lr0p04 fedavg_nm_lr0p08"
-  "sage_smart_srvlin_nm"
   "fedprox_nm_B16 sage_nm_B16 escs_sd_nm_B16 escs_sp_nm_B16 escs_md_nm_B16 escs_mp_nm_B16"
 )
 
