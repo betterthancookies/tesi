@@ -115,6 +115,8 @@ def main() -> int:
     check("carica = training + comunicazione + idle + controllo", err_sum < 1e-3,
           f"errore relativo {err_sum:.1e}")
     battery_label = re.sub(r"_x[0-9]+(p[0-9]+)?$", "", args.label)
+    battery_label = re.sub(r"_lr[0-9]+(p[0-9]+)?$", "", battery_label)
+    battery_label = re.sub(r"_B[0-9]+$", "", battery_label)
     if not battery_label.endswith(("_peuk", "_nm")):
         err_lin = max(abs(t - e) / e for t, e in zip(v["total_energy_wh"], v["energy_lin_wh"]))
         check("batteria lineare: carica della batteria = energia del carico", err_lin < 1e-3,
