@@ -26,10 +26,12 @@ class PhysicalFedAvg(FedAvg):
         broadcast_nonresp: float = 0.10,
         broadcast_timeout_s: float = 1.0,
         broadcast_top_m: int = 0,
+        soc_guard: float = 0.0,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self.world = world
+        self.soc_guard = float(soc_guard)
         self.epochs = epochs
         self.batch_size = batch_size
         self.k_per_round = k_per_round
@@ -137,10 +139,17 @@ class PhysicalFedAvg(FedAvg):
     def _select_clients(
         self, available: list[int], k: int, server_round: int
     ) -> list[int]:
+        if self.soc_guard > 0.0:
+            available = [n for n in available if self._guard_ok(self._node_to_cid[n])]
+            k = min(k, len(available))
         if not k:
             return []
         idx = self._rng.choice(len(available), size=k, replace=False)
         return [available[i] for i in idx]
+
+    def _guard_ok(self, cid: int) -> bool:
+        snap = self.world.snapshot(cid)
+        return snap.recharging or snap.soc >= self.soc_guard
 
     def _broadcast_targets(self, available: list[int], server_round: int) -> list[int]:
         return list(available)

@@ -157,6 +157,7 @@ def main(grid: Grid, context: Context) -> None:
             "e5":        {"epochs_min": epochs, "epochs_cap_mult": 1},
             "b128":      {"batch_min": batch_size, "batch_max": batch_size},
             "nopartial": {"partial_work": False},
+            "srvlin":    {"server_battery": "lin"},
         }
         parts = [p for p in ablation.split("+") if p and p != "none"]
         unknown = [p for p in parts if p not in ablations]
@@ -212,8 +213,16 @@ def main(grid: Grid, context: Context) -> None:
         strategy = PhysicalFedProx(proximal_mu=proximal_mu, **common)
         print(f"[strategy] PhysicalFedProx (mu={proximal_mu})")
     elif algorithm == "fedavg":
-        strategy = PhysicalFedAvg(**common)
-        print("[strategy] PhysicalFedAvg")
+        soc_guard = float(context.run_config["soc-guard"])
+        if soc_guard > 0.0:
+            strategy = PhysicalFedAvg(soc_guard=soc_guard, **common,
+                                      **dict(bcast, broadcast=True))
+            print(f"[strategy] PhysicalFedAvg con guardia: SoC >= {soc_guard:.0%} o in carica, "
+                  f"broadcast dello stato ({bcast['broadcast_nonresp']:.0%} non risponde, "
+                  f"timeout {bcast['broadcast_timeout_s']} s)")
+        else:
+            strategy = PhysicalFedAvg(**common)
+            print("[strategy] PhysicalFedAvg")
     else:
         raise ValueError(
             f"algorithm='{algorithm}' non riconosciuto: "

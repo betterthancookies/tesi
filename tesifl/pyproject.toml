@@ -47,6 +47,7 @@ smart-max-waves = 2
 smart-batch-min = 16
 smart-batch-max = 64
 smart-ablation = "none"
+soc-guard = 0.0
 broadcast = false
 broadcast-nonresp = 0.10
 broadcast-timeout-s = 1.0

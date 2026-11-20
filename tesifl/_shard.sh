@@ -41,6 +41,16 @@ for seed in $SEEDS; do
       core="${BASH_REMATCH[1]}"
       wscale="${BASH_REMATCH[2]/p/.}"
     fi
+    lrate=""
+    if [[ "$core" =~ ^(.+)_lr([0-9]+(p[0-9]+)?)$ ]]; then
+      core="${BASH_REMATCH[1]}"
+      lrate="${BASH_REMATCH[2]/p/.}"
+    fi
+    bsize=""
+    if [[ "$core" =~ ^(.+)_B([0-9]+)$ ]]; then
+      core="${BASH_REMATCH[1]}"
+      bsize="${BASH_REMATCH[2]}"
+    fi
 
     case "$core" in
       *_lin)  battery="lin" ;;
@@ -52,6 +62,7 @@ for seed in $SEEDS; do
     algo=""; extra=""
     case "$base" in
       fedavg)     algo="fedavg" ;;
+      fedavg_guard) algo="fedavg"; extra="soc-guard=0.2" ;;
       fedprox)    algo="fedprox" ;;
       sage)       if [ "$battery" = "lin" ]; then
                     algo="sage";     extra="sage-a=${SA} sage-b=${SB} sage-c=${SC}"
@@ -59,7 +70,7 @@ for seed in $SEEDS; do
                     algo="sage_soc"; extra="sage-a=${QA} sage-b=${QB}"
                   fi ;;
       sage_smart) algo="sage_smart"; extra="sage-a=${QA} sage-b=${QB}" ;;
-      sage_smart_nostale|sage_smart_noest|sage_smart_noneg|sage_smart_e5|sage_smart_b128|sage_smart_nopartial)
+      sage_smart_nostale|sage_smart_noest|sage_smart_noneg|sage_smart_e5|sage_smart_b128|sage_smart_nopartial|sage_smart_srvlin)
                   algo="sage_smart"
                   extra="sage-a=${QA} sage-b=${QB} smart-ablation='${base#sage_smart_}'" ;;
       sage_smart_cum0) algo="sage_smart"
@@ -92,7 +103,10 @@ for seed in $SEEDS; do
     rm -rf "${RDIR}"; mkdir -p "${RDIR}"
     cfg="num-server-rounds=${ROUNDS} algorithm='${algo}' seed=${seed} beta=${BETA}"
     cfg="$cfg clients-per-round=${K} results-dir='${RDIR}'"
-    cfg="$cfg ${WORLD} ${ALGOCFG}"
+    algocfg="$ALGOCFG"
+    [ -n "$bsize" ] && algocfg=$(echo "$algocfg" | sed -E "s/(^| )batch-size=[0-9]+/\1batch-size=${bsize}/")
+    [ -n "$lrate" ] && algocfg=$(echo "$algocfg" | sed -E "s/(^| )learning-rate=[0-9.eE+-]+/\1learning-rate=${lrate}/")
+    cfg="$cfg ${WORLD} ${algocfg}"
     [ -n "$extra" ] && cfg="$cfg $extra"
 
     echo ""

@@ -47,11 +47,15 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         partial_work: bool = True,
         shortlist: float = 1.5,
         load_tau_s: float = 450.0,
+        server_battery: str | None = None,
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
         if shortlist < 1.0:
             raise ValueError(f"shortlist >= 1, non {shortlist}")
+        if server_battery is not None and server_battery not in BATTERY_NAMES:
+            raise ValueError(f"server_battery: una fra {tuple(BATTERY_NAMES)}, non {server_battery!r}")
+        self.server_battery = server_battery
         self.forecast = bool(forecast)
         self.negotiation = bool(negotiation)
         self.partial_work = bool(partial_work)
@@ -126,7 +130,9 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
              self.negotiation),
             ("lavoro parziale", self.partial_work)) if not on]
         return (f"sage-smart-{self.world.battery}"
-                + (f" SENZA {', '.join(off)}" if off else ""))
+                + (f" SENZA {', '.join(off)}" if off else "")
+                + (f" CON previsione del server su batteria {BATTERY_NAMES[self.server_battery]}"
+                   if self.server_battery else ""))
 
     def configure_train(self, server_round, arrays, config, grid):
         self._grid = grid
@@ -176,7 +182,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         if dt <= 0.0:
             return soc0, w_rep
         prof = self.world.profile(cid)
-        bat = self.world.battery
+        bat = self.server_battery or self.world.battery
         recharge = bool(getattr(self.world, "_recharge_enabled", False))
         n = max(1, math.ceil(dt / _ESTIMATE_STEP_S))
         h = dt / n

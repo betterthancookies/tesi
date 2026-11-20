@@ -1,0 +1,177 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{siunitx}
+\usepackage{multirow}
+\usepackage{float}
+\usepackage[autostyle]{csquotes}
+\usepackage[hidelinks]{hyperref}
+\usepackage{graphicx}
+
+\sisetup{detect-weight=true}
+
+\title{\bfseries Marocco FL thesis --- week 16/11 update}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\vspace{-3.2em}
+\begin{center}
+\emph{Client-Driven Local Work Assignment in Battery-Constrained Federated Learning}
+\end{center}
+\vspace{1em}
+
+%======================================================================
+\section{Results now}
+\label{sec:results}
+
+These are the results of the main campaign with the current SAGE-smart: three
+seeds (2026, 42, 73), three values of $\beta$ (0.1, 0.5, 1.0), three battery
+models, 250 rounds.
+
+\newpage
+
+%======================================================================
+\section{Reaching 40\,\% accuracy}
+\label{sec:thr}
+
+For every run we take the first round in which the test accuracy reaches
+40\,\% (the same definition as fig7 of \texttt{plot\_curves.py}) and read, at
+that round: the energy drawn from the batteries since the start, the depleted
+devices, the mean SoC of the devices still alive, and the devices below 20\,\%
+of SoC (depleted included). Every value is the mean over 9 runs (3 $\beta$
+$\times$ 3 seeds); all runs reach the threshold. FedAvg and FedProx run only
+with the Ideal battery; SAGE with the Ideal battery is the version of the
+paper, with Peukert and Datasheet it is the ablation ($a \cdot \mathrm{SoC} + b
+\cdot D$). All baselines use $E = 5$, $B = 128$ and learning rate 0.01.
+
+\begin{table}[H]
+  \centering
+  \caption{At the first round with 40\,\% accuracy. Mean over 3 $\beta$
+  $\times$ 3 seeds; in parentheses the standard deviation of the round.}
+  \label{tab:thr}
+  \begin{tabular}{llccccc}
+    \toprule
+    Battery & Algorithm & Round & Energy (Wh) & Depleted & SoC of alive (\%) & Below 20\,\% \\
+    \midrule
+    \multirow{8}{*}{Ideal}
+      & FedAvg      & 66 (15)  & 676  & 3.6  & 52.2 & 12.2 \\
+      & FedProx     & 66 (15)  & 681  & 3.6  & 52.0 & 12.4 \\
+      & SAGE        & 117 (32) & 1089 & 10.1 & 48.2 & 24.7 \\
+      & ESCS-SD     & 115 (45) & 1030 & 9.1  & 50.4 & 23.8 \\
+      & ESCS-SP     & 75 (15)  & 1089 & 9.2  & 44.7 & 38.2 \\
+      & ESCS-MD     & 97 (26)  & 907  & 6.0  & 49.6 & 21.0 \\
+      & ESCS-MP     & 88 (27)  & 1151 & 13.6 & 46.9 & 37.9 \\
+      & SAGE-smart  & 71 (19)  & 333  & 0.0  & 58.6 & 0.1  \\
+    \midrule
+    \multirow{6}{*}{Peukert}
+      & SAGE        & 110 (38) & 969  & 4.3  & 49.3 & 8.7  \\
+      & ESCS-SD     & 112 (29) & 972  & 6.7  & 50.0 & 21.7 \\
+      & ESCS-SP     & 81 (22)  & 1125 & 10.6 & 45.1 & 38.8 \\
+      & ESCS-MD     & 96 (30)  & 867  & 5.4  & 50.6 & 19.1 \\
+      & ESCS-MP     & 89 (30)  & 1141 & 11.3 & 47.1 & 37.2 \\
+      & SAGE-smart  & 71 (18)  & 326  & 0.0  & 59.2 & 0.0  \\
+    \midrule
+    \multirow{6}{*}{Datasheet}
+      & SAGE        & 121 (31) & 1064 & 8.1  & 47.5 & 16.7 \\
+      & ESCS-SD     & 115 (38) & 1004 & 9.6  & 51.0 & 24.8 \\
+      & ESCS-SP     & 81 (32)  & 1109 & 12.2 & 44.9 & 38.9 \\
+      & ESCS-MD     & 95 (28)  & 876  & 6.7  & 50.4 & 19.6 \\
+      & ESCS-MP     & 88 (30)  & 1142 & 14.2 & 48.4 & 37.2 \\
+      & SAGE-smart  & 71 (17)  & 320  & 0.0  & 59.5 & 0.1  \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{table}[H]
+  \centering
+  \caption{Per $\beta$, mean over 3 seeds: round / energy (Wh) / depleted / SoC
+  of the alive devices (\%). Datasheet battery; FedAvg with the Ideal battery.}
+  \label{tab:thr_beta}
+  \begin{tabular}{lccc}
+    \toprule
+    & $\beta = 0.1$ & $\beta = 0.5$ & $\beta = 1.0$ \\
+    \midrule
+    FedAvg      & 85 / 900 / 10.7 / 52.0   & 59 / 594 / 0.0 / 51.9  & 54 / 534 / 0.0 / 52.7 \\
+    SAGE        & 161 / 1413 / 19.3 / 52.3 & 98 / 865 / 2.3 / 45.6  & 103 / 914 / 2.7 / 44.6 \\
+    ESCS-SD     & 164 / 1369 / 19.3 / 54.2 & 97 / 888 / 6.7 / 50.2  & 84 / 754 / 2.7 / 48.5 \\
+    ESCS-MD     & 132 / 1183 / 15.0 / 51.7 & 77 / 750 / 3.0 / 48.1  & 76 / 696 / 2.0 / 51.4 \\
+    SAGE-smart  & 93 / 436 / 0.0 / 54.6    & 62 / 276 / 0.0 / 61.2  & 57 / 250 / 0.0 / 62.6 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{table}[H]
+  \centering
+  \caption{Simulated time to reach 40\,\% accuracy, in hours, seed 2026 (the
+  runs of seeds 42 and 73 copied from the previous campaign do not record the
+  time). Datasheet battery; FedAvg and SAGE (paper) with the Ideal battery.}
+  \label{tab:thr_time}
+  \begin{tabular}{lcccc}
+    \toprule
+    & $\beta = 0.1$ & $\beta = 0.5$ & $\beta = 1.0$ & Mean \\
+    \midrule
+    FedAvg             & 10.5 & 5.9  & 5.0  & 7.1 \\
+    SAGE (paper)       & 13.5 & 10.1 & 8.1  & 10.6 \\
+    SAGE (ablation)    & 17.6 & 10.0 & 10.8 & 12.8 \\
+    ESCS-SD            & 15.6 & 8.5  & 6.8  & 10.3 \\
+    ESCS-MD            & 12.5 & 8.3  & 6.5  & 9.1 \\
+    SAGE-smart         & 3.8  & 2.2  & 1.9  & 2.6 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{itemize}
+  \item SAGE-smart reaches 40\,\% almost as soon as FedAvg in rounds (71
+        against 66) and much sooner than SAGE and ESCS (75--121).
+  \item It gets there with half the energy of FedAvg (320--333 Wh against
+        676, $-52\,\%$) and about a third of SAGE and ESCS (867--1151 Wh).
+  \item No device is depleted and practically none is below 20\,\% (0.1 on
+        average, against 12.2 for FedAvg and 9--39 for SAGE and ESCS). The
+        alive devices have on average 59\,\% of SoC, against 52\,\% for
+        FedAvg and 45--51\,\% for SAGE and ESCS.
+  \item In simulated time it takes 2.6 hours, against 7.1 for FedAvg and
+        9--13 for SAGE and ESCS: with the adaptive $E$ the rounds are shorter.
+  \item The depleted devices of FedAvg at the threshold all come from $\beta =
+        0.1$ (10.7). At $\beta = 0.5$ and 1.0 FedAvg reaches 40\,\% before any
+        device dies; there the difference is in energy ($-53\,\%$), SoC of the
+        alive devices (+9--10 points) and devices below 20\,\%. After 250
+        rounds FedAvg has depleted 58 devices, SAGE-smart 2--4.
+  \item The battery model does not change the behaviour of SAGE-smart at the
+        threshold: round 71 and 320--333 Wh with all three.
+\end{itemize}
+
+\newpage
+
+%======================================================================
+\section{To do now}
+\label{sec:todo}
+
+\begin{itemize}
+  \item The baselines may be handicapped: run FedAvg, FedProx, SAGE and ESCS
+        at $B = 16$, learning rate 0.01, 3 seeds $\times$ 3 $\beta$ (FedAvg at
+        $B = 16$ exists for seed 2026).
+  \item Control: FedAvg at $B = 128$ with learning rate 0.08 (and 0.04), i.e.\
+        the learning rate scaled linearly with the batch.
+  \item First and most urgent test: FedAvg at $B = 16$, learning rate 0.01,
+        with a SoC filter as guard. If it matches our results in battery and
+        accuracy, the method needs something more.
+  \item In SAGE-smart the client almost always picks $B = 16$: the loop starts
+        from the smallest $B$ and the highest $E$, and $B = 16$ is free (the
+        throughput does not depend on $B$ and the batch overhead is
+        negligible).
+  \item Changes: latency and energy as a function of the batch, so that small
+        batches pay for the lower parallelism; learning rate adapted to the
+        batch.
+  \item Selling points of the paper: (1) FL that does not deplete the phones
+        at the same accuracy, with depleted devices and devices below 20\,\%
+        as the main metrics; (2) late binding; (3) realistic SoC: current
+        methods model the battery badly, while the real SoC is very uncertain.
+  \item Present these points to Ale and Massimo.
+\end{itemize}
+
+\end{document}
