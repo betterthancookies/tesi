@@ -13,6 +13,9 @@ K_SOC_MIN = "smart-soc-min"
 K_PROBE = "smart-probe-samples"
 K_PARTIAL = "smart-partial-work"
 
+MOMENTUM = 0.9
+MIN_STEPS = round(1 / (1 - MOMENTUM))
+
 
 @dataclass(frozen=True)
 class Envelope:
@@ -114,12 +117,13 @@ def decide(reading: DeviceReading, env: Envelope, n_samples: int,
                 out.append((b, t, soc_end))
         return out
 
-    for b in sorted(env.batches):
-        for e in range(e_target, env.e_lo - 1, -1):
-            t, soc_end = reading.predict(e, b, n_samples, p)
-            if _energy_ok(reading, soc_end, env.soc_min) and t <= env.deadline_s:
-                return Plan(False, e, b, t, soc_end, True, u, e_target,
-                            "target" if e == e_target else "ridotto")
+    for e in range(e_target, env.e_lo - 1, -1):
+        b = next((b for b in sorted(env.batches, reverse=True)
+                  if e * steps_per_epoch(n_samples, b) >= MIN_STEPS), min(env.batches))
+        t, soc_end = reading.predict(e, b, n_samples, p)
+        if _energy_ok(reading, soc_end, env.soc_min) and t <= env.deadline_s:
+            return Plan(False, e, b, t, soc_end, True, u, e_target,
+                        "target" if e == e_target else "ridotto")
 
     feasible = options(env.e_lo)
     if feasible and env.partial_work:

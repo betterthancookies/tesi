@@ -1,11 +1,13 @@
 import torch
 
+from tesiFL.client_policy import MOMENTUM
+
 
 def train(net, trainloader, epochs, lr, device, proximal_mu: float = 0.0,
           max_steps: int | None = None, stats: dict | None = None):
     net.to(device)
     criterion = torch.nn.CrossEntropyLoss().to(device)
-    optimizer = torch.optim.SGD(net.parameters(), lr=lr, momentum=0.9)
+    optimizer = torch.optim.SGD(net.parameters(), lr=lr, momentum=MOMENTUM)
 
     use_prox = proximal_mu > 0.0
     if use_prox:

@@ -48,7 +48,8 @@ PEUKERT_N = float(_get("battery", "peukert_n"))
 LENET5_MACS_FWD_PER_SAMPLE = 352_800 + 240_000 + 48_000 + 10_080 + 840
 
 TRAIN_MACS_FACTOR = float(_get("compute", "train_macs_factor"))
-BATCH_OVERHEAD_S = float(_get("compute", "batch_overhead_s"))
+BATCH_HALF = float(_get("compute", "batch_half"))
+BATCH_REF = float(_get("compute", "batch_ref"))
 
 MODEL_NAME = str(_get("model", "name"))
 MODEL_DATASET = str(_get("model", "dataset"))

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from device.constants import (
-    BATCH_OVERHEAD_S,
+    BATCH_HALF,
+    BATCH_REF,
     MODEL_MACS_FWD_PER_SAMPLE,
     TRAIN_MACS_FACTOR,
 )
@@ -15,10 +16,8 @@ def training_macs(epochs: int, n_samples: int) -> float:
 def training_time_s(
     profile: DeviceProfile, epochs: int, n_samples: int, batch_size: int
 ) -> float:
-    n_batches = max(1, n_samples // batch_size)
-    compute_s = training_macs(epochs, n_samples) / profile.macs_per_s
-    overhead_s = epochs * n_batches * BATCH_OVERHEAD_S
-    return compute_s + overhead_s
+    eff = batch_size / (batch_size + BATCH_HALF) * (BATCH_REF + BATCH_HALF) / BATCH_REF
+    return training_macs(epochs, n_samples) / (profile.macs_per_s * eff)
 
 
 def probe_time_s(profile: DeviceProfile, n_samples: int) -> float:

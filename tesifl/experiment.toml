@@ -65,7 +65,8 @@ peukert_n        = 1.05
 
 [compute]
 train_macs_factor = 3.0
-batch_overhead_s  = 0.057
+batch_half        = 1.6
+batch_ref         = 64
 
 [comm]
 bytes_per_param     = 4
