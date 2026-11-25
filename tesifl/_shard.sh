@@ -41,11 +41,6 @@ for seed in $SEEDS; do
       core="${BASH_REMATCH[1]}"
       wscale="${BASH_REMATCH[2]/p/.}"
     fi
-    lmax=""
-    if [[ "$core" =~ ^(.+)_lrmax([0-9]+(p[0-9]+)?)$ ]]; then
-      core="${BASH_REMATCH[1]}"
-      lmax="${BASH_REMATCH[2]/p/.}"
-    fi
     lrate=""
     if [[ "$core" =~ ^(.+)_lr([0-9]+(p[0-9]+)?)$ ]]; then
       core="${BASH_REMATCH[1]}"
@@ -75,7 +70,7 @@ for seed in $SEEDS; do
                     algo="sage_soc"; extra="sage-a=${QA} sage-b=${QB}"
                   fi ;;
       sage_smart) algo="sage_smart"; extra="sage-a=${QA} sage-b=${QB}" ;;
-      sage_smart_nostale|sage_smart_noest|sage_smart_noneg|sage_smart_e5|sage_smart_b128|sage_smart_nopartial|sage_smart_srvlin)
+      sage_smart_nostale|sage_smart_noest|sage_smart_noneg|sage_smart_e5|sage_smart_b128|sage_smart_nopartial|sage_smart_srvlin|sage_smart_bold|sage_smart_bgrow)
                   algo="sage_smart"
                   extra="sage-a=${QA} sage-b=${QB} smart-ablation='${base#sage_smart_}'" ;;
       sage_smart_cum0) algo="sage_smart"
@@ -102,7 +97,7 @@ for seed in $SEEDS; do
       echo "--- ${label}: etichetta sconosciuta, salto (vedi experiment.toml)"
       FAIL=$((FAIL + 1)); continue
     fi
-    extra="world-battery='${battery}'${extra:+ $extra}${wscale:+ workload-scale=${wscale}}${lmax:+ lr-max=${lmax}}"
+    extra="world-battery='${battery}'${extra:+ $extra}${wscale:+ workload-scale=${wscale}}"
 
     RDIR="${WDIR}/${label}_b${BTAG}_s${seed}"
     rm -rf "${RDIR}"; mkdir -p "${RDIR}"

@@ -20,7 +20,7 @@ from device.world_state import (
     training_power_w,
 )
 from strategies.sage_ablation import PhysicalSAGEAblation
-from tesiFL.client_policy import Envelope
+from tesiFL.client_policy import BATCH_RULES, Envelope
 
 _ESTIMATE_STEP_S = 300.0
 
@@ -48,11 +48,15 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         shortlist: float = 1.5,
         load_tau_s: float = 450.0,
         server_battery: str | None = None,
+        batch_rule: str = "steps",
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
         if shortlist < 1.0:
             raise ValueError(f"shortlist >= 1, non {shortlist}")
+        if batch_rule not in BATCH_RULES:
+            raise ValueError(f"batch_rule: una fra {BATCH_RULES}, non {batch_rule!r}")
+        self.batch_rule = batch_rule
         if server_battery is not None and server_battery not in BATTERY_NAMES:
             raise ValueError(f"server_battery: una fra {tuple(BATTERY_NAMES)}, non {server_battery!r}")
         self.server_battery = server_battery
@@ -446,7 +450,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
             deadline_s=float(self._deadline_s) if math.isfinite(self._deadline_s)
             else 1e12,
             soc_min=float(self.soc_min), probe_samples=self.probe_samples,
-            partial_work=self.partial_work,
+            partial_work=self.partial_work, batch_rule=self.batch_rule,
         )
 
     def _per_client_config(

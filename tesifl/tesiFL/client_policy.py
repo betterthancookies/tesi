@@ -12,9 +12,10 @@ K_DEADLINE = "smart-deadline-s"
 K_SOC_MIN = "smart-soc-min"
 K_PROBE = "smart-probe-samples"
 K_PARTIAL = "smart-partial-work"
+K_BRULE = "smart-batch-rule"
+BATCH_RULES = ("steps", "old", "grow")
 
 MOMENTUM = 0.9
-MIN_STEPS = round(1 / (1 - MOMENTUM))
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,7 @@ class Envelope:
     soc_min: float
     probe_samples: int
     partial_work: bool = False
+    batch_rule: str = "steps"
 
     def to_config(self) -> dict:
         cfg = {
@@ -35,6 +37,7 @@ class Envelope:
             K_DEADLINE: float(self.deadline_s),
             K_SOC_MIN: float(self.soc_min),
             K_PROBE: int(self.probe_samples),
+            K_BRULE: str(self.batch_rule),
         }
         if self.partial_work:
             cfg[K_PARTIAL] = 1
@@ -50,6 +53,7 @@ class Envelope:
             soc_min=float(cfg[K_SOC_MIN]),
             probe_samples=int(cfg[K_PROBE]),
             partial_work=bool(int(cfg[K_PARTIAL])) if K_PARTIAL in cfg else False,
+            batch_rule=str(cfg[K_BRULE]) if K_BRULE in cfg else "steps",
         )
 
     @staticmethod
@@ -117,9 +121,7 @@ def decide(reading: DeviceReading, env: Envelope, n_samples: int,
                 out.append((b, t, soc_end))
         return out
 
-    for e in range(e_target, env.e_lo - 1, -1):
-        b = next((b for b in sorted(env.batches, reverse=True)
-                  if e * steps_per_epoch(n_samples, b) >= MIN_STEPS), min(env.batches))
+    for e, b in batch_plan(env, n_samples, e_target, u):
         t, soc_end = reading.predict(e, b, n_samples, p)
         if _energy_ok(reading, soc_end, env.soc_min) and t <= env.deadline_s:
             return Plan(False, e, b, t, soc_end, True, u, e_target,
@@ -139,6 +141,21 @@ def decide(reading: DeviceReading, env: Envelope, n_samples: int,
         return Plan(False, env.e_lo, b, t, soc_end, False, u, e_target,
                     "fuori-deadline")
     return Plan(True, utility=u, e_target=e_target, reason="riserva")
+
+
+def batch_plan(env: Envelope, n_samples: int, e_target: int,
+               u: float) -> list[tuple[int, int]]:
+    es = range(e_target, env.e_lo - 1, -1)
+    bs = sorted(env.batches)
+    if env.batch_rule == "old":
+        return [(e, b) for b in bs for e in es]
+    if env.batch_rule == "grow":
+        cap = bs[0] / u if u > 0 else math.inf
+        b = max(x for x in bs if x <= cap)
+        return [(e, b) for e in es]
+    h = env.e_lo * steps_per_epoch(n_samples, bs[0])
+    return [(e, next((b for b in reversed(bs) if e * steps_per_epoch(n_samples, b) >= h), bs[0]))
+            for e in es]
 
 
 def steps_per_epoch(n_samples: int, batch: int) -> int:

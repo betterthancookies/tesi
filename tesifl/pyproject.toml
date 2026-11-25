@@ -61,7 +61,6 @@ recharge-available = true
 fraction-evaluate = 1.0
 local-epochs = 5
 learning-rate = 0.01
-lr-max = 0.08
 batch-size = 128
 save-model = false
 beta = 0.5

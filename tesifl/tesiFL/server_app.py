@@ -158,6 +158,8 @@ def main(grid: Grid, context: Context) -> None:
             "b128":      {"batch_min": batch_size, "batch_max": batch_size},
             "nopartial": {"partial_work": False},
             "srvlin":    {"server_battery": "lin"},
+            "bold":      {"batch_rule": "old"},
+            "bgrow":     {"batch_rule": "grow"},
         }
         parts = [p for p in ablation.split("+") if p and p != "none"]
         unknown = [p for p in parts if p not in ablations]
@@ -233,7 +235,7 @@ def main(grid: Grid, context: Context) -> None:
     result = strategy.start(
         grid=grid,
         initial_arrays=arrays,
-        train_config=ConfigRecord({"lr": lr, "lr-max": float(context.run_config["lr-max"])}),
+        train_config=ConfigRecord({"lr": lr}),
         num_rounds=num_rounds,
         evaluate_fn=global_evaluate,
     )
