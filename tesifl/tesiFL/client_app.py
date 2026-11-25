@@ -166,7 +166,7 @@ def _train_client_driven(msg: Message, model, device, config, partition_id: int,
     budget = affordable_steps(reading, env, n, plan.batch, cap=planned)
     stats: dict = {}
     train_loss, loss_sq_sum, loss_n = train_fn(
-        model, loader, plan.epochs, config["lr"] * plan.batch / min(env.batches), device,
+        model, loader, plan.epochs, min(config["lr-max"], config["lr"] * plan.batch / min(env.batches)), device,
         proximal_mu=proximal_mu, max_steps=budget, stats=stats,
     )
     steps = int(stats["steps"])

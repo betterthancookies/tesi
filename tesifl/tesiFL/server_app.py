@@ -233,7 +233,7 @@ def main(grid: Grid, context: Context) -> None:
     result = strategy.start(
         grid=grid,
         initial_arrays=arrays,
-        train_config=ConfigRecord({"lr": lr}),
+        train_config=ConfigRecord({"lr": lr, "lr-max": float(context.run_config["lr-max"])}),
         num_rounds=num_rounds,
         evaluate_fn=global_evaluate,
     )
