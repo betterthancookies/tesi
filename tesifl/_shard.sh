@@ -70,7 +70,7 @@ for seed in $SEEDS; do
                     algo="sage_soc"; extra="sage-a=${QA} sage-b=${QB}"
                   fi ;;
       sage_smart) algo="sage_smart"; extra="sage-a=${QA} sage-b=${QB}" ;;
-      sage_smart_nostale|sage_smart_noest|sage_smart_noneg|sage_smart_e5|sage_smart_b128|sage_smart_nopartial|sage_smart_srvlin|sage_smart_bold|sage_smart_bgrow)
+      sage_smart_nostale|sage_smart_noest|sage_smart_noneg|sage_smart_e5|sage_smart_b128|sage_smart_nopartial|sage_smart_srvlin|sage_smart_bsteps|sage_smart_bgrow)
                   algo="sage_smart"
                   extra="sage-a=${QA} sage-b=${QB} smart-ablation='${base#sage_smart_}'" ;;
       sage_smart_cum0) algo="sage_smart"

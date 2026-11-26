@@ -2,10 +2,12 @@
 set -u
 cd "$(dirname "$0")"
 
-NAME=${VAL_NAME:-"validations"}
+NAME=${VAL_NAME:-"validation_final"}
 GPUS_VAL=${VAL_GPUS:-"2"}
 F="sweeps/experiment_validations.toml"
 PHASES=(
+  "sage_smart_lin sage_smart_peuk sage_smart_nm"
+  "sage_smart_srvlin_nm"
   "fedavg_guard_nm_B16"
   "fedavg_nm_B16"
   "fedavg_nm fedavg_nm_lr0p04 fedavg_nm_lr0p08"

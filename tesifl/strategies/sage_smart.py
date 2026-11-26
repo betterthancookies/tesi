@@ -48,7 +48,7 @@ class PhysicalSAGESmart(PhysicalSAGEAblation):
         shortlist: float = 1.5,
         load_tau_s: float = 450.0,
         server_battery: str | None = None,
-        batch_rule: str = "steps",
+        batch_rule: str = "old",
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)

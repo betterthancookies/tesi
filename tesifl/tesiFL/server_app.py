@@ -158,7 +158,7 @@ def main(grid: Grid, context: Context) -> None:
             "b128":      {"batch_min": batch_size, "batch_max": batch_size},
             "nopartial": {"partial_work": False},
             "srvlin":    {"server_battery": "lin"},
-            "bold":      {"batch_rule": "old"},
+            "bsteps":    {"batch_rule": "steps"},
             "bgrow":     {"batch_rule": "grow"},
         }
         parts = [p for p in ablation.split("+") if p and p != "none"]

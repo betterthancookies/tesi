@@ -27,7 +27,7 @@ class Envelope:
     soc_min: float
     probe_samples: int
     partial_work: bool = False
-    batch_rule: str = "steps"
+    batch_rule: str = "old"
 
     def to_config(self) -> dict:
         cfg = {
@@ -53,7 +53,7 @@ class Envelope:
             soc_min=float(cfg[K_SOC_MIN]),
             probe_samples=int(cfg[K_PROBE]),
             partial_work=bool(int(cfg[K_PARTIAL])) if K_PARTIAL in cfg else False,
-            batch_rule=str(cfg[K_BRULE]) if K_BRULE in cfg else "steps",
+            batch_rule=str(cfg[K_BRULE]) if K_BRULE in cfg else "old",
         )
 
     @staticmethod
