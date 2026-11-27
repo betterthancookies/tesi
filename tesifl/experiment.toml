@@ -96,7 +96,7 @@ local_epochs      = 5
 batch_size        = 128
 learning_rate     = 0.01
 fraction_evaluate = 0.2
-proximal_mu       = 0.1
+proximal_mu       = 0.001
 
 sage_abc = { "0.1" = [0.5, 0.0, 0.5], "0.5" = [0.2, 0.1, 0.7], "1.0" = [0.5, 0.2, 0.3] }
 sage_ab  = { "0.1" = [0.4, 0.6], "0.5" = [0.6, 0.4], "1.0" = [0.9, 0.1] }

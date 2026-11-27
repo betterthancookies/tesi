@@ -1,0 +1,248 @@
+\documentclass[10pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[italian]{babel}
+\usepackage[margin=2cm]{geometry}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{multirow}
+\usepackage{float}
+\usepackage{enumitem}
+
+\setlist{itemsep=1pt,topsep=3pt}
+
+\title{\bfseries Report settimana 23/11 --- traccia del discorso}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\vspace{-3.6em}
+
+Questa settimana quattro cose: le baseline a $B = 16$, il costo del batch, la
+scelta del batch in SAGE-smart e i primi risultati della campagna finale.
+
+%======================================================================
+\section{Baseline a $B = 16$}
+
+La settimana scorsa avevamo il dubbio che $B = 128$ penalizzasse le baseline.
+Le abbiamo rifatte a $B = 16$, lr 0.01, batteria Datasheet, 3 seed per 3
+$\beta$, ancora con la fisica vecchia. Sono 93 run su 99: le 6 mancanti le
+rifacciamo nella campagna finale.
+
+Il dubbio era giusto: tutte le baseline guadagnano fra 4.6 e 8.5 punti. FedProx
+passa da 51.3 a 55.9\,\%, SAGE da 43.5 a 51.4\,\%, ESCS da 43--47 a
+51.9--54.1\,\%.
+
+\begin{table}[H]
+  \centering\small
+  \caption{FedAvg, media su 9 run, 250 round, fisica vecchia.}
+  \begin{tabular}{lcccc}
+    \toprule
+    & Accuracy (\%) & 40\,\%: round / Wh & Energia (Wh) & Scarichi \\
+    \midrule
+    FedAvg $B = 128$              & 51.6 & 66 / 662 & 2023 & 60.9 \\
+    FedAvg $B = 16$               & 58.0 & 40 / 415 & 2053 & 60.3 \\
+    FedAvg $B = 16$, guardia      & 58.3 & 39 / 408 & 2172 & 41.1 \\
+    SAGE-smart (vecchio)          & 56.4 & 71 / 320 & 1098 & 4.0 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Nella tabella:
+\begin{itemize}
+  \item FedAvg a $B = 16$ prende 6.4 punti e arriva al 40\,\% con 415 Wh invece
+        di 662.
+  \item Per round batte il vecchio SAGE-smart: 58.0 contro 56.4\,\%.
+  \item A pari energia no: a 320 Wh è al 34.5\,\% contro il 40.0\,\%.
+  \item A pari tempo neanche: dopo 9 ore simulate 51.5 contro 56.6\,\%.
+  \item La guardia fa allenare solo chi ha SoC sopra il 20\,\% o è in carica, e
+        il broadcast lo paga come SAGE ed ESCS. L'accuracy resta uguale, i
+        telefoni scarichi scendono da 60 a 41, l'energia sale del 6\,\%, quasi
+        tutta idle.
+  \item Abbiamo provato anche a salvare $B = 128$ alzando l'lr. Con 0.04 il
+        risultato è misto ($-1.3$ punti a $\beta = 0.1$), con 0.08 va peggio
+        ovunque ($-4.6$ a $\beta = 0.1$).
+\end{itemize}
+
+%======================================================================
+\section{Costo del batch}
+
+Prima ogni batch pagava solo un overhead fisso di 0.057 secondi. Con ResNet-18
+un'epoca a $B = 16$ costava appena il 3\,\% in più che a $B = 128$, quindi
+SAGE-smart sceglieva sempre $B = 16$.
+
+Ma i batch piccoli sfruttano meno l'hardware, perché c'è meno parallelismo sui
+dati. Adesso il throughput cresce con $B$ e poi satura:
+\[
+  \mu(B) = \mu_{\mathrm{ref}} \, \frac{B}{B + B_h} \,
+  \frac{B_{\mathrm{ref}} + B_h}{B_{\mathrm{ref}}},
+  \qquad B_h = 1.6, \; B_{\mathrm{ref}} = 64.
+\]
+La potenza di ogni tier resta la stessa.
+
+\begin{itemize}
+  \item $B_h$ l'abbiamo preso dal tempo per campione su CPU di Mandheling
+        (Fig.~7).
+  \item Risultato: un'epoca a $B = 16$ costa ora il 9\,\% in più che a $B =
+        128$.
+  \item Due limiti. Nello stesso paper la potenza della CPU cresce con $B$,
+        quindi la loro energia per campione è più bassa a $B$ piccolo. Su
+        GPU/NPU l'effetto del batch è probabilmente più forte, ma non abbiamo
+        misure.
+\end{itemize}
+
+%======================================================================
+\section{Scelta del batch in SAGE-smart}
+
+La prima regola prendeva il $B$ più grande che desse almeno 10 passi locali (il
+valore viene dal momentum 0.9) e scalava l'lr come $0.01 \cdot B/16$.
+
+\begin{itemize}
+  \item Sul seed 2026, $\beta = 0.1$, i client sceglievano $B$ intorno a 80:
+        circa 18 passi per round invece di 79.
+  \item Persi fra 6 e 12 punti, a parità di energia: 39.9\,\% con lr fino a
+        0.08, 46.2\,\% con tetto a 0.04, 41.6\,\% con lr 0.01, contro il
+        52.2\,\% del vecchio SAGE-smart a $B = 16$.
+  \item Scegliere 0.04 perché qui va meglio sarebbe data leakage. Quindi lr fisso
+        a 0.01 per tutti gli algoritmi e per ogni $B$.
+\end{itemize}
+
+Poi abbiamo confrontato tre regole sul seed 7. Il seed 7 non è nella campagna,
+quindi la scelta non guarda le run su cui misuriamo.
+
+\begin{table}[H]
+  \centering\small
+  \caption{Seed 7, $\beta = 0.1$, Datasheet, 250 round, circa 1110 Wh per
+  tutte. Lavori parziali: allenamenti tagliati dalla deadline in tutta la run.}
+  \begin{tabular}{lccccc}
+    \toprule
+    Regola & Accuracy (\%) & Wh al 40\,\% & $B$ medio & Round con $B > 16$ & Parziali \\
+    \midrule
+    $B = 16$, $B$ più grande se serve      & 54.8 & 385 & 18.7 & 130 & 500 \\
+    Almeno i passi di $E_{\min}$ a $B = 16$ & 55.1 & 415 & 17.8 & 168 & 662 \\
+    $B$ che cresce quando la loss scende    & 52.5 & 383 & 33.2 & 213 & 595 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+La figura ha due pannelli.
+\begin{itemize}
+  \item A sinistra, accuracy contro energia. Le tre curve sono quasi
+        sovrapposte: la regola cambia poco quanto si impara per Wh. Solo alla
+        fine quella che segue la loss resta sotto di circa 2 punti.
+  \item A destra, il $B$ medio dei client allenati, round per round. La regola
+        che segue la loss sale da 16 fino a 50. Quella dei passi minimi parte da
+        25 e poi resta a 16. La nostra, in blu, oscilla fra 16 e 23: sale quando
+        i device sono al limite.
+\end{itemize}
+
+Teniamo la prima regola.
+\begin{itemize}
+  \item Come funziona: si parte da $B = 16$ e prima si abbassa $E$. Si passa a
+        un $B$ più grande solo se a $B = 16$ non ci stanno neanche $E_{\min} = 2$
+        epoche, per la deadline o per la batteria.
+  \item Perché: è la migliore o alla pari su tutto. Arriva al 40\,\% con il
+        7\,\% di energia in meno della seconda e taglia meno lavori.
+  \item Con il nuovo costo del batch non è più fissa a 16: $B > 16$ in 130 round
+        su 250, prima erano 18.
+  \item $B$ segue il vincolo del device, non l'andamento del training.
+  \item La regola che segue la loss muove $B$ più di tutte, ma perde 2 punti
+        perché fa meno passi.
+\end{itemize}
+
+%======================================================================
+\section{Campagna finale: primi risultati}
+
+Rifacciamo tutto con la fisica nuova, in una sola cartella: 135 run, circa 7
+giorni.
+\begin{itemize}
+  \item SAGE-smart con le 3 batterie (27).
+  \item Mismatch (9): il server prevede il SoC con la batteria lineare, i
+        telefoni sono Datasheet e usano la loro batteria vera, l'indicatore di
+        carica è senza rumore.
+  \item FedAvg a $B = 16$ con e senza guardia (18).
+  \item FedAvg a $B = 128$ con lr 0.01, 0.04 e 0.08 (27).
+  \item FedProx, SAGE ed ESCS a $B = 16$ (54).
+\end{itemize}
+
+Per oggi abbiamo fatto solo il seed 2026 con la Datasheet: 11 run su 15. Manca
+il mismatch a $\beta = 0.5$, che non ha prodotto risultati e sto controllando.
+A $\beta = 1.0$ mancano SAGE-smart, FedAvg $B = 16$ ed ESCS-MD.
+
+\begin{table}[H]
+  \centering\small
+  \caption{Seed 2026, batteria Datasheet, 250 round.}
+  \begin{tabular}{llcccccc}
+    \toprule
+    $\beta$ & Algoritmo & Acc. (\%) & Energia (Wh) & Tempo (h) & Scarichi & Wh al 40\,\% & Acc. a 600 Wh \\
+    \midrule
+    \multirow{5}{*}{0.1}
+      & SAGE-smart          & 52.0 & 1117 & 9.0  & 3  & 502 & 42.4 \\
+      & SAGE-smart mismatch & 50.4 & 1102 & 9.0  & 4  & 509 & 42.2 \\
+      & FedAvg $B = 16$     & 55.0 & 2079 & 29.6 & 72 & 541 & 40.7 \\
+      & FedAvg guardia      & 56.4 & 2306 & 30.9 & 44 & 575 & 41.0 \\
+      & ESCS-MD $B = 16$    & 53.9 & 2093 & 26.6 & 32 & 594 & 40.4 \\
+    \midrule
+    \multirow{4}{*}{0.5}
+      & SAGE-smart          & 57.7 & 1086 & 8.9  & 3  & 273 & 52.5 \\
+      & FedAvg $B = 16$     & 58.5 & 2116 & 27.2 & 65 & 395 & 46.3 \\
+      & FedAvg guardia      & 59.2 & 2273 & 27.9 & 41 & 376 & 47.6 \\
+      & ESCS-MD $B = 16$    & 56.4 & 2111 & 27.3 & 35 & 433 & 45.0 \\
+    \midrule
+    \multirow{2}{*}{1.0}
+      & SAGE-smart mismatch & 58.4 & 1085 & 8.7  & 3  & 235 & 53.8 \\
+      & FedAvg guardia      & 59.6 & 2223 & 26.5 & 37 & 351 & 48.4 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+La figura ha due righe, una colonna per ogni $\beta$. SAGE-smart è in blu,
+FedAvg in arancione, ESCS-MD in verde. Il tratteggio indica il mismatch per
+SAGE-smart e la guardia per FedAvg.
+\begin{itemize}
+  \item In alto, accuracy contro energia. La curva blu sta sopra le altre: a
+        $\beta = 0.1$ di poco, a $\beta = 0.5$ e $1.0$ in modo netto. Le curve
+        blu finiscono a circa 1100 Wh, le baseline arrivano a 2100--2300 Wh.
+  \item In basso, telefoni scarichi contro la migliore accuracy raggiunta.
+        Fino a circa il 40\,\% nessuno scarica niente. Poi le baseline cominciano a
+        scaricare telefoni, intorno al 40\,\% a $\beta = 0.1$ e al 45--50\,\%
+        a $\beta = 0.5$, e salgono fino a 32--72. SAGE-smart resta a zero e
+        finisce a 3.
+  \item A $\beta = 1.0$ ci sono solo il mismatch e la guardia, le altre run
+        stanno ancora girando.
+\end{itemize}
+
+Cosa ne ricaviamo:
+\begin{itemize}
+  \item A pari energia SAGE-smart è avanti in tutti i $\beta$. Per arrivare al
+        40\,\% usa il 7\,\% di energia in meno di FedAvg a $\beta = 0.1$, il
+        27\,\% in meno della guardia a $\beta = 0.5$ e circa il 33\,\% in meno
+        a $\beta = 1.0$. Nelle validations era il 23\,\%, quindi siamo lì.
+  \item Il punto debole è $\beta = 0.1$: a pari energia solo 1--2 punti, dentro
+        il rumore di un seed.
+  \item A fine run le baseline stanno 1--4 punti sopra, ma con il doppio
+        dell'energia e il triplo del tempo simulato. Dopo 9 ore SAGE-smart è
+        avanti di 4.5--6 punti.
+  \item Telefoni scarichi: 3 per SAGE-smart, 32--72 per le baseline. La
+        guardia porta FedAvg da 72 a 44 e da 65 a 41, guadagna 0.7--1.4 punti e
+        costa il 7--11\,\% di energia in più. I telefoni muoiono comunque per
+        l'uso in background.
+  \item Il mismatch costa 1.6 punti a $\beta = 0.1$, con la stessa energia e
+        gli stessi scarichi. Il client controlla la sua batteria vera prima di
+        allenare, quindi l'errore del server pesa poco.
+  \item ESCS-MD a $B = 16$ resta sotto FedAvg a $B = 16$.
+\end{itemize}
+
+%======================================================================
+\section{Prossimi passi}
+
+\begin{itemize}
+  \item Finire la campagna finale, circa altri 6 giorni, e capire perché il
+        mismatch a $\beta = 0.5$ non ha prodotto risultati.
+  \item Decidere se servono SAGE ed ESCS a $B = 16$ anche con le batterie Ideal
+        e Peukert: 90 run, circa 6 giorni.
+  \item Con tutti i seed, vedere se il vantaggio piccolo a $\beta = 0.1$ regge.
+\end{itemize}
+
+\end{document}
